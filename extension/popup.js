@@ -11,9 +11,11 @@ chrome.storage.local.get(['isTranscribing', 'savedTranscript'], (result) => {
   if (result.isTranscribing) {
     startBtn.disabled = true;
     stopBtn.disabled = false;
-    generateBtn.disabled = true;
+    generateBtn.disabled = false;
     statusEl.innerText = "Transcribing in progress...";
   } else if (result.savedTranscript && result.savedTranscript.length > 0) {
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
     generateBtn.disabled = false;
     statusEl.innerText = "Transcript ready for processing.";
   }
@@ -36,24 +38,29 @@ startBtn.addEventListener('click', () => {
   
   startBtn.disabled = true;
   stopBtn.disabled = false;
-  generateBtn.disabled = true;
+  generateBtn.disabled = false;
   statusEl.innerText = "Listening to captions...";
 });
 
 stopBtn.addEventListener('click', () => {
-  chrome.storage.local.set({ isTranscribing: false });
+  chrome.storage.local.set({ savedTranscript: [], isTranscribing: false });
   executeInActiveTab("stop");
 
   startBtn.disabled = false;
   stopBtn.disabled = true;
-  generateBtn.disabled = false;
-  statusEl.innerText = "Transcribing stopped. Ready to generate.";
+  generateBtn.disabled = true;
+  statusEl.innerText = "Transcribing stopped and slate cleared.";
 });
 
 generateBtn.addEventListener('click', async () => {
   statusEl.innerText = "Processing transcript...";
   startBtn.disabled = true;
+  stopBtn.disabled = true;
   generateBtn.disabled = true;
+  
+  // Implicitly stop transcribing but keep the transcript to generate minutes
+  chrome.storage.local.set({ isTranscribing: false });
+  executeInActiveTab("stop");
   
   chrome.storage.local.get(['savedTranscript'], async (result) => {
     const lines = result.savedTranscript || [];
