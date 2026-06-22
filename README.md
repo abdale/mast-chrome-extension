@@ -40,6 +40,15 @@ To keep credentials secure, the extension talks to a Cloud Function, which in tu
      ```
    - *Note: `--allow-unauthenticated` allows the Chrome extension to call the endpoint. For production, consider implementing an API Key or Firebase Auth verification inside the function.*
 
+   > **Troubleshooting Build Errors:** If you encounter a `missing permission on the build service account` error during deployment, run these commands in your Cloud Shell to fix it:
+   > ```bash
+   > export PROJECT_ID=$(gcloud config get-value project)
+   > export PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+   > gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" --role="roles/cloudbuild.builds.builder"
+   > gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" --role="roles/artifactregistry.writer"
+   > ```
+   > Then try deploying again.
+
 4. **Grant Agent Platform Permissions**
    - Go to **IAM & Admin > IAM**.
    - Find the Default App Engine service account (usually `YOUR_PROJECT_ID@appspot.gserviceaccount.com`).
