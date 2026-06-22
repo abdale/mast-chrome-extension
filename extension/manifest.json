@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Teams AI Minutes",
+  "version": "1.2",
+  "description": "Seamlessly generate meeting minutes from MS Teams.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://teams.microsoft.com/*",
+    "https://*.cloudfunctions.net/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
