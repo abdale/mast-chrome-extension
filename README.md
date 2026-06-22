@@ -22,7 +22,7 @@ To keep credentials secure, the extension talks to a Cloud Function, which in tu
    - Navigate to **APIs & Services > Library**.
    - Search for and enable the **Vertex AI API**.
    - Search for and enable the **Cloud Functions API** and **Cloud Build API**.
-   - *Note on Endpoints:* Because we are using Google's managed Gemini model (`gemini-1.5-pro`), **you do not need to manually create or deploy a Vertex AI Endpoint**. Enabling the API gives the Cloud Function direct access to Google's pre-deployed Enterprise endpoint.
+   - *Note on Endpoints:* Because we are using Google's managed Gemini model (`gemini-3.5-flash`), **you do not need to manually create or deploy a Vertex AI Endpoint**. Enabling the API gives the Cloud Function direct access to Google's pre-deployed Enterprise endpoint.
 
 3. **Deploy the Function**
    - Open the **Cloud Shell** (terminal icon in the top right of the GCP console).

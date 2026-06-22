@@ -14,7 +14,7 @@ exports.generateMinutes = (req, res) => {
       // The Cloud Function environment automatically uses the default service account credentials.
       const vertex_ai = new VertexAI({ project: process.env.GCP_PROJECT, location: 'us-central1' });
       const generativeModel = vertex_ai.preview.getGenerativeModel({
-        model: 'gemini-1.5-pro-preview-0409',
+        model: 'gemini-3.5-flash',
         generationConfig: { temperature: 0.2 }
       });
 
