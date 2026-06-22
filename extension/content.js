@@ -2,8 +2,10 @@ let isTranscribing = false;
 let observer = null;
 
 const CAPTION_CONTAINER_SELECTOR = '[data-tid="closed-captions-container"]'; 
-const SPEAKER_SELECTOR = '.speaker-name-class'; 
-const TEXT_SELECTOR = '.caption-text-class'; 
+const SPEAKER_SELECTOR = '[data-tid="author"]'; 
+const TEXT_SELECTOR = '[data-tid="closed-caption-text"]'; 
+
+let currentSpeaker = "Unknown";
 
 function startObserving() {
   if (observer) return;
@@ -16,15 +18,17 @@ function startObserving() {
     mutations.forEach((mutation) => {
       for (let node of mutation.addedNodes) {
         if (node.nodeType === Node.ELEMENT_NODE) {
-          const speakerEl = node.querySelector(SPEAKER_SELECTOR);
-          const textEl = node.querySelector(TEXT_SELECTOR);
           
-          if (speakerEl && textEl) {
-            const speaker = speakerEl.innerText.trim();
-            const text = textEl.innerText.trim();
-            if (speaker && text) {
-              newTranscriptChunks.push(`[${speaker}]: ${text}`);
-            }
+          // 1. Check if an author node was added (or is inside the added node)
+          const speakerEl = node.matches(SPEAKER_SELECTOR) ? node : node.querySelector(SPEAKER_SELECTOR);
+          if (speakerEl && speakerEl.innerText.trim()) {
+            currentSpeaker = speakerEl.innerText.trim();
+          }
+
+          // 2. Check if a text node was added (or is inside the added node)
+          const textEl = node.matches(TEXT_SELECTOR) ? node : node.querySelector(TEXT_SELECTOR);
+          if (textEl && textEl.innerText.trim()) {
+            newTranscriptChunks.push(`[${currentSpeaker}]: ${textEl.innerText.trim()}`);
           }
         }
       }
