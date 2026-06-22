@@ -1,4 +1,4 @@
-const { AgentPlatform } = require('@google-cloud/agentplatform');
+const { VertexAI } = require('@google-cloud/vertexai');
 const cors = require('cors')({ origin: true });
 
 exports.generateMinutes = (req, res) => {
@@ -12,7 +12,7 @@ exports.generateMinutes = (req, res) => {
     try {
       // Initialize Agent Platform
       // The Cloud Function environment automatically uses the default service account credentials.
-      const agentPlatform = new AgentPlatform({ project: process.env.GCP_PROJECT, location: 'us-central1' });
+      const agentPlatform = new VertexAI({ project: process.env.GCP_PROJECT, location: 'us-central1' });
       const generativeModel = agentPlatform.preview.getGenerativeModel({
         model: 'gemini-3.5-flash',
         generationConfig: { temperature: 0.2 }

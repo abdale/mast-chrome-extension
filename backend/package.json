@@ -2,7 +2,7 @@
   "name": "teams-minutes-backend",
   "version": "1.0.0",
   "dependencies": {
-    "@google-cloud/agentplatform": "^1.1.0",
+    "@google-cloud/vertexai": "^1.1.0",
     "cors": "^2.8.5"
   }
 }
