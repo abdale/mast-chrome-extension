@@ -31,7 +31,7 @@ To keep credentials secure, the extension talks to a Cloud Function, which in tu
    - Run the following command to deploy the function:
      ```bash
      gcloud functions deploy generate-teams-minutes \
-       --runtime nodejs20 \
+       --runtime nodejs22 \
        --trigger-http \
        --allow-unauthenticated \
        --entry-point generateMinutes \
