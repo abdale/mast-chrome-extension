@@ -9,10 +9,12 @@ let currentSpeaker = "Unknown";
 
 function startObserving() {
   if (observer) return;
+  console.log("Teams AI Minutes: startObserving() called. Looking for captions...");
   
   const targetNode = document.querySelector('body'); 
   observer = new MutationObserver((mutations) => {
     if (!isTranscribing) return;
+    console.log(`Teams AI Minutes: Observed ${mutations.length} mutations.`);
 
     let newTranscriptChunks = [];
     mutations.forEach((mutation) => {
@@ -23,12 +25,15 @@ function startObserving() {
           const speakerEl = node.matches(SPEAKER_SELECTOR) ? node : node.querySelector(SPEAKER_SELECTOR);
           if (speakerEl && speakerEl.innerText.trim()) {
             currentSpeaker = speakerEl.innerText.trim();
+            console.log("Teams AI Minutes: Found speaker:", currentSpeaker);
           }
 
           // 2. Check if a text node was added (or is inside the added node)
           const textEl = node.matches(TEXT_SELECTOR) ? node : node.querySelector(TEXT_SELECTOR);
           if (textEl && textEl.innerText.trim()) {
-            newTranscriptChunks.push(`[${currentSpeaker}]: ${textEl.innerText.trim()}`);
+            const text = textEl.innerText.trim();
+            console.log("Teams AI Minutes: Found text:", text);
+            newTranscriptChunks.push(`[${currentSpeaker}]: ${text}`);
           }
         }
       }

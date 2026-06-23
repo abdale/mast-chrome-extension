@@ -64,6 +64,8 @@ generateBtn.addEventListener('click', async () => {
   
   chrome.storage.local.get(['savedTranscript'], async (result) => {
     const lines = result.savedTranscript || [];
+    console.log("Teams AI Minutes: Generate Minutes clicked. Transcript length:", lines.length);
+
     if (lines.length === 0) {
       statusEl.innerText = "Error: No captions captured.";
       startBtn.disabled = false;
