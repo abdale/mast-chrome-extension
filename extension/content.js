@@ -6,6 +6,7 @@ const SPEAKER_SELECTOR = '[data-tid="author"]';
 const TEXT_SELECTOR = '[data-tid="closed-caption-text"]'; 
 
 let currentSpeaker = "Unknown";
+let captionsMap = new Map(); // DOM Element -> { speaker, text }
 
 function startObserving() {
   if (observer) return;
@@ -14,36 +15,54 @@ function startObserving() {
   const targetNode = document.querySelector('body'); 
   observer = new MutationObserver((mutations) => {
     if (!isTranscribing) return;
-    console.log(`Teams AI Minutes: Observed ${mutations.length} mutations.`);
 
-    let newTranscriptChunks = [];
+    let domChanged = false;
+
+    // 1. Check for newly added caption or speaker elements
     mutations.forEach((mutation) => {
       for (let node of mutation.addedNodes) {
         if (node.nodeType === Node.ELEMENT_NODE) {
           
-          // 1. Check if an author node was added (or is inside the added node)
+          // Check for speaker
           const speakerEl = node.matches(SPEAKER_SELECTOR) ? node : node.querySelector(SPEAKER_SELECTOR);
           if (speakerEl && speakerEl.innerText.trim()) {
             currentSpeaker = speakerEl.innerText.trim();
             console.log("Teams AI Minutes: Found speaker:", currentSpeaker);
           }
 
-          // 2. Check if a text node was added (or is inside the added node)
-          const textEl = node.matches(TEXT_SELECTOR) ? node : node.querySelector(TEXT_SELECTOR);
-          if (textEl && textEl.innerText.trim()) {
-            const text = textEl.innerText.trim();
-            console.log("Teams AI Minutes: Found text:", text);
-            newTranscriptChunks.push(`[${currentSpeaker}]: ${text}`);
+          // Check for text elements
+          const textEls = node.matches(TEXT_SELECTOR) ? [node] : node.querySelectorAll(TEXT_SELECTOR);
+          for (let textEl of textEls) {
+            if (!captionsMap.has(textEl)) {
+              captionsMap.set(textEl, { speaker: currentSpeaker, text: textEl.innerText.trim() });
+              domChanged = true;
+            }
           }
         }
       }
     });
 
-    if (newTranscriptChunks.length > 0) {
-      chrome.storage.local.get(['savedTranscript'], (result) => {
-        const existing = result.savedTranscript || [];
-        chrome.storage.local.set({ savedTranscript: [...existing, ...newTranscriptChunks] });
-      });
+    // 2. On EVERY mutation, sync the text for ALL tracked caption elements still on screen
+    for (let [textEl, data] of captionsMap.entries()) {
+      if (document.body.contains(textEl)) {
+        const newText = textEl.innerText.trim();
+        // Only update if the text actually changed and isn't empty
+        if (newText && newText !== data.text) {
+           data.text = newText;
+           domChanged = true;
+        }
+      }
+    }
+
+    // 3. If anything changed, save the entire consolidated map to storage
+    if (domChanged) {
+       const transcriptLines = [];
+       for (let data of captionsMap.values()) {
+          if (data.text) {
+             transcriptLines.push(`[${data.speaker}]: ${data.text}`);
+          }
+       }
+       chrome.storage.local.set({ savedTranscript: transcriptLines });
     }
   });
 
@@ -57,6 +76,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ status: "started" });
   } else if (request.action === "stop") {
     isTranscribing = false;
+    captionsMap.clear();
     if (observer) {
       observer.disconnect();
       observer = null;
