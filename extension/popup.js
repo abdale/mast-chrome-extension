@@ -1,4 +1,4 @@
-// Cloud Function URL removed for now. Focusing on raw transcript generation.
+const CLOUD_FUNCTION_URL = 'https://us-central1-mythic-plexus-492814-u8.cloudfunctions.net/generate-teams-minutes';
 
 const startBtn = document.getElementById('startBtn');
 const stopLink = document.getElementById('stopLink');
@@ -74,18 +74,28 @@ generateBtn.addEventListener('click', async () => {
       }
 
       const fullTranscript = lines.join('\n');
-      statusEl.innerText = "Downloading transcript...";
+      statusEl.innerText = "Generating minutes securely...";
 
       try {
-        const blob = new Blob([fullTranscript], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        chrome.downloads.download({ url: url, filename: `Teams_Transcript_${Date.now()}.txt`, saveAs: true });
+        const response = await fetch(CLOUD_FUNCTION_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transcript: fullTranscript })
+        });
+
+        if (!response.ok) throw new Error("Cloud Function Error");
         
-        statusEl.innerText = "Success! Transcript downloaded.";
+        const data = await response.json();
+        
+        const blob = new Blob([data.minutes], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        chrome.downloads.download({ url: url, filename: `Meeting_Minutes_${Date.now()}.txt`, saveAs: true });
+        
+        statusEl.innerText = "Success! Minutes generated.";
         startBtn.disabled = false;
       } catch (error) {
-        console.error("Download failed:", error);
-        statusEl.innerText = "Error downloading transcript.";
+        console.error("Generation failed:", error);
+        statusEl.innerText = "Error generating minutes.";
         startBtn.disabled = false;
         generateBtn.disabled = false;
       }
