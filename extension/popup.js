@@ -1,5 +1,4 @@
-// Point this to your deployed Cloud Function URL
-const CLOUD_FUNCTION_URL = 'https://us-central1-YOUR-PROJECT-ID.cloudfunctions.net/generate-teams-minutes';
+// Cloud Function URL removed for now. Focusing on raw transcript generation.
 
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
@@ -25,7 +24,7 @@ async function executeInActiveTab(action) {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
   chrome.scripting.executeScript({
-    target: { tabId: tab.id },
+    target: { tabId: tab.id, allFrames: true },
     files: ['content.js']
   }, () => {
     chrome.tabs.sendMessage(tab.id, { action: action });
@@ -73,27 +72,18 @@ generateBtn.addEventListener('click', async () => {
     }
 
     const fullTranscript = lines.join('\n');
-    statusEl.innerText = "Generating minutes securely...";
+    statusEl.innerText = "Downloading transcript...";
 
     try {
-      const response = await fetch(CLOUD_FUNCTION_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript: fullTranscript })
-      });
-
-      if (!response.ok) throw new Error("Cloud Function Error");
-      
-      const data = await response.json();
-      
-      const blob = new Blob([data.minutes], { type: 'text/plain' });
+      const blob = new Blob([fullTranscript], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
-      chrome.downloads.download({ url: url, filename: `Meeting_Minutes_${Date.now()}.txt`, saveAs: true });
+      chrome.downloads.download({ url: url, filename: `Teams_Transcript_${Date.now()}.txt`, saveAs: true });
       
-      statusEl.innerText = "Success! File downloaded.";
+      statusEl.innerText = "Success! Transcript downloaded.";
       startBtn.disabled = false;
     } catch (error) {
-      statusEl.innerText = "Error generating minutes.";
+      console.error("Download failed:", error);
+      statusEl.innerText = "Error downloading transcript.";
       startBtn.disabled = false;
       generateBtn.disabled = false;
     }
