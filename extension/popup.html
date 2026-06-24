@@ -3,25 +3,33 @@
 <head>
   <style>
     body { font-family: 'Segoe UI', Tahoma, sans-serif; width: 300px; padding: 15px; text-align: center; }
+    h3 { margin-bottom: 5px; font-size: 18px; }
     button { color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-size: 14px; width: 100%; margin-top: 10px; }
-    #startBtn { background-color: #107C41; } /* Green */
-    #generateBtn { background-color: #5B5FC7; } /* Teams Purple */
+    #startBtn { background-color: #107C41; }
+    #generateBtn { background-color: #5B5FC7; }
     button:disabled { background-color: #ccc; cursor: not-allowed; }
     #status { margin-top: 15px; font-size: 12px; color: #555; }
     #stopLink:hover { text-decoration: underline; }
+    #downloadLink:hover { text-decoration: underline; }
+    #timer { font-size: 14px; font-weight: bold; margin-left: 10px; color: #333; }
   </style>
 </head>
 <body>
-  <h3>Teams AI Minutes</h3>
-  <p>Turn on Live Captions in Teams.</p>
+  <h3>mast ⛵️</h3>
+  <p style="font-size: 12px; color: #555;">Turn on Live Captions in Teams (Alt+Shift+C)</p>
   
   <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px;">
-    <button id="startBtn" style="margin-top: 0;">Start Transcribing</button>
+    <button id="startBtn" disabled style="margin-top: 0;">Start Transcribing</button>
+    <div id="timer" style="display: none;">00:00</div>
     <a href="#" id="stopLink" style="display: none; font-size: 12px; color: #C50F1F; text-decoration: none; white-space: nowrap;">Stop transcribing</a>
   </div>
-  <button id="generateBtn" disabled>Generate Minutes</button>
   
-  <div id="status">Ready.</div>
+  <button id="generateBtn" disabled>Generate Minutes</button>
+  <div style="margin-top: 10px;">
+    <a href="#" id="downloadLink" style="display: none; font-size: 12px; color: #0078D4; text-decoration: none;">Download Transcript</a>
+  </div>
+  
+  <div id="status">Ready. Waiting for captions...</div>
   
   <script src="popup.js"></script>
 </body>

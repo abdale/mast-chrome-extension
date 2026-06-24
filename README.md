@@ -1,4 +1,4 @@
-# MS Teams AI Minutes
+# mast (Meeting AI Summarizer & Transcriber)
 
 A lightweight Chrome Extension that smoothly transcribes browser-based Microsoft Teams meetings and generates AI-powered meeting minutes using Google Cloud Gemini Enterprise Agent Platform.
 
@@ -22,7 +22,7 @@ To keep credentials secure, the extension talks to a Cloud Function, which in tu
    - Navigate to **APIs & Services > Library**.
    - Search for and enable the **Agent Platform API**.
    - Search for and enable the **Cloud Functions API** and **Cloud Build API**.
-   - *Note on Endpoints:* Because we are using Google's managed Gemini model (`gemini-3.5-flash`), **you do not need to manually create or deploy an Agent Platform Endpoint**. Enabling the API gives the Cloud Function direct access to Google's pre-deployed Enterprise endpoint.
+   - *Note on Endpoints:* Because we are using Google's managed Gemini model (`gemini-2.5-flash-lite`), **you do not need to manually create or deploy an Agent Platform Endpoint**. Enabling the API gives the Cloud Function direct access to Google's pre-deployed Enterprise endpoint.
 
 3. **Deploy the Function**
    - Open the **Cloud Shell** (terminal icon in the top right of the GCP console).
@@ -51,7 +51,7 @@ To keep credentials secure, the extension talks to a Cloud Function, which in tu
 
 4. **Grant Agent Platform Permissions**
    - Go to **IAM & Admin > IAM**.
-   - Find the Default App Engine service account (usually `YOUR_PROJECT_ID@appspot.gserviceaccount.com`).
+   - Find the Compute Engine default service account (usually `YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com`).
    - Edit the principal and add the role: **Agent Platform User**.
 
 5. **Copy the Trigger URL**
@@ -72,14 +72,14 @@ To keep credentials secure, the extension talks to a Cloud Function, which in tu
    - Toggle **Developer mode** ON (top right corner).
    - Click the **Load unpacked** button.
    - Select the `extension/` folder from this repository.
-   - The "Teams AI Minutes" extension will appear in your browser toolbar.
+   - The "mast" extension will appear in your browser toolbar.
 
 ---
 
 ## Usage Guide
 1. Join a browser-based Microsoft Teams meeting.
 2. Inside Teams, click `More` (...) -> `Language and speech` -> **Turn on live captions**.
-3. Click the Teams AI Minutes extension icon in your browser toolbar.
+3. Click the mast extension icon in your browser toolbar.
 4. Click **Start Transcribing**. The extension will passively collect captions.
 5. When ready, click **Stop Transcribing**.
 6. Click **Generate Minutes**. The extension will send the data to Gemini Enterprise Agent Platform and download a formatted `.txt` file containing your meeting summary and action items.
