@@ -18,7 +18,19 @@ exports.generateMinutes = (req, res) => {
         generationConfig: { temperature: 0.2 }
       });
 
-      const prompt = `You are an executive assistant. Create concise meeting minutes from the following transcript. Include: 1. Meeting Summary 2. Key Decisions 3. Action Items.\n\nTranscript:\n${transcript}`;
+      const dateStr = req.body.date || new Date().toISOString();
+      const prompt = `You are an executive assistant. Create concise meeting minutes from the following transcript. 
+Do NOT use Markdown formatting (no asterisks, no hashes, etc.). Use raw plain text only.
+Include the following at the top:
+Date and Time (UTC): ${dateStr}
+
+Include the following sections:
+1. Meeting Summary
+2. Key Decisions
+3. Action Items
+
+Transcript:
+${transcript}`;
 
       const response = await generativeModel.generateContent(prompt);
       const outputText = response.response.candidates[0].content.parts[0].text;

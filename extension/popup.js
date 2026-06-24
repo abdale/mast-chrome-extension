@@ -2,7 +2,7 @@ const CLOUD_FUNCTION_URL = 'https://us-central1-mythic-plexus-492814-u8.cloudfun
 
 const startBtn = document.getElementById('startBtn');
 const stopLink = document.getElementById('stopLink');
-const generateBtn = document.getElementById('generateBtn');
+const generateLink = document.getElementById('generateLink');
 const statusEl = document.getElementById('status');
 const timerEl = document.getElementById('timer');
 const downloadLink = document.getElementById('downloadLink');
@@ -59,7 +59,7 @@ function updateUI() {
     if (result.isTranscribing) {
       startBtn.disabled = true;
       stopLink.style.display = "block";
-      generateBtn.disabled = true;
+      generateLink.style.display = "none";
       downloadLink.style.display = "none";
       if (!statusEl.innerText.includes("Gathering")) statusEl.innerText = "Transcribing in progress...";
       
@@ -70,10 +70,10 @@ function updateUI() {
       stopTimer();
       
       if (hasTranscript) {
-        generateBtn.disabled = false;
+        generateLink.style.display = "inline";
         downloadLink.style.display = "inline";
       } else {
-        generateBtn.disabled = true;
+        generateLink.style.display = "none";
         downloadLink.style.display = "none";
       }
       
@@ -134,11 +134,12 @@ downloadLink.addEventListener('click', (e) => {
   });
 });
 
-generateBtn.addEventListener('click', async () => {
+generateLink.addEventListener('click', async (e) => {
+  e.preventDefault();
   statusEl.innerText = "Gathering final captions...";
   startBtn.disabled = true;
   stopLink.style.display = "none";
-  generateBtn.disabled = true;
+  generateLink.style.display = "none";
   downloadLink.style.display = "none";
   
   setTimeout(() => {
@@ -154,13 +155,15 @@ generateBtn.addEventListener('click', async () => {
       }
 
       const fullTranscript = lines.join('\n');
-      statusEl.innerText = "Generating minutes securely...";
+      statusEl.innerText = "Generating AI Summary securely...";
 
       try {
+        // We pass the current ISO string to the backend to fulfill the date requirement
+        const currentDate = new Date().toISOString();
         const response = await fetch(CLOUD_FUNCTION_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transcript: fullTranscript })
+          body: JSON.stringify({ transcript: fullTranscript, date: currentDate })
         });
 
         if (!response.ok) throw new Error("Cloud Function Error");
@@ -169,13 +172,13 @@ generateBtn.addEventListener('click', async () => {
         
         const blob = new Blob([data.minutes], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
-        chrome.downloads.download({ url: url, filename: `Meeting_Minutes_${Date.now()}.txt`, saveAs: true });
+        chrome.downloads.download({ url: url, filename: `Meeting_AI_Summary_${Date.now()}.txt`, saveAs: true });
         
-        statusEl.innerText = "Success! Minutes generated.";
+        statusEl.innerText = "Success! Summary generated.";
         updateUI();
       } catch (error) {
         console.error("Generation failed:", error);
-        statusEl.innerText = "Error generating minutes.";
+        statusEl.innerText = "Error generating summary.";
         updateUI();
       }
     });
