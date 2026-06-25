@@ -1,3 +1,11 @@
+const viewApiKey = document.getElementById('view-api-key');
+const viewCaptions = document.getElementById('view-captions');
+const viewMain = document.getElementById('view-main');
+
+const apiKeyInput = document.getElementById('apiKeyInput');
+const validateBtn = document.getElementById('validateBtn');
+const apiError = document.getElementById('apiError');
+
 const startBtn = document.getElementById('startBtn');
 const stopLink = document.getElementById('stopLink');
 const generateLink = document.getElementById('generateLink');
@@ -11,7 +19,43 @@ let pollInterval = null;
 
 settingsLink.addEventListener('click', (e) => {
   e.preventDefault();
-  chrome.runtime.openOptionsPage();
+  window.open(chrome.runtime.getURL('options.html'));
+});
+
+async function validateApiKey(key) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite?key=${key}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return false;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+validateBtn.addEventListener('click', async () => {
+  const key = apiKeyInput.value.trim();
+  if (!key) {
+    apiError.innerText = "Key cannot be empty.";
+    apiError.style.display = "block";
+    return;
+  }
+  
+  validateBtn.innerText = "Validating...";
+  validateBtn.disabled = true;
+  apiError.style.display = "none";
+  
+  const isValid = await validateApiKey(key);
+  if (isValid) {
+    chrome.storage.local.set({ apiKey: key }, () => {
+      updateUI();
+    });
+  } else {
+    apiError.innerText = "Invalid API Key. Please try again.";
+    apiError.style.display = "block";
+    validateBtn.innerText = "Save & Validate";
+    validateBtn.disabled = false;
+  }
 });
 
 function formatTime(seconds) {
@@ -40,11 +84,41 @@ function stopTimer() {
   timerEl.innerText = "00:00";
 }
 
-function updateUI() {
-  chrome.storage.local.get(['isTranscribing', 'savedTranscript', 'startTime'], (result) => {
-    const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
+async function checkCaptions() {
+  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) return false;
+  try {
+    let results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: () => {
+        return !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"]');
+      }
+    });
+    return results && results.some(r => r.result === true);
+  } catch (e) {
+    return false;
+  }
+}
+
+async function updateUI() {
+  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime'], async (result) => {
     
+    // 1. API Key View
+    if (!result.apiKey) {
+      viewApiKey.style.display = "block";
+      viewCaptions.style.display = "none";
+      viewMain.style.display = "none";
+      validateBtn.innerText = "Save & Validate";
+      validateBtn.disabled = false;
+      return;
+    }
+
+    // 2. Transcribing in progress always shows Main View
     if (result.isTranscribing) {
+      viewApiKey.style.display = "none";
+      viewCaptions.style.display = "none";
+      viewMain.style.display = "block";
+      
       startBtn.disabled = true;
       stopLink.style.display = "block";
       generateLink.style.display = "none";
@@ -53,22 +127,41 @@ function updateUI() {
       
       const startTime = result.startTime || Date.now();
       startTimer(startTime);
+      return;
+    }
+    
+    // 3. Captions Check View
+    const captionsOn = await checkCaptions();
+    const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
+    
+    // If they stopped transcribing, they might want to download or generate summary EVEN IF captions are currently off.
+    // So if hasTranscript is true, we must show Main View so they can click Generate Summary.
+    if (!captionsOn && !hasTranscript) {
+      viewApiKey.style.display = "none";
+      viewCaptions.style.display = "block";
+      viewMain.style.display = "none";
+      return;
+    }
+    
+    // 4. Main View (Ready to Start, or Reviewing Transcript)
+    viewApiKey.style.display = "none";
+    viewCaptions.style.display = "none";
+    viewMain.style.display = "block";
+    
+    stopLink.style.display = "none";
+    stopTimer();
+    
+    if (hasTranscript) {
+      generateLink.style.display = "inline";
+      downloadLink.style.display = "inline";
     } else {
-      stopLink.style.display = "none";
-      stopTimer();
-      
-      if (hasTranscript) {
-        generateLink.style.display = "inline";
-        downloadLink.style.display = "inline";
-      } else {
-        generateLink.style.display = "none";
-        downloadLink.style.display = "none";
-      }
-      
-      startBtn.disabled = false;
-      if (!hasTranscript && !statusEl.innerText.includes("Error") && !statusEl.innerText.includes("Success")) {
-        statusEl.innerText = "Ready to start.";
-      }
+      generateLink.style.display = "none";
+      downloadLink.style.display = "none";
+    }
+    
+    startBtn.disabled = false;
+    if (!hasTranscript && !statusEl.innerText.includes("Error") && !statusEl.innerText.includes("Success")) {
+      statusEl.innerText = "Ready to start.";
     }
   });
 }
