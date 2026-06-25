@@ -69,13 +69,52 @@ function startObserving() {
   observer.observe(targetNode, { childList: true, subtree: true, characterData: true });
 }
 
+let waitingInterval = null;
+
+function showCaptionOverlay() {
+  if (document.getElementById('mast-caption-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'mast-caption-overlay';
+  overlay.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #5B5FC7; color: white; padding: 15px; border-radius: 8px; z-index: 999999; box-shadow: 0 4px 12px rgba(0,0,0,0.2); font-family: sans-serif; font-size: 14px; transition: opacity 0.3s;';
+  overlay.innerHTML = '<strong>mast is waiting!</strong><br>Press <kbd style="background: #fff; color: #000; padding: 2px 5px; border-radius: 3px; font-size: 12px;">Alt+Shift+C</kbd> to turn on live captions.';
+  document.body.appendChild(overlay);
+}
+
+function removeCaptionOverlay() {
+  const overlay = document.getElementById('mast-caption-overlay');
+  if (overlay) overlay.remove();
+}
+
+function checkAndStart() {
+  if (!isTranscribing) return;
+  const hasCaptions = document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"]');
+  if (hasCaptions) {
+    if (waitingInterval) {
+      clearInterval(waitingInterval);
+      waitingInterval = null;
+    }
+    removeCaptionOverlay();
+    startObserving();
+  } else {
+    showCaptionOverlay();
+    if (!waitingInterval) {
+      waitingInterval = setInterval(checkAndStart, 1000);
+    }
+  }
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "start") {
     isTranscribing = true;
-    startObserving();
+    checkAndStart();
     sendResponse({ status: "started" });
   } else if (request.action === "stop") {
     isTranscribing = false;
+    if (waitingInterval) {
+      clearInterval(waitingInterval);
+      waitingInterval = null;
+    }
+    removeCaptionOverlay();
     captionsMap.clear();
     if (observer) {
       observer.disconnect();

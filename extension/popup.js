@@ -40,24 +40,8 @@ function stopTimer() {
   timerEl.innerText = "00:00";
 }
 
-async function checkCaptions() {
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return false;
-  try {
-    let results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
-      func: () => {
-        return !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"]');
-      }
-    });
-    return results && results.some(r => r.result === true);
-  } catch (e) {
-    return false;
-  }
-}
-
 function updateUI() {
-  chrome.storage.local.get(['isTranscribing', 'savedTranscript', 'startTime'], async (result) => {
+  chrome.storage.local.get(['isTranscribing', 'savedTranscript', 'startTime'], (result) => {
     const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
     
     if (result.isTranscribing) {
@@ -81,17 +65,9 @@ function updateUI() {
         downloadLink.style.display = "none";
       }
       
-      const captionsOn = await checkCaptions();
-      if (captionsOn) {
-        startBtn.disabled = false;
-        if (!hasTranscript && !statusEl.innerText.includes("Error") && !statusEl.innerText.includes("Success")) {
-          statusEl.innerText = "Captions detected. Ready to start.";
-        }
-      } else {
-        startBtn.disabled = true;
-        if (!hasTranscript && !statusEl.innerText.includes("Error") && !statusEl.innerText.includes("Success")) {
-          statusEl.innerText = "Please turn on Live Captions.";
-        }
+      startBtn.disabled = false;
+      if (!hasTranscript && !statusEl.innerText.includes("Error") && !statusEl.innerText.includes("Success")) {
+        statusEl.innerText = "Ready to start.";
       }
     }
   });
