@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "mast",
-  "version": "1.5",
+  "version": "1.6",
   "description": "Meeting AI Summarizer & Transcriber for MS Teams.",
   "permissions": [
     "activeTab",
@@ -11,8 +11,12 @@
   ],
   "host_permissions": [
     "https://teams.microsoft.com/*",
-    "https://*.cloudfunctions.net/*"
+    "https://generativelanguage.googleapis.com/*"
   ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "action": {
     "default_popup": "popup.html"
   }

@@ -1,14 +1,18 @@
-const CLOUD_FUNCTION_URL = 'https://us-central1-mythic-plexus-492814-u8.cloudfunctions.net/generate-teams-minutes';
-
 const startBtn = document.getElementById('startBtn');
 const stopLink = document.getElementById('stopLink');
 const generateLink = document.getElementById('generateLink');
 const statusEl = document.getElementById('status');
 const timerEl = document.getElementById('timer');
 const downloadLink = document.getElementById('downloadLink');
+const settingsLink = document.getElementById('settingsLink');
 
 let timerInterval = null;
 let pollInterval = null;
+
+settingsLink.addEventListener('click', (e) => {
+  e.preventDefault();
+  chrome.runtime.openOptionsPage();
+});
 
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -146,7 +150,14 @@ generateLink.addEventListener('click', async (e) => {
     chrome.storage.local.set({ isTranscribing: false });
     executeInActiveTab("stop");
     
-    chrome.storage.local.get(['savedTranscript'], async (result) => {
+    chrome.storage.local.get(['savedTranscript', 'apiKey'], async (result) => {
+      const apiKey = result.apiKey;
+      if (!apiKey) {
+        statusEl.innerText = "Error: Please add your API Key in Settings (⚙️).";
+        updateUI();
+        return;
+      }
+      
       const lines = result.savedTranscript || [];
       if (lines.length === 0) {
         statusEl.innerText = "Error: No captions captured.";
@@ -155,30 +166,56 @@ generateLink.addEventListener('click', async (e) => {
       }
 
       const fullTranscript = lines.join('\n');
-      statusEl.innerText = "Generating AI Summary securely...";
+      statusEl.innerText = "Generating AI Summary directly...";
+
+      // Build Date String
+      const dateObj = new Date();
+      const dateFormatted = dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) + ' at ' + dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+
+      const prompt = `You are an expert executive assistant. Generate professional, comprehensive meeting minutes from the provided transcript.
+Do NOT use Markdown formatting (no asterisks, no hashes, etc.). Use raw plain text only.
+
+FORMAT REQUIREMENTS:
+- Meeting Title: Create a descriptive title for the meeting at the very top.
+- Date and Time: ${dateFormatted}
+- Attendees: List all attendees based on the transcript. Make a strong effort to deduce and include the company they work for next to their name (e.g., John Smith (Google)).
+- Meeting Summary: A detailed summary of the discussion. Explicitly mention attendee names when attributing points so we do not lose track of who said what.
+- Key Decisions: Clear decisions made, referencing the people involved.
+- Action Items: Clear tasks. You MUST attribute every action item to a specific attendee by name.
+
+Transcript:
+${fullTranscript}`;
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
+      const payload = {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2 }
+      };
 
       try {
-        // We pass the current ISO string to the backend to fulfill the date requirement
-        const currentDate = new Date().toISOString();
-        const response = await fetch(CLOUD_FUNCTION_URL, {
+        const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transcript: fullTranscript, date: currentDate })
+          body: JSON.stringify(payload)
         });
 
-        if (!response.ok) throw new Error("Cloud Function Error");
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error?.message || "Google AI Studio Error");
+        }
         
         const data = await response.json();
+        const minutesText = data.candidates[0].content.parts[0].text;
         
-        const blob = new Blob([data.minutes], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        chrome.downloads.download({ url: url, filename: `Meeting_AI_Summary_${Date.now()}.txt`, saveAs: true });
+        const blob = new Blob([minutesText], { type: 'text/plain' });
+        const objUrl = URL.createObjectURL(blob);
+        chrome.downloads.download({ url: objUrl, filename: `Meeting_AI_Summary_${Date.now()}.txt`, saveAs: true });
         
         statusEl.innerText = "Success! Summary generated.";
         updateUI();
       } catch (error) {
         console.error("Generation failed:", error);
-        statusEl.innerText = "Error generating summary.";
+        statusEl.innerText = "Error: " + error.message.substring(0, 30);
         updateUI();
       }
     });

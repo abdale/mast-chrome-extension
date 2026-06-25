@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>mast - Settings</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; padding: 20px; max-width: 400px; margin: auto; }
+    h2 { color: #333; }
+    label { font-weight: bold; display: block; margin-top: 15px; margin-bottom: 5px; }
+    input[type="password"] { width: 100%; padding: 8px; box-sizing: border-box; }
+    button { background-color: #5B5FC7; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; margin-top: 15px; }
+    button:hover { background-color: #464eb8; }
+    #status { margin-top: 10px; color: green; font-size: 14px; }
+    .help-text { font-size: 12px; color: #666; margin-top: 5px; }
+  </style>
+</head>
+<body>
+  <h2>mast ⛵️ Settings</h2>
+  
+  <label for="apiKey">Google AI Studio API Key</label>
+  <input type="password" id="apiKey" placeholder="AIzaSy...">
+  <div class="help-text">Get your free API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>.</div>
+  
+  <button id="saveBtn">Save Settings</button>
+  <div id="status"></div>
+  
+  <script src="options.js"></script>
+</body>
+</html>
