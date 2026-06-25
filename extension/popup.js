@@ -1,6 +1,7 @@
 const viewApiKey = document.getElementById('view-api-key');
 const viewCaptions = document.getElementById('view-captions');
 const viewMain = document.getElementById('view-main');
+const viewResults = document.getElementById('view-results');
 
 const apiKeyInput = document.getElementById('apiKeyInput');
 const validateBtn = document.getElementById('validateBtn');
@@ -8,11 +9,14 @@ const apiError = document.getElementById('apiError');
 
 const startBtn = document.getElementById('startBtn');
 const stopLink = document.getElementById('stopLink');
-const generateLink = document.getElementById('generateLink');
 const statusEl = document.getElementById('status');
 const timerEl = document.getElementById('timer');
-const downloadLink = document.getElementById('downloadLink');
 const settingsLink = document.getElementById('settingsLink');
+
+const generateBtn = document.getElementById('generateBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const newSessionBtn = document.getElementById('newSessionBtn');
+const resultsStatus = document.getElementById('resultsStatus');
 
 let timerInterval = null;
 let pollInterval = null;
@@ -100,7 +104,7 @@ async function checkCaptions() {
   }
 }
 
-async function updateUI() {
+function updateUI() {
   chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime'], async (result) => {
     
     // 1. API Key View
@@ -108,61 +112,62 @@ async function updateUI() {
       viewApiKey.style.display = "block";
       viewCaptions.style.display = "none";
       viewMain.style.display = "none";
+      viewResults.style.display = "none";
       validateBtn.innerText = "Save & Validate";
       validateBtn.disabled = false;
       return;
     }
+
+    const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
 
     // 2. Transcribing in progress always shows Main View
     if (result.isTranscribing) {
       viewApiKey.style.display = "none";
       viewCaptions.style.display = "none";
       viewMain.style.display = "block";
+      viewResults.style.display = "none";
       
       startBtn.disabled = true;
       stopLink.style.display = "block";
-      generateLink.style.display = "none";
-      downloadLink.style.display = "none";
-      if (!statusEl.innerText.includes("Gathering")) statusEl.innerText = "Transcribing in progress...";
+      statusEl.innerText = "Transcribing in progress...";
       
       const startTime = result.startTime || Date.now();
       startTimer(startTime);
       return;
     }
     
-    // 3. Captions Check View
+    // 3. Results View: if not transcribing but we have a transcript
+    if (!result.isTranscribing && hasTranscript) {
+      viewApiKey.style.display = "none";
+      viewCaptions.style.display = "none";
+      viewMain.style.display = "none";
+      viewResults.style.display = "block";
+      stopTimer();
+      return;
+    }
+
+    // 4. Captions Check View
     const captionsOn = await checkCaptions();
-    const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
     
-    // If they stopped transcribing, they might want to download or generate summary EVEN IF captions are currently off.
-    // So if hasTranscript is true, we must show Main View so they can click Generate Summary.
-    if (!captionsOn && !hasTranscript) {
+    if (!captionsOn) {
       viewApiKey.style.display = "none";
       viewCaptions.style.display = "block";
       viewMain.style.display = "none";
+      viewResults.style.display = "none";
       return;
     }
     
-    // 4. Main View (Ready to Start, or Reviewing Transcript)
+    // 5. Main View (Ready to Start)
     viewApiKey.style.display = "none";
     viewCaptions.style.display = "none";
     viewMain.style.display = "block";
+    viewResults.style.display = "none";
     
     stopLink.style.display = "none";
     stopTimer();
     
-    if (hasTranscript) {
-      generateLink.style.display = "inline";
-      downloadLink.style.display = "inline";
-    } else {
-      generateLink.style.display = "none";
-      downloadLink.style.display = "none";
-    }
-    
     startBtn.disabled = false;
-    if (!hasTranscript && !statusEl.innerText.includes("Error") && !statusEl.innerText.includes("Success")) {
-      statusEl.innerText = "Ready to start.";
-    }
+    statusEl.innerText = "Ready to start.";
   });
 }
 
@@ -192,11 +197,16 @@ stopLink.addEventListener('click', (e) => {
   chrome.storage.local.set({ isTranscribing: false });
   executeInActiveTab("stop");
   updateUI();
-  statusEl.innerText = "Transcribing stopped.";
 });
 
-downloadLink.addEventListener('click', (e) => {
-  e.preventDefault();
+newSessionBtn.addEventListener('click', () => {
+  chrome.storage.local.set({ savedTranscript: [] });
+  resultsStatus.innerText = "";
+  generateBtn.innerText = "Generate AI Summary";
+  updateUI();
+});
+
+downloadBtn.addEventListener('click', () => {
   chrome.storage.local.get(['savedTranscript'], (result) => {
     const lines = result.savedTranscript || [];
     if (lines.length === 0) return;
@@ -207,41 +217,38 @@ downloadLink.addEventListener('click', (e) => {
   });
 });
 
-generateLink.addEventListener('click', async (e) => {
-  e.preventDefault();
-  statusEl.innerText = "Gathering final captions...";
-  startBtn.disabled = true;
-  stopLink.style.display = "none";
-  generateLink.style.display = "none";
-  downloadLink.style.display = "none";
+generateBtn.addEventListener('click', async () => {
+  resultsStatus.style.color = "#333";
+  resultsStatus.innerText = "Generating AI Summary...";
+  generateBtn.disabled = true;
+  generateBtn.innerText = "Generating...";
   
-  setTimeout(() => {
-    chrome.storage.local.set({ isTranscribing: false });
-    executeInActiveTab("stop");
+  chrome.storage.local.get(['savedTranscript', 'apiKey'], async (result) => {
+    const apiKey = result.apiKey;
+    if (!apiKey) {
+      resultsStatus.style.color = "red";
+      resultsStatus.innerText = "Error: API Key missing.";
+      generateBtn.disabled = false;
+      generateBtn.innerText = "Retry Generating";
+      return;
+    }
     
-    chrome.storage.local.get(['savedTranscript', 'apiKey'], async (result) => {
-      const apiKey = result.apiKey;
-      if (!apiKey) {
-        statusEl.innerText = "Error: Please add your API Key in Settings (⚙️).";
-        updateUI();
-        return;
-      }
-      
-      const lines = result.savedTranscript || [];
-      if (lines.length === 0) {
-        statusEl.innerText = "Error: No captions captured.";
-        updateUI();
-        return;
-      }
+    const lines = result.savedTranscript || [];
+    if (lines.length === 0) {
+      resultsStatus.style.color = "red";
+      resultsStatus.innerText = "Error: No captions captured.";
+      generateBtn.disabled = false;
+      generateBtn.innerText = "Retry Generating";
+      return;
+    }
 
-      const fullTranscript = lines.join('\n');
-      statusEl.innerText = "Generating AI Summary directly...";
+    const fullTranscript = lines.join('\n');
 
-      // Build Date String
-      const dateObj = new Date();
-      const dateFormatted = dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) + ' at ' + dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+    // Build Date String
+    const dateObj = new Date();
+    const dateFormatted = dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) + ' at ' + dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
 
-      const prompt = `You are an expert executive assistant. Generate professional, comprehensive meeting minutes from the provided transcript.
+    const prompt = `You are an expert executive assistant. Generate professional, comprehensive meeting minutes from the provided transcript.
 Do NOT use Markdown formatting (no asterisks, no hashes, etc.). Use raw plain text only.
 
 FORMAT REQUIREMENTS:
@@ -255,38 +262,41 @@ FORMAT REQUIREMENTS:
 Transcript:
 ${fullTranscript}`;
 
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
-      const payload = {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.2 }
-      };
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.2 }
+    };
 
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error?.message || "Google AI Studio Error");
-        }
-        
-        const data = await response.json();
-        const minutesText = data.candidates[0].content.parts[0].text;
-        
-        const blob = new Blob([minutesText], { type: 'text/plain' });
-        const objUrl = URL.createObjectURL(blob);
-        chrome.downloads.download({ url: objUrl, filename: `Meeting_AI_Summary_${Date.now()}.txt`, saveAs: true });
-        
-        statusEl.innerText = "Success! Summary generated.";
-        updateUI();
-      } catch (error) {
-        console.error("Generation failed:", error);
-        statusEl.innerText = "Error: " + error.message.substring(0, 30);
-        updateUI();
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error?.message || "Google AI Studio Error");
       }
-    });
-  }, 3000);
+      
+      const data = await response.json();
+      const minutesText = data.candidates[0].content.parts[0].text;
+      
+      const blob = new Blob([minutesText], { type: 'text/plain' });
+      const objUrl = URL.createObjectURL(blob);
+      chrome.downloads.download({ url: objUrl, filename: `Meeting_AI_Summary_${Date.now()}.txt`, saveAs: true });
+      
+      resultsStatus.style.color = "green";
+      resultsStatus.innerText = "Success! Summary downloaded.";
+      generateBtn.disabled = false;
+      generateBtn.innerText = "Generate AI Summary";
+    } catch (error) {
+      console.error("Generation failed:", error);
+      resultsStatus.style.color = "red";
+      resultsStatus.innerText = "Error: " + error.message; // Full error without 30 char limit
+      generateBtn.disabled = false;
+      generateBtn.innerText = "Retry Generating";
+    }
+  });
 });
