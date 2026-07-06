@@ -1,0 +1,5 @@
+{
+  "CAPTION_CONTAINER_SELECTOR": "[data-tid=\"closed-captions-container\"]",
+  "SPEAKER_SELECTOR": "[data-tid=\"author\"]",
+  "TEXT_SELECTOR": "[data-tid=\"closed-caption-text\"]"
+}

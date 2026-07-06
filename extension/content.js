@@ -1,16 +1,38 @@
 let isTranscribing = false;
 let observer = null;
 
-const CAPTION_CONTAINER_SELECTOR = '[data-tid="closed-captions-container"]'; 
-const SPEAKER_SELECTOR = '[data-tid="author"]'; 
-const TEXT_SELECTOR = '[data-tid="closed-caption-text"]'; 
+let CAPTION_CONTAINER_SELECTOR = '[data-tid="closed-captions-container"]'; 
+let SPEAKER_SELECTOR = '[data-tid="author"]'; 
+let TEXT_SELECTOR = '[data-tid="closed-caption-text"]'; 
 
 let currentSpeaker = "Unknown";
+let issueTimer = null;
 let captionsMap = new Map(); // DOM Element -> { speaker, text }
 
-function startObserving() {
+async function fetchRemoteConfig() {
+  try {
+    const res = await fetch("https://raw.githubusercontent.com/abdale/teams-ai-minutes/main/config.json");
+    const json = await res.json();
+    if (json.CAPTION_CONTAINER_SELECTOR) CAPTION_CONTAINER_SELECTOR = json.CAPTION_CONTAINER_SELECTOR;
+    if (json.SPEAKER_SELECTOR) SPEAKER_SELECTOR = json.SPEAKER_SELECTOR;
+    if (json.TEXT_SELECTOR) TEXT_SELECTOR = json.TEXT_SELECTOR;
+    console.log("Teams AI Minutes: Remote config loaded.");
+  } catch (e) {
+    console.log("Teams AI Minutes: Using default DOM selectors.");
+  }
+}
+
+async function startObserving() {
   if (observer) return;
+  await fetchRemoteConfig();
   console.log("Teams AI Minutes: startObserving() called. Looking for captions...");
+  
+  chrome.storage.local.set({ issueDetected: false });
+  issueTimer = setTimeout(() => {
+    if (captionsMap.size === 0) {
+      chrome.storage.local.set({ issueDetected: true });
+    }
+  }, 5 * 60 * 1000); // 5 minutes
   
   const targetNode = document.querySelector('body'); 
   observer = new MutationObserver((mutations) => {
@@ -77,10 +99,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   } else if (request.action === "stop") {
     isTranscribing = false;
     captionsMap.clear();
+    if (issueTimer) clearTimeout(issueTimer);
     if (observer) {
       observer.disconnect();
       observer = null;
     }
     sendResponse({ status: "stopped" });
+  } else if (request.action === "force_captions") {
+    console.log("Teams AI Minutes: Attempting to force captions via Alt+Shift+C");
+    const event = new KeyboardEvent('keydown', {
+      key: 'c',
+      code: 'KeyC',
+      keyCode: 67,
+      which: 67,
+      altKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true
+    });
+    document.dispatchEvent(event);
+    sendResponse({ status: "force_captions_sent" });
   }
 });

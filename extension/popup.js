@@ -8,6 +8,8 @@ const validateBtn = document.getElementById('validateBtn');
 const apiError = document.getElementById('apiError');
 
 const startBtn = document.getElementById('startBtn');
+const magicBtn = document.getElementById('magicBtn');
+const issueBanner = document.getElementById('issueBanner');
 const stopLink = document.getElementById('stopLink');
 const statusEl = document.getElementById('status');
 const timerEl = document.getElementById('timer');
@@ -105,7 +107,7 @@ async function checkCaptions() {
 }
 
 function updateUI() {
-  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime'], async (result) => {
+  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected'], async (result) => {
     
     // 1. API Key View
     if (!result.apiKey) {
@@ -127,6 +129,12 @@ function updateUI() {
       viewMain.style.display = "block";
       viewResults.style.display = "none";
       
+      if (result.issueDetected) {
+         issueBanner.style.display = "block";
+      } else {
+         issueBanner.style.display = "none";
+      }
+
       startBtn.disabled = true;
       stopLink.style.display = "block";
       statusEl.innerText = "Transcribing in progress...";
@@ -163,6 +171,7 @@ function updateUI() {
     viewMain.style.display = "block";
     viewResults.style.display = "none";
     
+    issueBanner.style.display = "none";
     stopLink.style.display = "none";
     stopTimer();
     
@@ -185,9 +194,32 @@ async function executeInActiveTab(action) {
   });
 }
 
+if (magicBtn) {
+  magicBtn.addEventListener('click', () => {
+    magicBtn.innerText = "⏳ Attempting...";
+    magicBtn.disabled = true;
+    executeInActiveTab("force_captions");
+    setTimeout(async () => {
+       const captionsOn = await checkCaptions();
+       if (captionsOn) {
+          magicBtn.innerText = "✨ Success! Starting...";
+          setTimeout(() => {
+             startBtn.click();
+          }, 1000);
+       } else {
+          magicBtn.innerText = "❌ Auto-Enable failed";
+          setTimeout(() => {
+             magicBtn.innerText = "✨ Auto-Enable Captions";
+             magicBtn.disabled = false;
+          }, 3000);
+       }
+    }, 1500);
+  });
+}
+
 startBtn.addEventListener('click', () => {
   const startTime = Date.now();
-  chrome.storage.local.set({ savedTranscript: [], isTranscribing: true, startTime: startTime });
+  chrome.storage.local.set({ savedTranscript: [], isTranscribing: true, startTime: startTime, issueDetected: false });
   executeInActiveTab("start");
   updateUI();
 });

@@ -25,7 +25,7 @@
     <h3 style="margin: 0;">mast</h3>
     <div style="text-align: right;">
       <a href="#" id="settingsLink" style="font-size: 12px; font-weight: bold;">Settings</a>
-      <div style="font-size: 10px; color: #888; margin-top: 3px;">Version 1.6</div>
+      <div style="font-size: 10px; color: #888; margin-top: 3px;">Version 2.0</div>
     </div>
   </div>
   
@@ -42,12 +42,15 @@
   <div id="view-captions" class="view-section">
     <div style="background: #fff3cd; color: #856404; padding: 10px; border-radius: 4px; font-size: 12px; text-align: center; margin-top: 15px; border: 1px solid #ffeeba;">
       <strong>Waiting for Captions</strong><br>
-      Please turn on Live Captions in Teams.<br>
-      <kbd style="background: #fff; border: 1px solid #ccc; padding: 1px 4px; border-radius: 3px; display: inline-block; margin-top: 5px;">Alt+Shift+C</kbd>
+      <button id="magicBtn" style="background-color: #856404; margin-top: 5px; margin-bottom: 5px; font-size: 12px; padding: 5px 8px;">✨ Auto-Enable Captions</button><br>
+      Or press manually: <kbd style="background: #fff; border: 1px solid #ccc; padding: 1px 4px; border-radius: 3px; display: inline-block;">Alt+Shift+C</kbd>
     </div>
   </div>
 
   <div id="view-main" class="view-section">
+    <div id="issueBanner" style="display: none; background: #f8d7da; color: #721c24; padding: 8px; border-radius: 4px; font-size: 11px; margin-top: 10px; border: 1px solid #f5c6cb;">
+      ⚠️ No text captured. Did Teams update? <br><a href="http://go/report-mast-issue" target="_blank" style="font-weight:bold; color: #721c24 !important; text-decoration: underline;">Report Issue</a>
+    </div>
     <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 15px;">
       <button id="startBtn">Start AI Notes</button>
       <a href="#" id="stopLink" style="display: none; font-size: 14px; font-weight: bold; color: #d9534f !important;">Stop</a>
