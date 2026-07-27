@@ -9,6 +9,7 @@ const apiError = document.getElementById('apiError');
 
 const startBtn = document.getElementById('startBtn');
 const magicBtn = document.getElementById('magicBtn');
+const manualFallbackText = document.getElementById('manualFallbackText');
 const issueBanner = document.getElementById('issueBanner');
 const stopLink = document.getElementById('stopLink');
 const statusEl = document.getElementById('status');
@@ -97,7 +98,7 @@ async function checkCaptions() {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => {
-        return !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"]');
+        return !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"], [aria-label*="caption" i], .ui-captions-container');
       }
     });
     return results && results.some(r => r.result === true);
@@ -205,17 +206,14 @@ async function executeInActiveTab(action) {
 
 if (magicBtn) {
   magicBtn.addEventListener('click', () => {
-    magicBtn.innerText = "Attempting...";
-    magicBtn.disabled = true;
+    magicBtn.style.display = "none";
     executeInActiveTab("force_captions");
     
-    // The background pollInterval (running every 2s) will automatically transition the screen
-    // to the main view once captions are detected. We simply reset this button after 3 seconds
-    // so the user can try again, without showing any 'failed' error messages.
     setTimeout(() => {
-       magicBtn.innerText = "Auto-Enable Captions";
-       magicBtn.disabled = false;
-    }, 3000);
+       if (manualFallbackText) {
+         manualFallbackText.style.display = "block";
+       }
+    }, 5000);
   });
 }
 
