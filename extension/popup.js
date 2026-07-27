@@ -205,24 +205,29 @@ async function executeInActiveTab(action) {
 
 if (magicBtn) {
   magicBtn.addEventListener('click', () => {
-    magicBtn.innerText = "⏳ Attempting...";
+    magicBtn.innerText = "Attempting...";
     magicBtn.disabled = true;
     executeInActiveTab("force_captions");
-    setTimeout(async () => {
+    
+    let attempts = 0;
+    const checkInterval = setInterval(async () => {
+       attempts++;
        const captionsOn = await checkCaptions();
        if (captionsOn) {
+          clearInterval(checkInterval);
           magicBtn.innerText = "Success! Starting...";
           setTimeout(() => {
              startBtn.click();
           }, 1000);
-       } else {
+       } else if (attempts >= 6) { // 3 seconds total (500ms * 6)
+          clearInterval(checkInterval);
           magicBtn.innerText = "Auto-Enable failed";
           setTimeout(() => {
              magicBtn.innerText = "Auto-Enable Captions";
              magicBtn.disabled = false;
           }, 3000);
        }
-    }, 1500);
+    }, 500);
   });
 }
 
