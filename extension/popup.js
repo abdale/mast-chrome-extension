@@ -209,25 +209,13 @@ if (magicBtn) {
     magicBtn.disabled = true;
     executeInActiveTab("force_captions");
     
-    let attempts = 0;
-    const checkInterval = setInterval(async () => {
-       attempts++;
-       const captionsOn = await checkCaptions();
-       if (captionsOn) {
-          clearInterval(checkInterval);
-          magicBtn.innerText = "Success! Starting...";
-          setTimeout(() => {
-             startBtn.click();
-          }, 1000);
-       } else if (attempts >= 6) { // 3 seconds total (500ms * 6)
-          clearInterval(checkInterval);
-          magicBtn.innerText = "Auto-Enable failed";
-          setTimeout(() => {
-             magicBtn.innerText = "Auto-Enable Captions";
-             magicBtn.disabled = false;
-          }, 3000);
-       }
-    }, 500);
+    // The background pollInterval (running every 2s) will automatically transition the screen
+    // to the main view once captions are detected. We simply reset this button after 3 seconds
+    // so the user can try again, without showing any 'failed' error messages.
+    setTimeout(() => {
+       magicBtn.innerText = "Auto-Enable Captions";
+       magicBtn.disabled = false;
+    }, 3000);
   });
 }
 
