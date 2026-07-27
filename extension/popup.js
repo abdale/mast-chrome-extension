@@ -107,8 +107,17 @@ async function checkCaptions() {
 }
 
 function updateUI() {
-  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected'], async (result) => {
+  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId'], async (result) => {
     
+    let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    let currentTabId = tab ? tab.id : null;
+    
+    if (result.savedTranscript && result.savedTranscript.length > 0 && result.activeTabId && result.activeTabId !== currentTabId) {
+       chrome.storage.local.set({ savedTranscript: [], isTranscribing: false });
+       result.savedTranscript = [];
+       result.isTranscribing = false;
+    }
+
     // 1. API Key View
     if (!result.apiKey) {
       viewApiKey.style.display = "block";
@@ -202,14 +211,14 @@ if (magicBtn) {
     setTimeout(async () => {
        const captionsOn = await checkCaptions();
        if (captionsOn) {
-          magicBtn.innerText = "✨ Success! Starting...";
+          magicBtn.innerText = "Success! Starting...";
           setTimeout(() => {
              startBtn.click();
           }, 1000);
        } else {
-          magicBtn.innerText = "❌ Auto-Enable failed";
+          magicBtn.innerText = "Auto-Enable failed";
           setTimeout(() => {
-             magicBtn.innerText = "✨ Auto-Enable Captions";
+             magicBtn.innerText = "Auto-Enable Captions";
              magicBtn.disabled = false;
           }, 3000);
        }
@@ -217,9 +226,10 @@ if (magicBtn) {
   });
 }
 
-startBtn.addEventListener('click', () => {
+startBtn.addEventListener('click', async () => {
   const startTime = Date.now();
-  chrome.storage.local.set({ savedTranscript: [], isTranscribing: true, startTime: startTime, issueDetected: false });
+  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  chrome.storage.local.set({ savedTranscript: [], isTranscribing: true, startTime: startTime, issueDetected: false, activeTabId: tab ? tab.id : null });
   executeInActiveTab("start");
   updateUI();
 });
