@@ -3,25 +3,189 @@
 <head>
   <title>mast - Settings</title>
   <style>
-    body { font-family: 'Segoe UI', Tahoma, sans-serif; padding: 20px; max-width: 400px; margin: auto; }
-    h2 { color: #333; }
-    label { font-weight: bold; display: block; margin-top: 15px; margin-bottom: 5px; }
-    input[type="password"] { width: 100%; padding: 8px; box-sizing: border-box; }
-    button { background-color: #5B5FC7; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; margin-top: 15px; }
-    button:hover { background-color: #464eb8; }
-    #status { margin-top: 10px; color: green; font-size: 14px; }
-    .help-text { font-size: 12px; color: #666; margin-top: 5px; }
+    :root {
+      --primary: #5B5FC7;
+      --primary-hover: #464eb8;
+      --bg-gradient: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      --card-bg: #ffffff;
+      --text: #202124;
+      --text-muted: #5f6368;
+      --border: #dadce0;
+      --focus-ring: rgba(91, 95, 199, 0.25);
+    }
+
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+      background: var(--bg-gradient);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+
+    .container {
+      background: var(--card-bg);
+      border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+      width: 100%;
+      max-width: 440px;
+      padding: 30px;
+      box-sizing: border-box;
+      border: 1px solid rgba(255, 255, 255, 0.8);
+    }
+
+    h2 {
+      color: var(--text);
+      font-size: 24px;
+      margin-top: 0;
+      margin-bottom: 8px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-bottom: 25px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      font-weight: 600;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text);
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    input[type="password"],
+    input[type="text"],
+    select {
+      width: 100%;
+      padding: 10px 14px;
+      box-sizing: border-box;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      color: var(--text);
+      background-color: #fff;
+      transition: all 0.2s ease;
+      font-family: inherit;
+      outline: none;
+    }
+
+    input[type="password"]:focus,
+    input[type="text"]:focus,
+    select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px var(--focus-ring);
+    }
+
+    button {
+      background-color: var(--primary);
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      width: 100%;
+      transition: all 0.2s ease;
+      margin-top: 10px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    button:hover {
+      background-color: var(--primary-hover);
+      box-shadow: 0 4px 12px rgba(91, 95, 199, 0.2);
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    #status {
+      margin-top: 15px;
+      color: #2e7d32;
+      font-size: 14px;
+      font-weight: 500;
+      text-align: center;
+      min-height: 20px;
+      transition: opacity 0.3s ease;
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    .help-text a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .help-text a:hover {
+      text-decoration: underline;
+    }
+
+    #customModelContainer {
+      display: none;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
 <body>
-  <h2>mast Settings</h2>
-  
-  <label for="apiKey">Google AI Studio API Key</label>
-  <input type="password" id="apiKey" placeholder="AIzaSy...">
-  <div class="help-text">Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>.</div>
-  
-  <button id="saveBtn">Save Settings</button>
-  <div id="status"></div>
+  <div class="container">
+    <h2>mast Settings</h2>
+    <div class="subtitle">Configure your Gemini API key and preferred model.</div>
+    
+    <div class="form-group">
+      <label for="apiKey">Google AI Studio API Key</label>
+      <input type="password" id="apiKey" placeholder="AIzaSy...">
+      <div class="help-text">Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>.</div>
+    </div>
+
+    <div class="form-group">
+      <label for="modelSelect">Gemini Model</label>
+      <select id="modelSelect">
+        <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended Default)</option>
+        <option value="gemini-2.5-pro">gemini-2.5-pro (More Powerful / Slower)</option>
+        <option value="gemini-1.5-flash">gemini-1.5-flash (Older Generation)</option>
+        <option value="gemini-1.5-pro">gemini-1.5-pro (Older Generation Pro)</option>
+        <option value="custom">Custom Model...</option>
+      </select>
+      <div class="help-text">Select which Gemini intelligence level to summarize with.</div>
+    </div>
+
+    <div class="form-group" id="customModelContainer">
+      <label for="customModel">Custom Model ID</label>
+      <input type="text" id="customModel" placeholder="e.g., gemini-3.5-flash">
+      <div class="help-text">Specify any valid model ID supported by the Gemini Developer API.</div>
+    </div>
+    
+    <button id="saveBtn">Save Settings</button>
+    <div id="status"></div>
+  </div>
   
   <script src="options.js"></script>
 </body>

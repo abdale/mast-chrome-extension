@@ -6,6 +6,7 @@ const viewResults = document.getElementById('view-results');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const validateBtn = document.getElementById('validateBtn');
 const apiError = document.getElementById('apiError');
+const activeModelDisplay = document.getElementById('activeModelDisplay');
 
 const startBtn = document.getElementById('startBtn');
 const magicBtn = document.getElementById('magicBtn');
@@ -29,8 +30,8 @@ settingsLink.addEventListener('click', (e) => {
   window.open(chrome.runtime.getURL('options.html'));
 });
 
-async function validateApiKey(key) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite?key=${key}`;
+async function validateApiKey(key, model) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}?key=${key}`;
   try {
     const res = await fetch(url);
     if (!res.ok) return false;
@@ -52,17 +53,20 @@ validateBtn.addEventListener('click', async () => {
   validateBtn.disabled = true;
   apiError.style.display = "none";
   
-  const isValid = await validateApiKey(key);
-  if (isValid) {
-    chrome.storage.local.set({ apiKey: key }, () => {
-      updateUI();
-    });
-  } else {
-    apiError.innerText = "Invalid API Key. Please try again.";
-    apiError.style.display = "block";
-    validateBtn.innerText = "Save & Validate";
-    validateBtn.disabled = false;
-  }
+  chrome.storage.local.get(['selectedModel'], async (result) => {
+    const model = result.selectedModel || 'gemini-2.5-flash';
+    const isValid = await validateApiKey(key, model);
+    if (isValid) {
+      chrome.storage.local.set({ apiKey: key }, () => {
+        updateUI();
+      });
+    } else {
+      apiError.innerText = `Invalid API Key or model (${model}) is unavailable. Please try again.`;
+      apiError.style.display = "block";
+      validateBtn.innerText = "Save & Validate";
+      validateBtn.disabled = false;
+    }
+  });
 });
 
 function formatTime(seconds) {
@@ -108,7 +112,11 @@ async function checkCaptions() {
 }
 
 function updateUI() {
-  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId'], async (result) => {
+  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId', 'selectedModel'], async (result) => {
+    const model = result.selectedModel || 'gemini-2.5-flash';
+    if (activeModelDisplay) {
+      activeModelDisplay.innerText = `Model: ${model}`;
+    }
     
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     let currentTabId = tab ? tab.id : null;
@@ -131,6 +139,15 @@ function updateUI() {
     }
 
     const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
+
+    const viewUpload = document.getElementById('view-upload');
+    if (viewUpload) {
+      if (result.apiKey && !result.isTranscribing && !hasTranscript) {
+        viewUpload.style.display = "block";
+      } else {
+        viewUpload.style.display = "none";
+      }
+    }
 
     // 2. Transcribing in progress always shows Main View
     if (result.isTranscribing) {
@@ -256,8 +273,9 @@ generateBtn.addEventListener('click', async () => {
   generateBtn.disabled = true;
   generateBtn.innerText = "Generating...";
   
-  chrome.storage.local.get(['savedTranscript', 'apiKey'], async (result) => {
+  chrome.storage.local.get(['savedTranscript', 'apiKey', 'selectedModel'], async (result) => {
     const apiKey = result.apiKey;
+    const model = result.selectedModel || 'gemini-2.5-flash';
     if (!apiKey) {
       resultsStatus.style.color = "red";
       resultsStatus.innerText = "Error: API Key missing.";
@@ -295,7 +313,7 @@ FORMAT REQUIREMENTS:
 Transcript:
 ${fullTranscript}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.2 }
@@ -333,3 +351,64 @@ ${fullTranscript}`;
     }
   });
 });
+
+// File Upload Logic
+const uploadZone = document.getElementById('view-upload');
+const transcriptFileInput = document.getElementById('transcriptFile');
+
+if (uploadZone && transcriptFileInput) {
+  uploadZone.addEventListener('click', () => {
+    transcriptFileInput.click();
+  });
+
+  // Drag and Drop styles
+  uploadZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadZone.style.backgroundColor = "#f5f6ff";
+    uploadZone.style.borderColor = "#464eb8";
+  });
+
+  uploadZone.addEventListener('dragleave', () => {
+    uploadZone.style.backgroundColor = "#fcfcff";
+    uploadZone.style.borderColor = "#5B5FC7";
+  });
+
+  uploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadZone.style.backgroundColor = "#fcfcff";
+    uploadZone.style.borderColor = "#5B5FC7";
+    
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleTranscriptFile(e.dataTransfer.files[0]);
+    }
+  });
+
+  transcriptFileInput.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleTranscriptFile(e.target.files[0]);
+    }
+  });
+}
+
+function handleTranscriptFile(file) {
+  if (!file.name.endsWith('.txt')) {
+    alert("Please upload a valid .txt transcript file.");
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const text = e.target.result;
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
+    
+    if (lines.length === 0) {
+      alert("The uploaded file is empty.");
+      return;
+    }
+
+    chrome.storage.local.set({ savedTranscript: lines }, () => {
+      updateUI();
+    });
+  };
+  reader.readAsText(file);
+}
