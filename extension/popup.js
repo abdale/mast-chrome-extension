@@ -124,9 +124,13 @@ async function checkPageStatus() {
       func: () => {
         const captionsOn = !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"], [aria-label*="caption" i], .ui-captions-container');
         let meetingTitle = "Meeting";
-        if (document.title) {
+        const titleEl = document.querySelector('[data-tid="meeting-title"], [data-tid="call-title"], .meeting-title, .call-title, [data-tid="chat-header-title"], #roster-title-text');
+        if (titleEl && titleEl.innerText) {
+            meetingTitle = titleEl.innerText.trim();
+        } else if (document.title) {
             let extracted = document.title.split('|')[0].trim();
-            if (extracted && !extracted.toLowerCase().includes('microsoft teams')) {
+            const ignoreList = ['calendar', 'chat', 'teams', 'activity', 'calls', 'microsoft teams', 'onedrive', 'files'];
+            if (extracted && !ignoreList.includes(extracted.toLowerCase())) {
                 meetingTitle = extracted;
             }
         }
@@ -342,7 +346,6 @@ You are an expert meeting minutes generator. Your task is to process provided in
 
 Your output must be a well-structured set of meeting minutes that perfectly adheres to the required format.
 
-# ${meetingTitle}
 1.  **Strict Formatting:** You must output the meeting minutes using the exact section headings provided below. Do not modify the section names. Each bullet must be a distinct section.
 2.  **Date, time, and attendees:** Extract and present the date, time, and attendees. The companies of the attendees must be mentioned. This section must consist of exactly two bullet points following this format:
     *   [Date], at [Time] The time is the time showing in the transcript.
@@ -378,7 +381,10 @@ ${fullTranscript}`;
       }
       
       const data = await response.json();
-      const minutesText = data.candidates[0].content.parts[0].text;
+      let minutesText = data.candidates[0].content.parts[0].text;
+      
+      const headerTitle = `# Title\n${meetingTitle}\n\n`;
+      minutesText = headerTitle + minutesText;
       
       // Sanitize title to lowercase with underscore for filename
       let sanitizedTitle = meetingTitle.toLowerCase()
