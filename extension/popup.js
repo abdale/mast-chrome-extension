@@ -33,9 +33,28 @@ async function validateApiKey(key) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
   try {
     const response = await fetch(url);
-    return response.ok;
+    if (!response.ok) return { valid: false, flashLiteModel: null };
+    const data = await response.json();
+    const validModels = data.models.filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"));
+    
+    const matches = validModels.filter(m => {
+      const name = m.name.toLowerCase();
+      return name.includes('flash-lite') && !name.includes('latest') && !name.includes('tuning') && !name.includes('embed');
+    });
+    
+    matches.sort((a, b) => {
+      const aExp = a.name.includes('exp') || a.name.includes('preview');
+      const bExp = b.name.includes('exp') || b.name.includes('preview');
+      if (aExp && !bExp) return 1;
+      if (!aExp && bExp) return -1;
+      return b.name.localeCompare(a.name);
+    });
+    
+    const defaultModel = matches.length > 0 ? matches[0].name.replace('models/', '') : 'gemini-2.0-flash-lite-001';
+    
+    return { valid: true, flashLiteModel: defaultModel };
   } catch (error) {
-    return false;
+    return { valid: false, flashLiteModel: null };
   }
 }
 
@@ -52,11 +71,11 @@ validateBtn.addEventListener('click', async () => {
   apiError.style.display = "none";
   
   chrome.storage.local.get(['selectedModel'], async (result) => {
-    const isValid = await validateApiKey(key);
+    const validation = await validateApiKey(key);
     
-    if (isValid) {
+    if (validation.valid) {
       if (!result.selectedModel) {
-        chrome.storage.local.set({ selectedModel: 'gemini-3.5-flash-lite' });
+        chrome.storage.local.set({ selectedModel: validation.flashLiteModel });
       }
       chrome.storage.local.set({ apiKey: key }, () => {
         updateUI();
