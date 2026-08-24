@@ -83,7 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (selectedVal && (finalModels.some(m => m.name.replace('models/', '') === selectedVal) || selectedVal === 'custom')) {
             modelSelect.value = selectedVal;
         } else {
-            const defaultModel = latestFlash || finalModels[0];
+            const defaultModel = latestFlashLite || latestFlash || finalModels[0];
             modelSelect.value = defaultModel ? defaultModel.name.replace('models/', '') : 'custom';
         }
         

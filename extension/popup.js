@@ -113,9 +113,14 @@ async function checkCaptions() {
 
 function updateUI() {
   chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId', 'selectedModel'], async (result) => {
-    const model = result.selectedModel || 'gemini-2.5-flash';
+    const model = result.selectedModel || 'gemini-2.5-flash-lite';
     if (activeModelDisplay) {
-      activeModelDisplay.innerText = `Model: ${model.replace('-latest', '')}`;
+      if (!result.apiKey) {
+        activeModelDisplay.style.display = 'none';
+      } else {
+        activeModelDisplay.style.display = 'block';
+        activeModelDisplay.innerText = `Model: ${model.replace('-latest', '')}`;
+      }
     }
     
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -268,7 +273,7 @@ generateBtn.addEventListener('click', async () => {
   
   chrome.storage.local.get(['savedTranscript', 'apiKey', 'selectedModel'], async (result) => {
     const apiKey = result.apiKey;
-    const model = result.selectedModel || 'gemini-2.5-flash';
+    const model = result.selectedModel || 'gemini-2.5-flash-lite';
     if (!apiKey) {
       resultsStatus.style.color = "red";
       resultsStatus.innerText = "Error: API Key missing.";
@@ -339,12 +344,20 @@ ${fullTranscript}`;
       
       // Extract title from output for filename
       let title = "meeting";
-      const titleMatch = minutesText.match(/(?:Meeting Title:\s*|#\s*|\*\*Meeting Title:\*\*\s*)([^\n]+)/i);
-      if (titleMatch && titleMatch[1]) {
-        title = titleMatch[1].trim();
-      } else {
-        const firstLine = minutesText.split('\n').find(l => l.trim().length > 0);
-        if (firstLine) title = firstLine.trim();
+      const linesArr = minutesText.split('\n');
+      for (let l of linesArr) {
+        if (l.toLowerCase().includes('meeting title:')) {
+          title = l.split(/:/)[1].trim();
+          break;
+        }
+      }
+      
+      // Strip markdown asterisks and hash tags from extracted title
+      title = title.replace(/[\*#]/g, '').trim();
+
+      if (title === "meeting" || !title) {
+        const firstLine = linesArr.find(l => l.trim().length > 0);
+        if (firstLine) title = firstLine.replace(/[\*#]/g, '').trim();
       }
       
       // Sanitize title to lowercase with underscore
