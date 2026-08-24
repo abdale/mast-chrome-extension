@@ -30,13 +30,12 @@ settingsLink.addEventListener('click', (e) => {
   window.open(chrome.runtime.getURL('options.html'));
 });
 
-async function validateApiKey(key, model) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}?key=${key}`;
+async function validateApiKey(key) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
   try {
-    const res = await fetch(url);
-    if (!res.ok) return false;
-    return true;
-  } catch (e) {
+    const response = await fetch(url);
+    return response.ok;
+  } catch (error) {
     return false;
   }
 }
@@ -54,14 +53,17 @@ validateBtn.addEventListener('click', async () => {
   apiError.style.display = "none";
   
   chrome.storage.local.get(['selectedModel'], async (result) => {
-    const model = result.selectedModel || 'gemini-2.5-flash';
-    const isValid = await validateApiKey(key, model);
+    const isValid = await validateApiKey(key);
+    
     if (isValid) {
+      if (!result.selectedModel) {
+        chrome.storage.local.set({ selectedModel: 'gemini-2.0-flash' });
+      }
       chrome.storage.local.set({ apiKey: key }, () => {
         updateUI();
       });
     } else {
-      apiError.innerText = `Invalid API Key or model (${model}) is unavailable. Please try again.`;
+      apiError.innerText = `Invalid API Key. Please try again.`;
       apiError.style.display = "block";
       validateBtn.innerText = "Save & Validate";
       validateBtn.disabled = false;
@@ -102,10 +104,23 @@ async function checkCaptions() {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => {
-        return !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"], [aria-label*="caption" i], .ui-captions-container');
+        const captionsOn = !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"], [aria-label*="caption" i], .ui-captions-container');
+        let meetingTitle = "Meeting";
+        if (document.title) {
+            let extracted = document.title.split('|')[0].trim();
+            if (extracted && !extracted.toLowerCase().includes('microsoft teams')) {
+                meetingTitle = extracted;
+            }
+        }
+        return { captionsOn, meetingTitle };
       }
     });
-    return results && results.some(r => r.result === true);
+    if (!results) return false;
+    const data = results.find(r => r.result &amp;&amp; r.result.captionsOn)?.result;
+    if (data &amp;&amp; data.meetingTitle) {
+      chrome.storage.local.set({ meetingTitle: data.meetingTitle });
+    }
+    return !!data;
   } catch (e) {
     return false;
   }
@@ -113,17 +128,23 @@ async function checkCaptions() {
 
 function updateUI() {
   chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId', 'selectedModel'], async (result) => {
-    const model = result.selectedModel || 'gemini-2.5-flash-lite';
+    
     if (activeModelDisplay) {
-      if (!result.apiKey) {
+      if (!result.apiKey || !result.selectedModel) {
         activeModelDisplay.style.display = 'none';
       } else {
         activeModelDisplay.style.display = 'block';
-        activeModelDisplay.innerText = `Model: ${model.replace('-latest', '')}`;
+        activeModelDisplay.innerText = `Model: ${result.selectedModel.replace('-latest', '')}`;
       }
     }
     
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    
+    const pageStatus = await checkPageStatus();
+    
+    if (pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting") {
+      chrome.storage.local.set({ meetingTitle: pageStatus.meetingTitle });
+    }
     let currentTabId = tab ? tab.id : null;
     
     if (result.savedTranscript && result.savedTranscript.length > 0 && result.activeTabId && result.activeTabId !== currentTabId) {
@@ -271,9 +292,9 @@ generateBtn.addEventListener('click', async () => {
   generateBtn.disabled = true;
   generateBtn.innerText = "Generating...";
   
-  chrome.storage.local.get(['savedTranscript', 'apiKey', 'selectedModel'], async (result) => {
+  chrome.storage.local.get(['savedTranscript', 'apiKey', 'selectedModel', 'meetingTitle'], async (result) => {
     const apiKey = result.apiKey;
-    const model = result.selectedModel || 'gemini-2.5-flash-lite';
+    const model = result.selectedModel || 'gemini-3.5-flash-lite';
     if (!apiKey) {
       resultsStatus.style.color = "red";
       resultsStatus.innerText = "Error: API Key missing.";
@@ -292,6 +313,7 @@ generateBtn.addEventListener('click', async () => {
     }
 
     const fullTranscript = lines.join('\n');
+    const meetingTitle = result.meetingTitle || "Meeting";
 
     // Build Date String
     const dateObj = new Date();
@@ -305,7 +327,8 @@ You are an expert meeting minutes generator. Your task is to process provided in
 
 Your output must be a well-structured set of meeting minutes that perfectly adheres to the required format.
 
-1.  **Meeting Title:** Add a brief, concise title for the meeting based on what is inferred from the transcript summary. Keep this title under 5 words.
+# ${meetingTitle}
+1.  **Strict Formatting:** You must output the meeting minutes using the exact section headings provided below. Do not modify the section names. Each bullet must be a distinct section.
 2.  **Date, time, and attendees:** Extract and present the date, time, and attendees. The companies of the attendees must be mentioned. This section must consist of exactly two bullet points following this format:
     *   [Date], at [Time] The time is the time showing in the transcript.
     *   Attendees: [Name] ([Company]), [Name] ([Company]). Company may not be obvious, identify from transcript. If it is not clearly identifiable, do not mention company name. Leave it blank.
@@ -342,35 +365,14 @@ ${fullTranscript}`;
       const data = await response.json();
       const minutesText = data.candidates[0].content.parts[0].text;
       
-      // Extract title from output for filename
-      let title = "meeting";
-      const linesArr = minutesText.split('\n');
-      for (let l of linesArr) {
-        if (l.toLowerCase().includes('meeting title:')) {
-          title = l.split(/:/)[1].trim();
-          break;
-        }
-      }
-      
-      // Strip markdown asterisks and hash tags from extracted title
-      title = title.replace(/[\*#]/g, '').trim();
-
-      if (title === "meeting" || !title) {
-        const firstLine = linesArr.find(l => l.trim().length > 0);
-        if (firstLine) title = firstLine.replace(/[\*#]/g, '').trim();
-      }
-      
-      // Sanitize title to lowercase with underscore
-      let sanitizedTitle = title.toLowerCase()
+      // Sanitize title to lowercase with underscore for filename
+      let sanitizedTitle = meetingTitle.toLowerCase()
         .replace(/[^a-z0-9\s_-]/g, '')
         .trim()
         .replace(/[\s-]+/g, '_')
         .substring(0, 50);
       
       if (!sanitizedTitle) sanitizedTitle = "meeting";
-      
-      // Save meeting title for transcript downloads
-      chrome.storage.local.set({ meetingTitle: sanitizedTitle });
       
       const dateStr = new Date().toISOString().split('T')[0];
       const filename = `summary_${sanitizedTitle}_${dateStr}.md`;
