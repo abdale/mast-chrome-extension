@@ -95,41 +95,19 @@ function stopTimer() {
   timerEl.innerText = "00:00";
 }
 
-async function checkPageStatus() {
+async function checkCaptions() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.url) return { isTeams: false, captionsOn: false };
-  if (tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:')) return { isTeams: false, captionsOn: false };
-  
+  if (!tab) return false;
   try {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => {
-        const captionsOn = !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"], [aria-label*="caption" i], .ui-captions-container');
-        
-        // Robust Teams DOM Detection:
-        // Microsoft web apps heavily use 'data-tid' for telemetry. 
-        // We also check the title, or if captions were explicitly detected.
-        const isTeams = captionsOn || !!document.querySelector('[data-tid]') || (document.title && document.title.toLowerCase().includes('teams'));
-        
-        return { isTeams, captionsOn };
+        return !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"], [aria-label*="caption" i], .ui-captions-container');
       }
     });
-    
-    if (!results) return { isTeams: false, captionsOn: false };
-    
-    let isTeams = false;
-    let captionsOn = false;
-    
-    for (let r of results) {
-      if (r.result) {
-        if (r.result.isTeams) isTeams = true;
-        if (r.result.captionsOn) captionsOn = true;
-      }
-    }
-    
-    return { isTeams, captionsOn };
+    return results && results.some(r => r.result === true);
   } catch (e) {
-    return { isTeams: false, captionsOn: false };
+    return false;
   }
 }
 
@@ -161,21 +139,6 @@ function updateUI() {
     }
 
     const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
-    
-    const pageStatus = await checkPageStatus();
-    const isTeams = pageStatus.isTeams;
-
-    // 1.5 Not Teams Check
-    if (!isTeams && !result.isTranscribing && !hasTranscript) {
-      viewApiKey.style.display = "none";
-      viewCaptions.style.display = "none";
-      viewMain.style.display = "none";
-      viewResults.style.display = "none";
-      document.getElementById('view-not-teams').style.display = "block";
-      return;
-    } else if (document.getElementById('view-not-teams')) {
-      document.getElementById('view-not-teams').style.display = "none";
-    }
 
     // 2. Transcribing in progress always shows Main View
     if (result.isTranscribing) {
@@ -210,7 +173,7 @@ function updateUI() {
     }
 
     // 4. Captions Check View
-    const captionsOn = pageStatus.captionsOn;
+    const captionsOn = await checkCaptions();
     
     if (!captionsOn) {
       viewApiKey.style.display = "none";
