@@ -41,7 +41,32 @@ document.addEventListener('DOMContentLoaded', () => {
         modelSelect.innerHTML = '';
         const validModels = data.models.filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"));
         
-        validModels.forEach(m => {
+        // Helper to pick the latest/best model of a specific family
+        function getLatestModel(keyword, excludeKeyword = null) {
+            const matches = validModels.filter(m => {
+                const name = m.name.toLowerCase();
+                const hasKeyword = name.includes(keyword);
+                const hasExclude = excludeKeyword ? name.includes(excludeKeyword) : false;
+                return hasKeyword && !hasExclude && !name.includes('tuning') && !name.includes('embed');
+            });
+            // Prioritize standard/stable releases over preview/exp if available, then sort descending
+            matches.sort((a, b) => {
+                const aExp = a.name.includes('exp') || a.name.includes('preview');
+                const bExp = b.name.includes('exp') || b.name.includes('preview');
+                if (aExp && !bExp) return 1;
+                if (!aExp && bExp) return -1;
+                return b.name.localeCompare(a.name);
+            });
+            return matches[0];
+        }
+
+        const latestFlash = getLatestModel('flash', 'lite');
+        const latestFlashLite = getLatestModel('flash-lite') || getLatestModel('flash_lite');
+        const latestPro = getLatestModel('pro');
+        
+        const finalModels = [latestFlash, latestFlashLite, latestPro].filter(Boolean);
+        
+        finalModels.forEach(m => {
             const modelId = m.name.replace('models/', '');
             const option = document.createElement('option');
             option.value = modelId;
@@ -54,12 +79,10 @@ document.addEventListener('DOMContentLoaded', () => {
         customOpt.textContent = 'Custom Model...';
         modelSelect.appendChild(customOpt);
         
-        if (selectedVal && validModels.some(m => m.name.replace('models/', '') === selectedVal)) {
+        if (selectedVal && (finalModels.some(m => m.name.replace('models/', '') === selectedVal) || selectedVal === 'custom')) {
             modelSelect.value = selectedVal;
-        } else if (selectedVal === 'custom') {
-            modelSelect.value = 'custom';
         } else {
-            const defaultModel = validModels.find(m => m.name.includes('2.5-flash')) || validModels[0];
+            const defaultModel = latestFlash || finalModels[0];
             modelSelect.value = defaultModel ? defaultModel.name.replace('models/', '') : 'custom';
         }
         

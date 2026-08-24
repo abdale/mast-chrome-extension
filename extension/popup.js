@@ -254,7 +254,8 @@ downloadBtn.addEventListener('click', () => {
     const fullTranscript = lines.join('\n');
     const blob = new Blob([fullTranscript], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
-    chrome.downloads.download({ url: url, filename: `Transcript_${Date.now()}.txt`, saveAs: true });
+    const dateStr = new Date().toISOString().split('T')[0];
+    chrome.downloads.download({ url: url, filename: `transcript_${dateStr}.txt`, saveAs: false });
   });
 });
 
@@ -298,7 +299,7 @@ You are an expert meeting minutes generator. Your task is to process provided in
 
 Your output must be a well-structured set of meeting minutes that perfectly adheres to the required format.
 
-1.  **Strict Formatting:** You must output the meeting minutes using the exact section headings provided below. Do not modify the section names. Each bullet must be a distinct section.
+1.  **Meeting Title:** Add a brief, concise title for the meeting based on what is inferred from the transcript summary. Do not make it too long.
 2.  **Date, time, and attendees:** Extract and present the date, time, and attendees. The companies of the attendees must be mentioned. This section must consist of exactly two bullet points following this format:
     *   [Date], at [Time] The time is the time showing in the transcript.
     *   Attendees: [Name] ([Company]), [Name] ([Company]). Company may not be obvious, identify from transcript. If it is not clearly identifiable, do not mention company name. Leave it blank.
@@ -335,9 +336,31 @@ ${fullTranscript}`;
       const data = await response.json();
       const minutesText = data.candidates[0].content.parts[0].text;
       
+      // Extract title from output for filename
+      let title = "meeting_summary";
+      const titleMatch = minutesText.match(/(?:Meeting Title:\s*|#\s*|\*\*Meeting Title:\*\*\s*)([^\n]+)/i);
+      if (titleMatch && titleMatch[1]) {
+        title = titleMatch[1].trim();
+      } else {
+        const firstLine = minutesText.split('\n').find(l => l.trim().length > 0);
+        if (firstLine) title = firstLine.trim();
+      }
+      
+      // Sanitize title to lowercase with underscore
+      let sanitizedTitle = title.toLowerCase()
+        .replace(/[^a-z0-9\s_-]/g, '')
+        .trim()
+        .replace(/[\s-]+/g, '_')
+        .substring(0, 50);
+      
+      if (!sanitizedTitle) sanitizedTitle = "meeting_summary";
+      
+      const dateStr = new Date().toISOString().split('T')[0];
+      const filename = `${sanitizedTitle}_${dateStr}.txt`;
+
       const blob = new Blob([minutesText], { type: 'text/plain' });
       const objUrl = URL.createObjectURL(blob);
-      chrome.downloads.download({ url: objUrl, filename: `Meeting_AI_Summary_${Date.now()}.txt`, saveAs: true });
+      chrome.downloads.download({ url: objUrl, filename: filename, saveAs: false });
       
       resultsStatus.style.color = "green";
       resultsStatus.innerText = "Success! Summary downloaded.";
