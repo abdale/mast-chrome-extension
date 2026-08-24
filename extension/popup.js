@@ -139,6 +139,19 @@ function updateUI() {
     }
 
     const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
+    const isTeams = tab && tab.url && (tab.url.includes('teams.microsoft.com') || tab.url.includes('teams.live.com'));
+
+    // 1.5 Not Teams Check
+    if (!isTeams && !result.isTranscribing && !hasTranscript) {
+      viewApiKey.style.display = "none";
+      viewCaptions.style.display = "none";
+      viewMain.style.display = "none";
+      viewResults.style.display = "none";
+      document.getElementById('view-not-teams').style.display = "block";
+      return;
+    } else if (document.getElementById('view-not-teams')) {
+      document.getElementById('view-not-teams').style.display = "none";
+    }
 
     // 2. Transcribing in progress always shows Main View
     if (result.isTranscribing) {
@@ -194,7 +207,7 @@ function updateUI() {
     stopTimer();
     
     startBtn.disabled = false;
-    statusEl.innerText = "Ready to start.";
+    statusEl.innerHTML = "Ready to start.<br><span style='font-size: 10px; color: #666; display: inline-block; margin-top: 6px; line-height: 1.2;'>By starting, you confirm you have permission from all attendees to transcribe this session.</span>";
   });
 }
 
@@ -290,16 +303,26 @@ generateBtn.addEventListener('click', async () => {
     const dateObj = new Date();
     const dateFormatted = dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) + ' at ' + dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
 
-    const prompt = `You are an expert executive assistant. Generate professional, comprehensive meeting minutes from the provided transcript.
-Do NOT use Markdown formatting (no asterisks, no hashes, etc.). Use raw plain text only.
+    const prompt = `## Role
 
-FORMAT REQUIREMENTS:
-- Meeting Title: Create a descriptive title for the meeting at the very top.
-- Date and Time: ${dateFormatted}
-- Attendees: List all attendees based on the transcript. Make a strong effort to deduce and include the company they work for next to their name (e.g., John Smith (Google)).
-- Meeting Summary: A detailed summary of the discussion. Explicitly mention attendee names when attributing points so we do not lose track of who said what.
-- Key Decisions: Clear decisions made, referencing the people involved.
-- Action Items: Clear tasks. You MUST attribute every action item to a specific attendee by name.
+You are an expert meeting minutes generator. Your task is to process provided information about a meeting, such as a transcript, recording summary, or rough human notes, and generate crisp, well-structured meeting notes following a specific format.
+
+## Output Expectations
+
+Your output must be a well-structured set of meeting minutes that perfectly adheres to the required format.
+
+1.  **Strict Formatting:** You must output the meeting minutes using the exact section headings provided below. Do not modify the section names. Each bullet must be a distinct section.
+2.  **Date, time, and attendees:** Extract and present the date, time, and attendees. The companies of the attendees must be mentioned. This section must consist of exactly two bullet points following this format:
+    *   [Date], at [Time] The time is the time showing in the transcript.
+    *   Attendees: [Name] ([Company]), [Name] ([Company]). Company may not be obvious, identify from transcript. If it is not clearly identifiable, do not mention company name. Leave it blank.
+3.  **Meeting purpose:** Clearly state the goal of the meeting to provide context.
+4.  **Agenda items:** Break the minutes into sections that match the meeting's agenda to ensure scannability.
+5.  **Key discussions:** Capture the key points discussed concisely. Do not capture every word. (e.g., "Team discussed marketing budget concerns. Decision deferred until Q2.")
+6.  **Decisions made:** Clearly state any decisions that were made. You must **bold these decisions** so they are easy to spot.
+7.  **Action items:** Identify who is responsible for what action and by when. Write these items clearly. (e.g., "John – finalize vendor contract by March 15.")
+8.  **Follow-ups:** Note any unresolved issues or topics that were deferred to future meetings.
+
+Note: The meeting took place on ${dateFormatted}.
 
 Transcript:
 ${fullTranscript}`;
