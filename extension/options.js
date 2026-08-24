@@ -47,7 +47,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const name = m.name.toLowerCase();
                 const hasKeyword = name.includes(keyword);
                 const hasExclude = excludeKeyword ? name.includes(excludeKeyword) : false;
-                return hasKeyword && !hasExclude && !name.includes('tuning') && !name.includes('embed');
+                // Exclude latest, tuning, embed
+                return hasKeyword && !hasExclude && !name.includes('latest') && !name.includes('tuning') && !name.includes('embed');
             });
             // Prioritize standard/stable releases over preview/exp if available, then sort descending
             matches.sort((a, b) => {
@@ -70,6 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const modelId = m.name.replace('models/', '');
             const option = document.createElement('option');
             option.value = modelId;
+            // Always show the explicit versioned model ID prominently
             option.textContent = m.displayName ? `${modelId} (${m.displayName})` : modelId;
             modelSelect.appendChild(option);
         });

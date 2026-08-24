@@ -356,9 +356,9 @@ ${fullTranscript}`;
       if (!sanitizedTitle) sanitizedTitle = "meeting_summary";
       
       const dateStr = new Date().toISOString().split('T')[0];
-      const filename = `${sanitizedTitle}_${dateStr}.txt`;
+      const filename = `${sanitizedTitle}_${dateStr}.md`;
 
-      const blob = new Blob([minutesText], { type: 'text/plain' });
+      const blob = new Blob([minutesText], { type: 'text/markdown' });
       const objUrl = URL.createObjectURL(blob);
       chrome.downloads.download({ url: objUrl, filename: filename, saveAs: false });
       
