@@ -6,7 +6,6 @@ const viewResults = document.getElementById('view-results');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const validateBtn = document.getElementById('validateBtn');
 const apiError = document.getElementById('apiError');
-const activeModelDisplay = document.getElementById('activeModelDisplay');
 
 const startBtn = document.getElementById('startBtn');
 const magicBtn = document.getElementById('magicBtn');
@@ -57,7 +56,7 @@ validateBtn.addEventListener('click', async () => {
     
     if (isValid) {
       if (!result.selectedModel) {
-        chrome.storage.local.set({ selectedModel: 'gemini-2.0-flash' });
+        chrome.storage.local.set({ selectedModel: 'gemini-3.5-flash-lite' });
       }
       chrome.storage.local.set({ apiKey: key }, () => {
         updateUI();
@@ -134,15 +133,6 @@ async function checkPageStatus() {
 
 function updateUI() {
   chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId', 'selectedModel'], async (result) => {
-    
-    if (activeModelDisplay) {
-      if (!result.apiKey || !result.selectedModel) {
-        activeModelDisplay.style.display = 'none';
-      } else {
-        activeModelDisplay.style.display = 'block';
-        activeModelDisplay.innerText = `Model: ${result.selectedModel.replace('-latest', '')}`;
-      }
-    }
     
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
