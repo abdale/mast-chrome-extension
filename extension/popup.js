@@ -115,7 +115,7 @@ function updateUI() {
   chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId', 'selectedModel'], async (result) => {
     const model = result.selectedModel || 'gemini-2.5-flash';
     if (activeModelDisplay) {
-      activeModelDisplay.innerText = `Model: ${model}`;
+      activeModelDisplay.innerText = `Model: ${model.replace('-latest', '')}`;
     }
     
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -248,14 +248,15 @@ newSessionBtn.addEventListener('click', () => {
 });
 
 downloadBtn.addEventListener('click', () => {
-  chrome.storage.local.get(['savedTranscript'], (result) => {
+  chrome.storage.local.get(['savedTranscript', 'meetingTitle'], (result) => {
     const lines = result.savedTranscript || [];
     if (lines.length === 0) return;
     const fullTranscript = lines.join('\n');
     const blob = new Blob([fullTranscript], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const dateStr = new Date().toISOString().split('T')[0];
-    chrome.downloads.download({ url: url, filename: `transcript_${dateStr}.txt`, saveAs: false });
+    const title = result.meetingTitle || "meeting";
+    chrome.downloads.download({ url: url, filename: `transcript_${title}_${dateStr}.txt`, saveAs: false });
   });
 });
 
@@ -299,7 +300,7 @@ You are an expert meeting minutes generator. Your task is to process provided in
 
 Your output must be a well-structured set of meeting minutes that perfectly adheres to the required format.
 
-1.  **Meeting Title:** Add a brief, concise title for the meeting based on what is inferred from the transcript summary. Do not make it too long.
+1.  **Meeting Title:** Add a brief, concise title for the meeting based on what is inferred from the transcript summary. Keep this title under 5 words.
 2.  **Date, time, and attendees:** Extract and present the date, time, and attendees. The companies of the attendees must be mentioned. This section must consist of exactly two bullet points following this format:
     *   [Date], at [Time] The time is the time showing in the transcript.
     *   Attendees: [Name] ([Company]), [Name] ([Company]). Company may not be obvious, identify from transcript. If it is not clearly identifiable, do not mention company name. Leave it blank.
@@ -337,7 +338,7 @@ ${fullTranscript}`;
       const minutesText = data.candidates[0].content.parts[0].text;
       
       // Extract title from output for filename
-      let title = "meeting_summary";
+      let title = "meeting";
       const titleMatch = minutesText.match(/(?:Meeting Title:\s*|#\s*|\*\*Meeting Title:\*\*\s*)([^\n]+)/i);
       if (titleMatch && titleMatch[1]) {
         title = titleMatch[1].trim();
@@ -353,10 +354,13 @@ ${fullTranscript}`;
         .replace(/[\s-]+/g, '_')
         .substring(0, 50);
       
-      if (!sanitizedTitle) sanitizedTitle = "meeting_summary";
+      if (!sanitizedTitle) sanitizedTitle = "meeting";
+      
+      // Save meeting title for transcript downloads
+      chrome.storage.local.set({ meetingTitle: sanitizedTitle });
       
       const dateStr = new Date().toISOString().split('T')[0];
-      const filename = `${sanitizedTitle}_${dateStr}.md`;
+      const filename = `summary_${sanitizedTitle}_${dateStr}.md`;
 
       const blob = new Blob([minutesText], { type: 'text/markdown' });
       const objUrl = URL.createObjectURL(blob);

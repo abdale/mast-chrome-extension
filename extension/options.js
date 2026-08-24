@@ -63,9 +63,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const latestFlash = getLatestModel('flash', 'lite');
         const latestFlashLite = getLatestModel('flash-lite') || getLatestModel('flash_lite');
-        const latestPro = getLatestModel('pro');
         
-        const finalModels = [latestFlash, latestFlashLite, latestPro].filter(Boolean);
+        const finalModels = [latestFlash, latestFlashLite].filter(Boolean);
         
         finalModels.forEach(m => {
             const modelId = m.name.replace('models/', '');
