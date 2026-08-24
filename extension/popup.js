@@ -140,15 +140,6 @@ function updateUI() {
 
     const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
 
-    const viewUpload = document.getElementById('view-upload');
-    if (viewUpload) {
-      if (result.apiKey && !result.isTranscribing && !hasTranscript) {
-        viewUpload.style.display = "block";
-      } else {
-        viewUpload.style.display = "none";
-      }
-    }
-
     // 2. Transcribing in progress always shows Main View
     if (result.isTranscribing) {
       viewApiKey.style.display = "none";
@@ -351,64 +342,3 @@ ${fullTranscript}`;
     }
   });
 });
-
-// File Upload Logic
-const uploadZone = document.getElementById('view-upload');
-const transcriptFileInput = document.getElementById('transcriptFile');
-
-if (uploadZone && transcriptFileInput) {
-  uploadZone.addEventListener('click', () => {
-    transcriptFileInput.click();
-  });
-
-  // Drag and Drop styles
-  uploadZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    uploadZone.style.backgroundColor = "#f5f6ff";
-    uploadZone.style.borderColor = "#464eb8";
-  });
-
-  uploadZone.addEventListener('dragleave', () => {
-    uploadZone.style.backgroundColor = "#fcfcff";
-    uploadZone.style.borderColor = "#5B5FC7";
-  });
-
-  uploadZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    uploadZone.style.backgroundColor = "#fcfcff";
-    uploadZone.style.borderColor = "#5B5FC7";
-    
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleTranscriptFile(e.dataTransfer.files[0]);
-    }
-  });
-
-  transcriptFileInput.addEventListener('change', (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleTranscriptFile(e.target.files[0]);
-    }
-  });
-}
-
-function handleTranscriptFile(file) {
-  if (!file.name.endsWith('.txt')) {
-    alert("Please upload a valid .txt transcript file.");
-    return;
-  }
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const text = e.target.result;
-    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
-    
-    if (lines.length === 0) {
-      alert("The uploaded file is empty.");
-      return;
-    }
-
-    chrome.storage.local.set({ savedTranscript: lines }, () => {
-      updateUI();
-    });
-  };
-  reader.readAsText(file);
-}

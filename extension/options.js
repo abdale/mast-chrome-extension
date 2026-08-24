@@ -10,12 +10,9 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.storage.local.get(['apiKey', 'modelSelectVal', 'customModelVal'], (result) => {
     if (result.apiKey) {
       apiKeyInput.value = result.apiKey;
-    }
-    
-    if (result.modelSelectVal) {
-      modelSelect.value = result.modelSelectVal;
+      loadModels(result.apiKey, result.modelSelectVal);
     } else {
-      modelSelect.value = 'gemini-2.5-flash';
+      modelSelect.innerHTML = '<option value="">Enter API Key to load models</option>';
     }
     
     if (result.customModelVal) {
@@ -25,6 +22,55 @@ document.addEventListener('DOMContentLoaded', () => {
     // Trigger initial visibility of custom model container
     toggleCustomModelVisibility();
   });
+
+  apiKeyInput.addEventListener('change', () => {
+    const key = apiKeyInput.value.trim();
+    if (key) {
+      loadModels(key, modelSelect.value);
+    }
+  });
+
+  async function loadModels(apiKey, selectedVal) {
+    statusEl.innerText = "Loading available models...";
+    statusEl.style.color = "#5B5FC7";
+    try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+        if (!response.ok) throw new Error("Invalid API key or network error");
+        const data = await response.json();
+        
+        modelSelect.innerHTML = '';
+        const validModels = data.models.filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"));
+        
+        validModels.forEach(m => {
+            const modelId = m.name.replace('models/', '');
+            const option = document.createElement('option');
+            option.value = modelId;
+            option.textContent = m.displayName ? `${modelId} (${m.displayName})` : modelId;
+            modelSelect.appendChild(option);
+        });
+        
+        const customOpt = document.createElement('option');
+        customOpt.value = 'custom';
+        customOpt.textContent = 'Custom Model...';
+        modelSelect.appendChild(customOpt);
+        
+        if (selectedVal && validModels.some(m => m.name.replace('models/', '') === selectedVal)) {
+            modelSelect.value = selectedVal;
+        } else if (selectedVal === 'custom') {
+            modelSelect.value = 'custom';
+        } else {
+            const defaultModel = validModels.find(m => m.name.includes('2.5-flash')) || validModels[0];
+            modelSelect.value = defaultModel ? defaultModel.name.replace('models/', '') : 'custom';
+        }
+        
+        toggleCustomModelVisibility();
+        statusEl.innerText = "";
+    } catch (e) {
+        statusEl.innerText = "Error loading models. Check API Key.";
+        statusEl.style.color = "#d32f2f";
+        modelSelect.innerHTML = '<option value="">Error loading models</option>';
+    }
+  }
 
   // Toggle custom model input visibility based on dropdown selection
   function toggleCustomModelVisibility() {
