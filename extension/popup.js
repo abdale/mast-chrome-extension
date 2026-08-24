@@ -139,7 +139,7 @@ function updateUI() {
     }
 
     const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
-    const isTeams = tab && tab.url && (tab.url.includes('teams.microsoft.com') || tab.url.includes('teams.live.com'));
+    const isTeams = tab && tab.url && (tab.url.includes('teams.microsoft.com') || tab.url.includes('teams.live.com') || tab.url.includes('teams.cloud.microsoft'));
 
     // 1.5 Not Teams Check
     if (!isTeams && !result.isTranscribing && !hasTranscript) {
