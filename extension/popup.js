@@ -97,9 +97,9 @@ function stopTimer() {
   timerEl.innerText = "00:00";
 }
 
-async function checkCaptions() {
+async function checkPageStatus() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return false;
+  if (!tab) return { captionsOn: false, meetingTitle: "Meeting" };
   try {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
@@ -115,14 +115,20 @@ async function checkCaptions() {
         return { captionsOn, meetingTitle };
       }
     });
-    if (!results) return false;
-    const data = results.find(r => r.result &amp;&amp; r.result.captionsOn)?.result;
-    if (data &amp;&amp; data.meetingTitle) {
-      chrome.storage.local.set({ meetingTitle: data.meetingTitle });
+    if (!results) return { captionsOn: false, meetingTitle: "Meeting" };
+    
+    let captionsOn = false;
+    let meetingTitle = "Meeting";
+    
+    for (let r of results) {
+      if (r.result) {
+        if (r.result.captionsOn) captionsOn = true;
+        if (r.result.meetingTitle && r.result.meetingTitle !== "Meeting") meetingTitle = r.result.meetingTitle;
+      }
     }
-    return !!data;
+    return { captionsOn, meetingTitle };
   } catch (e) {
-    return false;
+    return { captionsOn: false, meetingTitle: "Meeting" };
   }
 }
 
@@ -199,7 +205,7 @@ function updateUI() {
     }
 
     // 4. Captions Check View
-    const captionsOn = await checkCaptions();
+    const captionsOn = pageStatus.captionsOn;
     
     if (!captionsOn) {
       viewApiKey.style.display = "none";
