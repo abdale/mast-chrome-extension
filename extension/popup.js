@@ -123,18 +123,7 @@ async function checkPageStatus() {
       target: { tabId: tab.id, allFrames: true },
       func: () => {
         const captionsOn = !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"], [aria-label*="caption" i], .ui-captions-container');
-        let meetingTitle = "Meeting";
-        const titleEl = document.querySelector('[data-tid="meeting-title"], [data-tid="call-title"], .meeting-title, .call-title, [data-tid="chat-header-title"], #roster-title-text');
-        if (titleEl && titleEl.innerText) {
-            meetingTitle = titleEl.innerText.trim();
-        } else if (document.title) {
-            let extracted = document.title.split('|')[0].trim();
-            const ignoreList = ['calendar', 'chat', 'teams', 'activity', 'calls', 'microsoft teams', 'onedrive', 'files'];
-            if (extracted && !ignoreList.includes(extracted.toLowerCase())) {
-                meetingTitle = extracted;
-            }
-        }
-        return { captionsOn, meetingTitle };
+        return { captionsOn: captionsOn, meetingTitle: "Meeting" };
       }
     });
     if (!results) return { captionsOn: false, meetingTitle: "Meeting" };
@@ -293,15 +282,16 @@ newSessionBtn.addEventListener('click', () => {
 });
 
 downloadBtn.addEventListener('click', () => {
-  chrome.storage.local.get(['savedTranscript', 'meetingTitle'], (result) => {
+  chrome.storage.local.get(['savedTranscript'], (result) => {
     const lines = result.savedTranscript || [];
     if (lines.length === 0) return;
     const fullTranscript = lines.join('\n');
     const blob = new Blob([fullTranscript], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
-    const dateStr = new Date().toISOString().split('T')[0];
-    const title = result.meetingTitle || "meeting";
-    chrome.downloads.download({ url: url, filename: `transcript_${title}_${dateStr}.txt`, saveAs: false });
+    const d = new Date();
+    const dateStr = d.toISOString().split('T')[0];
+    const timeStr = d.toTimeString().split(' ')[0].replace(/:/g, '-');
+    chrome.downloads.download({ url: url, filename: `transcript_${dateStr}_${timeStr}.txt`, saveAs: false });
   });
 });
 
@@ -347,15 +337,18 @@ You are an expert meeting minutes generator. Your task is to process provided in
 Your output must be a well-structured set of meeting minutes that perfectly adheres to the required format.
 
 1.  **Strict Formatting:** You must output the meeting minutes using the exact section headings provided below. Do not modify the section names. Each bullet must be a distinct section.
-2.  **Date, time, and attendees:** Extract and present the date, time, and attendees. The companies of the attendees must be mentioned. This section must consist of exactly two bullet points following this format:
+2.  **Title:** You must generate a short, concise title for the meeting based on the transcript (less than 7 words). It must be placed at the very beginning of the document in this exact format:
+# Title
+[Your Generated Title Here]
+3.  **Date, time, and attendees:** Extract and present the date, time, and attendees. The companies of the attendees must be mentioned. This section must consist of exactly two bullet points following this format:
     *   [Date], at [Time] The time is the time showing in the transcript.
     *   Attendees: [Name] ([Company]), [Name] ([Company]). Company may not be obvious, identify from transcript. If it is not clearly identifiable, do not mention company name. Leave it blank.
-3.  **Meeting purpose:** Clearly state the goal of the meeting to provide context.
-4.  **Agenda items:** Break the minutes into sections that match the meeting's agenda to ensure scannability.
-5.  **Key discussions:** Capture the key points discussed concisely. Do not capture every word. (e.g., "Team discussed marketing budget concerns. Decision deferred until Q2.")
-6.  **Decisions made:** Clearly state any decisions that were made. You must **bold these decisions** so they are easy to spot.
-7.  **Action items:** Identify who is responsible for what action and by when. Write these items clearly. (e.g., "John – finalize vendor contract by March 15.")
-8.  **Follow-ups:** Note any unresolved issues or topics that were deferred to future meetings.
+4.  **Meeting purpose:** Clearly state the goal of the meeting to provide context.
+5.  **Agenda items:** Break the minutes into sections that match the meeting's agenda to ensure scannability.
+6.  **Key discussions:** Capture the key points discussed concisely. Do not capture every word. (e.g., "Team discussed marketing budget concerns. Decision deferred until Q2.")
+7.  **Decisions made:** Clearly state any decisions that were made. You must **bold these decisions** so they are easy to spot.
+8.  **Action items:** Identify who is responsible for what action and by when. Write these items clearly. (e.g., "John – finalize vendor contract by March 15.")
+9.  **Follow-ups:** Note any unresolved issues or topics that were deferred to future meetings.
 
 Note: The meeting took place on ${dateFormatted}.
 
@@ -383,20 +376,30 @@ ${fullTranscript}`;
       const data = await response.json();
       let minutesText = data.candidates[0].content.parts[0].text;
       
-      const headerTitle = `# Title\n${meetingTitle}\n\n`;
-      minutesText = headerTitle + minutesText;
+      let aiTitle = "meeting";
+      const outLines = minutesText.split('\n');
+      for (let i = 0; i < outLines.length; i++) {
+          if (outLines[i].toLowerCase().includes('# title') && i + 1 < outLines.length) {
+              aiTitle = outLines[i+1].trim();
+              if (!aiTitle && i + 2 < outLines.length) {
+                  aiTitle = outLines[i+2].trim();
+              }
+              break;
+          }
+      }
       
-      // Sanitize title to lowercase with underscore for filename
-      let sanitizedTitle = meetingTitle.toLowerCase()
+      let sanitizedTitle = aiTitle.toLowerCase()
         .replace(/[^a-z0-9\s_-]/g, '')
         .trim()
         .replace(/[\s-]+/g, '_')
         .substring(0, 50);
       
-      if (!sanitizedTitle) sanitizedTitle = "meeting";
+      if (!sanitizedTitle || sanitizedTitle === 'title') sanitizedTitle = "meeting";
       
-      const dateStr = new Date().toISOString().split('T')[0];
-      const filename = `summary_${sanitizedTitle}_${dateStr}.md`;
+      const d = new Date();
+      const dateStr = d.toISOString().split('T')[0];
+      const timeStr = d.toTimeString().split(' ')[0].replace(/:/g, '-');
+      const filename = `ai_summary_${sanitizedTitle}_${dateStr}_${timeStr}.md`;
 
       const blob = new Blob([minutesText], { type: 'text/markdown' });
       const objUrl = URL.createObjectURL(blob);
