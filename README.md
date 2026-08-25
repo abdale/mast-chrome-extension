@@ -1,11 +1,6 @@
 # mast (Meeting AI Summarizer & Transcriber)
 
-A lightweight Chrome Extension (Version 2.5) that smoothly transcribes browser-based Microsoft Teams meetings and generates AI-powered meeting minutes using Google AI Studio (Gemini).
-
-## How it works
-This extension uses a seamless, zero-audio approach. It relies on the MS Teams "Live Captions" feature, utilizing a DOM scraper to capture the text and speaker names securely into your browser's local storage. The extension then talks directly to the Google AI Studio API (using your personal API key) to process the transcript through Gemini Flash Lite or a model of your choice.
-
----
+A lightweight Chrome Extension that smoothly transcribes browser-based Microsoft Teams meetings and generates AI-powered meeting minutes using Google AI Studio (Gemini).
 
 ## Setup Instructions
 
