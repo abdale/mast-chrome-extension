@@ -19,7 +19,7 @@ To use the AI generation features securely without maintaining a backend, the ex
    - Open Google Chrome and navigate to `chrome://extensions/`.
    - Toggle **Developer mode** ON (top right corner).
    - Click the **Load unpacked** button.
-   - Select the `extension/` folder from this repository.
+   - Select the `mast-extension/` folder from this repository.
    - The "mast" extension will appear in your browser toolbar.
 
 2. **Configure the Extension**
