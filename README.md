@@ -33,7 +33,7 @@ To use the AI generation features securely without maintaining a backend, the ex
 1. Join a browser-based Microsoft Teams meeting.
 2. Click the mast extension icon and click **Enable Captions** to instantly turn on live captions inside Teams.
 3. Click **Start AI Notes**. The extension will passively collect captions.
-4. When ready, click **Stop Transcript**.
+4. When ready, click **Stop**.
 5. You can now download your meeting notes in two formats:
    - **Generate AI Summary**: Sends the data to Google AI Studio and automatically downloads a beautifully formatted Markdown (`.md`) file. The filename and internal heading will dynamically include a short, AI-generated title based on the meeting context.
    - **Download Transcript**: Downloads a raw text (`.txt`) file containing a timestamped log of the speaker captions.
