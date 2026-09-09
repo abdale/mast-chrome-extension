@@ -1,4 +1,5 @@
 const viewApiKey = document.getElementById('view-api-key');
+const viewNoMeeting = document.getElementById('view-no-meeting');
 const viewCaptions = document.getElementById('view-captions');
 const viewMain = document.getElementById('view-main');
 const viewResults = document.getElementById('view-results');
@@ -6,20 +7,21 @@ const viewResults = document.getElementById('view-results');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const validateBtn = document.getElementById('validateBtn');
 const apiError = document.getElementById('apiError');
+const activeModelDisplay = document.getElementById('activeModelDisplay');
 
 const startBtn = document.getElementById('startBtn');
 const magicBtn = document.getElementById('magicBtn');
-const manualFallbackText = document.getElementById('manualFallbackText');
-const issueBanner = document.getElementById('issueBanner');
 const stopLink = document.getElementById('stopLink');
-const statusEl = document.getElementById('status');
-const timerEl = document.getElementById('timer');
-const settingsLink = document.getElementById('settingsLink');
-
-const generateBtn = document.getElementById('generateBtn');
 const downloadBtn = document.getElementById('downloadBtn');
+const generateBtn = document.getElementById('generateBtn');
 const newSessionBtn = document.getElementById('newSessionBtn');
+
+const timerEl = document.getElementById('timer');
+const statusEl = document.getElementById('status');
 const resultsStatus = document.getElementById('resultsStatus');
+const issueBanner = document.getElementById('issueBanner');
+const settingsLink = document.getElementById('settingsLink');
+const manualFallbackText = document.getElementById('manualFallbackText');
 
 let timerInterval = null;
 let pollInterval = null;
@@ -29,59 +31,45 @@ settingsLink.addEventListener('click', (e) => {
   window.open(chrome.runtime.getURL('options.html'));
 });
 
-async function validateApiKey(key) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
+async function validateApiKey(key, model) {
+  const cleanModel = (model || 'gemini-2.5-flash').trim().replace(/^models\//, '');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}?key=${key.trim()}`;
   try {
-    const response = await fetch(url);
-    if (!response.ok) return { valid: false, flashLiteModel: null };
-    const data = await response.json();
-    const validModels = data.models.filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"));
-    
-    const matches = validModels.filter(m => {
-      const name = m.name.toLowerCase();
-      return name.includes('flash-lite') && !name.includes('latest') && !name.includes('tuning') && !name.includes('embed');
-    });
-    
-    matches.sort((a, b) => {
-      const aExp = a.name.includes('exp') || a.name.includes('preview');
-      const bExp = b.name.includes('exp') || b.name.includes('preview');
-      if (aExp && !bExp) return 1;
-      if (!aExp && bExp) return -1;
-      return b.name.localeCompare(a.name);
-    });
-    
-    const defaultModel = matches.length > 0 ? matches[0].name.replace('models/', '') : 'gemini-2.0-flash-lite-001';
-    
-    return { valid: true, flashLiteModel: defaultModel };
-  } catch (error) {
-    return { valid: false, flashLiteModel: null };
+    const res = await fetch(url);
+    if (!res.ok) return false;
+    return true;
+  } catch (e) {
+    return false;
   }
 }
 
 validateBtn.addEventListener('click', async () => {
   const key = apiKeyInput.value.trim();
   if (!key) {
-    apiError.innerText = "Key cannot be empty.";
+    apiError.innerText = "Please enter an API Key.";
     apiError.style.display = "block";
     return;
   }
-  
+
   validateBtn.innerText = "Validating...";
   validateBtn.disabled = true;
   apiError.style.display = "none";
   
-  chrome.storage.local.get(['selectedModel'], async (result) => {
-    const validation = await validateApiKey(key);
-    
-    if (validation.valid) {
-      if (!result.selectedModel) {
-        chrome.storage.local.set({ selectedModel: validation.flashLiteModel });
-      }
+  chrome.storage.local.get(['selectedModel', 'cachedModels'], async (result) => {
+    let model = result.selectedModel;
+    if (!model && result.cachedModels && result.cachedModels.length > 0) {
+      model = result.cachedModels[0].id;
+    }
+    if (!model) {
+      model = 'gemini-2.5-flash';
+    }
+    const isValid = await validateApiKey(key, model);
+    if (isValid) {
       chrome.storage.local.set({ apiKey: key }, () => {
         updateUI();
       });
     } else {
-      apiError.innerText = `Invalid API Key. Please try again.`;
+      apiError.innerText = `Invalid API Key or model (${model}) is unavailable. Please try again.`;
       apiError.style.display = "block";
       validateBtn.innerText = "Save & Validate";
       validateBtn.disabled = false;
@@ -89,116 +77,165 @@ validateBtn.addEventListener('click', async () => {
   });
 });
 
-function formatTime(seconds) {
-  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
-  const s = (seconds % 60).toString().padStart(2, '0');
-  return `${m}:${s}`;
-}
-
-function updateTimerDisplay(startTime) {
-  const elapsed = Math.floor((Date.now() - startTime) / 1000);
-  timerEl.innerText = formatTime(elapsed);
-}
-
 function startTimer(startTime) {
-  timerEl.style.display = "block";
-  updateTimerDisplay(startTime);
   if (timerInterval) clearInterval(timerInterval);
-  timerInterval = setInterval(() => {
-    updateTimerDisplay(startTime);
-  }, 1000);
+  timerEl.style.display = "block";
+  
+  function update() {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
+    const s = (elapsed % 60).toString().padStart(2, '0');
+    timerEl.innerText = `${m}:${s}`;
+  }
+  update();
+  timerInterval = setInterval(update, 1000);
 }
 
 function stopTimer() {
   if (timerInterval) clearInterval(timerInterval);
+  timerInterval = null;
   timerEl.style.display = "none";
   timerEl.innerText = "00:00";
 }
 
-async function checkPageStatus() {
+async function checkActiveMeeting() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return { captionsOn: false, meetingTitle: "Meeting" };
+  if (!tab || !tab.id || !tab.url || (!tab.url.includes("teams.microsoft.com") && !tab.url.includes("teams.live.com"))) {
+    return { isTeams: false, inMeeting: false };
+  }
   try {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => {
-        const captionsOn = !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"], [aria-label*="caption" i], .ui-captions-container');
-        return { captionsOn: captionsOn, meetingTitle: "Meeting" };
+        const callIndicators = [
+          '[data-tid="call-duration"]',
+          '#hangup-button',
+          'button[data-tid="hangup-button"]',
+          'button[data-tid="call-hangup"]',
+          'button[aria-label="Leave call" i]',
+          'button[aria-label="Leave meeting" i]',
+          'button[aria-label="Hang up" i]',
+          '[data-tid="calling-top-bar"]',
+          '[data-tid="calling-screen"]',
+          '[data-tid="meeting-stage"]',
+          '[data-tid="calling-stage"]',
+          '[data-tid="closed-captions-container"]',
+          '[data-tid="closed-caption-renderer-wrapper"]'
+        ];
+        return callIndicators.some(sel => !!document.querySelector(sel));
       }
     });
-    if (!results) return { captionsOn: false, meetingTitle: "Meeting" };
-    
-    let captionsOn = false;
-    let meetingTitle = "Meeting";
-    
-    for (let r of results) {
-      if (r.result) {
-        if (r.result.captionsOn) captionsOn = true;
-        if (r.result.meetingTitle && r.result.meetingTitle !== "Meeting") meetingTitle = r.result.meetingTitle;
-      }
-    }
-    return { captionsOn, meetingTitle };
+    const inMeeting = results && results.some(r => r.result === true);
+    return { isTeams: true, inMeeting };
   } catch (e) {
-    return { captionsOn: false, meetingTitle: "Meeting" };
+    return { isTeams: true, inMeeting: false };
+  }
+}
+
+async function checkCaptions() {
+  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !tab.id) return false;
+  try {
+    let results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: () => {
+        // True caption rendering elements
+        const captionElements = document.querySelector(
+          '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], .ui-captions-container'
+        );
+        if (captionElements) return true;
+
+        // Button that is already turned on (pressed/checked or labeled 'Turn off')
+        const activeToggle = document.querySelector(
+          'button[aria-label*="Turn off live captions" i], button[aria-label*="caption" i][aria-pressed="true"], button[aria-label*="caption" i][aria-checked="true"], button[data-tid*="caption"][aria-pressed="true"]'
+        );
+        return !!activeToggle;
+      }
+    });
+    return results && results.some(r => r.result === true);
+  } catch (e) {
+    return false;
   }
 }
 
 function updateUI() {
-  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId', 'selectedModel'], async (result) => {
+  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId', 'selectedModel', 'cachedModels'], async (result) => {
+    let model = result.selectedModel;
+    if (!model && result.cachedModels && result.cachedModels.length > 0) {
+      model = result.cachedModels[0].id;
+    }
+    if (!model) {
+      model = 'gemini-2.5-flash';
+    }
+    if (activeModelDisplay) {
+      activeModelDisplay.innerText = `Model: ${model.replace('-latest', '')}`;
+    }
     
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
-    const pageStatus = await checkPageStatus();
-    
-    if (pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting") {
-      chrome.storage.local.set({ meetingTitle: pageStatus.meetingTitle });
-    }
     let currentTabId = tab ? tab.id : null;
     
-    if (result.savedTranscript && result.savedTranscript.length > 0 && result.activeTabId && result.activeTabId !== currentTabId) {
-       chrome.storage.local.set({ savedTranscript: [], isTranscribing: false });
+    // Only clear if a live transcription session was active and user switched away from that tab
+    if (result.isTranscribing && result.activeTabId && result.activeTabId !== currentTabId) {
+       chrome.storage.local.set({ savedTranscript: [], isTranscribing: false, activeTabId: null });
        result.savedTranscript = [];
        result.isTranscribing = false;
+       result.activeTabId = null;
     }
 
     // 1. API Key View
     if (!result.apiKey) {
       viewApiKey.style.display = "block";
+      if (viewNoMeeting) viewNoMeeting.style.display = "none";
       viewCaptions.style.display = "none";
       viewMain.style.display = "none";
       viewResults.style.display = "none";
-      validateBtn.innerText = "Save & Validate";
-      validateBtn.disabled = false;
+      const viewUpload = document.getElementById('view-upload');
+      if (viewUpload) viewUpload.style.display = "none";
+      stopTimer();
       return;
     }
 
     const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
 
+    const viewUpload = document.getElementById('view-upload');
+    if (viewUpload) {
+      if (result.apiKey && !result.isTranscribing && !hasTranscript) {
+        viewUpload.style.display = "block";
+      } else {
+        viewUpload.style.display = "none";
+      }
+    }
+
     // 2. Transcribing in progress always shows Main View
     if (result.isTranscribing) {
       viewApiKey.style.display = "none";
+      if (viewNoMeeting) viewNoMeeting.style.display = "none";
       viewCaptions.style.display = "none";
       viewMain.style.display = "block";
       viewResults.style.display = "none";
-      
+
       if (result.issueDetected) {
          issueBanner.style.display = "block";
       } else {
          issueBanner.style.display = "none";
       }
 
+      const promptEl = document.getElementById('mainMeetingPrompt');
+      if (promptEl) promptEl.style.display = "none";
+
       startBtn.disabled = true;
       stopLink.style.display = "block";
       statusEl.innerText = "Transcribing in progress...";
-      
-      const startTime = result.startTime || Date.now();
-      startTimer(startTime);
+      if (result.startTime) {
+        startTimer(result.startTime);
+      }
       return;
     }
-    
+
     // 3. Results View: if not transcribing but we have a transcript
     if (!result.isTranscribing && hasTranscript) {
       viewApiKey.style.display = "none";
+      if (viewNoMeeting) viewNoMeeting.style.display = "none";
       viewCaptions.style.display = "none";
       viewMain.style.display = "none";
       viewResults.style.display = "block";
@@ -206,29 +243,47 @@ function updateUI() {
       return;
     }
 
-    // 4. Captions Check View
-    const captionsOn = pageStatus.captionsOn;
+    // 4. Meeting Check: Is the active tab in an active Teams meeting?
+    const { inMeeting } = await checkActiveMeeting();
+
+    if (!inMeeting) {
+      viewApiKey.style.display = "none";
+      if (viewNoMeeting) viewNoMeeting.style.display = "block";
+      viewCaptions.style.display = "none";
+      viewMain.style.display = "none";
+      viewResults.style.display = "none";
+      stopTimer();
+      return;
+    }
+
+    // 5. User IS in an active meeting: Check Captions
+    if (viewNoMeeting) viewNoMeeting.style.display = "none";
+    const captionsOn = await checkCaptions();
     
     if (!captionsOn) {
       viewApiKey.style.display = "none";
       viewCaptions.style.display = "block";
       viewMain.style.display = "none";
       viewResults.style.display = "none";
+      stopTimer();
       return;
     }
     
-    // 5. Main View (Ready to Start)
+    // 6. In active meeting AND captions are ON (Ready to Start)
     viewApiKey.style.display = "none";
     viewCaptions.style.display = "none";
     viewMain.style.display = "block";
     viewResults.style.display = "none";
+
+    const promptEl = document.getElementById('mainMeetingPrompt');
+    if (promptEl) promptEl.style.display = "block";
     
     issueBanner.style.display = "none";
     stopLink.style.display = "none";
     stopTimer();
     
     startBtn.disabled = false;
-    statusEl.innerHTML = "Ready to start.<br><span style='font-size: 10px; color: #666; display: inline-block; margin-top: 6px; line-height: 1.2;'>By starting, you confirm you have permission from all attendees to transcribe this session.</span>";
+    statusEl.innerText = "Ready to start.";
   });
 }
 
@@ -237,25 +292,43 @@ pollInterval = setInterval(updateUI, 2000);
 
 async function executeInActiveTab(action) {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
-  chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true },
-    files: ['content.js']
-  }, () => {
-    chrome.tabs.sendMessage(tab.id, { action: action });
+  if (!tab || !tab.id) return;
+  chrome.tabs.sendMessage(tab.id, { action: action }, (response) => {
+    if (chrome.runtime.lastError) {
+      // Content script not yet attached to tab; inject content.js and retry
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        files: ['content.js']
+      }, () => {
+        chrome.tabs.sendMessage(tab.id, { action: action });
+      });
+    }
   });
 }
 
 if (magicBtn) {
   magicBtn.addEventListener('click', () => {
-    magicBtn.style.display = "none";
+    magicBtn.innerText = "Enabling...";
+    magicBtn.disabled = true;
     executeInActiveTab("force_captions");
     
     setTimeout(() => {
-       if (manualFallbackText) {
-         manualFallbackText.style.display = "block";
-       }
-    }, 5000);
+      if (manualFallbackText) {
+        const platform = (navigator.platform || '').toUpperCase();
+        const userAgent = navigator.userAgent || '';
+        const isMac = platform.includes('MAC') || userAgent.includes('Macintosh') || userAgent.includes('Mac OS');
+        const shortcut = isMac ? "Cmd + Shift + O" : "Alt + Shift + C";
+        manualFallbackText.innerHTML = `
+          <div style="margin-top: 6px; padding: 6px; background: #ffffff; border-radius: 4px; border: 1px dashed #93c5fd;">
+            <div>Shortcut: <b style="color: #1e3a8a;">${shortcut}</b></div>
+            <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">or click <b>More (...) &gt; Language &amp; speech &gt; Turn on live captions</b></div>
+          </div>
+        `;
+        manualFallbackText.style.display = "block";
+      }
+      magicBtn.innerText = "Enable Captions";
+      magicBtn.disabled = false;
+    }, 1500);
   });
 }
 
@@ -301,9 +374,16 @@ generateBtn.addEventListener('click', async () => {
   generateBtn.disabled = true;
   generateBtn.innerText = "Generating...";
   
-  chrome.storage.local.get(['savedTranscript', 'apiKey', 'selectedModel', 'meetingTitle'], async (result) => {
+  chrome.storage.local.get(['savedTranscript', 'apiKey', 'selectedModel', 'cachedModels'], async (result) => {
     const apiKey = result.apiKey;
-    const model = result.selectedModel || 'gemini-3.5-flash-lite';
+    let model = result.selectedModel;
+    if (!model && result.cachedModels && result.cachedModels.length > 0) {
+      model = result.cachedModels[0].id;
+    }
+    if (!model) {
+      model = 'gemini-2.5-flash';
+    }
+
     if (!apiKey) {
       resultsStatus.style.color = "red";
       resultsStatus.innerText = "Error: API Key missing.";
@@ -322,7 +402,6 @@ generateBtn.addEventListener('click', async () => {
     }
 
     const fullTranscript = lines.join('\n');
-    const meetingTitle = result.meetingTitle || "Meeting";
 
     // Build Date String
     const dateObj = new Date();
@@ -355,7 +434,8 @@ Note: The meeting took place on ${dateFormatted}.
 Transcript:
 ${fullTranscript}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const cleanModel = model.trim().replace(/^models\//, '');
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.2 }
@@ -379,13 +459,13 @@ ${fullTranscript}`;
       let aiTitle = "meeting";
       const outLines = minutesText.split('\n');
       for (let i = 0; i < outLines.length; i++) {
-          if (outLines[i].toLowerCase().includes('# title') && i + 1 < outLines.length) {
-              aiTitle = outLines[i+1].trim();
-              if (!aiTitle && i + 2 < outLines.length) {
-                  aiTitle = outLines[i+2].trim();
-              }
-              break;
+        if (outLines[i].toLowerCase().includes('# title') && i + 1 < outLines.length) {
+          aiTitle = outLines[i+1].trim();
+          if (!aiTitle && i + 2 < outLines.length) {
+            aiTitle = outLines[i+2].trim();
           }
+          break;
+        }
       }
       
       let sanitizedTitle = aiTitle.toLowerCase()
@@ -412,9 +492,84 @@ ${fullTranscript}`;
     } catch (error) {
       console.error("Generation failed:", error);
       resultsStatus.style.color = "red";
-      resultsStatus.innerText = "Error: " + error.message; // Full error without 30 char limit
+      resultsStatus.innerText = "Error: " + error.message;
       generateBtn.disabled = false;
       generateBtn.innerText = "Retry Generating";
     }
   });
 });
+
+// File Upload Logic
+const uploadZone = document.getElementById('view-upload');
+const transcriptFileInput = document.getElementById('transcriptFile');
+
+if (uploadZone && transcriptFileInput) {
+  uploadZone.addEventListener('click', (e) => {
+    if (e.target !== transcriptFileInput) {
+      transcriptFileInput.click();
+    }
+  });
+
+  // Drag and Drop styles
+  uploadZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadZone.style.backgroundColor = "#f5f6ff";
+    uploadZone.style.borderColor = "#464eb8";
+  });
+
+  uploadZone.addEventListener('dragleave', () => {
+    uploadZone.style.backgroundColor = "#fcfcff";
+    uploadZone.style.borderColor = "#5B5FC7";
+  });
+
+  uploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadZone.style.backgroundColor = "#fcfcff";
+    uploadZone.style.borderColor = "#5B5FC7";
+    
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleTranscriptFile(e.dataTransfer.files[0]);
+    }
+  });
+
+  transcriptFileInput.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+
+  transcriptFileInput.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleTranscriptFile(e.target.files[0]);
+      e.target.value = '';
+    }
+  });
+}
+
+function handleTranscriptFile(file) {
+  if (!file.name.toLowerCase().endsWith('.txt')) {
+    alert("Please upload a valid .txt transcript file.");
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const text = e.target.result;
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
+    
+    if (lines.length === 0) {
+      alert("The uploaded file is empty.");
+      return;
+    }
+
+    // Set savedTranscript and clear activeTabId and isTranscribing so it's a clean offline session
+    chrome.storage.local.set({ savedTranscript: lines, activeTabId: null, isTranscribing: false }, () => {
+      updateUI();
+      // Auto-trigger AI summary generation immediately
+      setTimeout(() => {
+        if (generateBtn && !generateBtn.disabled) {
+          generateBtn.click();
+        }
+      }, 150);
+    });
+  };
+  reader.readAsText(file);
+}
