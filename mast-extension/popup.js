@@ -317,13 +317,21 @@ if (magicBtn) {
         const platform = (navigator.platform || '').toUpperCase();
         const userAgent = navigator.userAgent || '';
         const isMac = platform.includes('MAC') || userAgent.includes('Macintosh') || userAgent.includes('Mac OS');
-        const shortcut = isMac ? "Cmd + Shift + O" : "Alt + Shift + C";
-        manualFallbackText.innerHTML = `
-          <div style="margin-top: 6px; padding: 6px; background: #ffffff; border-radius: 4px; border: 1px dashed #93c5fd;">
-            <div>Shortcut: <b style="color: #1e3a8a;">${shortcut}</b></div>
-            <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">or click <b>More (...) &gt; Language &amp; speech &gt; Turn on live captions</b></div>
-          </div>
-        `;
+        if (isMac) {
+          manualFallbackText.innerHTML = `
+            <div style="margin-top: 6px; padding: 6px; background: #ffffff; border-radius: 4px; border: 1px dashed #93c5fd;">
+              <div style="font-size: 11px; color: #1e3a8a; font-weight: 600;">To enable in Teams:</div>
+              <div style="font-size: 10px; color: #374151; margin-top: 2px;">Click <b>More (...) &gt; Language &amp; speech &gt; Turn on live captions</b></div>
+            </div>
+          `;
+        } else {
+          manualFallbackText.innerHTML = `
+            <div style="margin-top: 6px; padding: 6px; background: #ffffff; border-radius: 4px; border: 1px dashed #93c5fd;">
+              <div>Shortcut: <b style="color: #1e3a8a;">Alt + Shift + C</b></div>
+              <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">or <b>More (...) &gt; Language &amp; speech &gt; Turn on live captions</b></div>
+            </div>
+          `;
+        }
         manualFallbackText.style.display = "block";
       }
       magicBtn.innerText = "Enable Captions";

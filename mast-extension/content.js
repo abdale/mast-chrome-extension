@@ -142,70 +142,233 @@
       return true;
     }
 
-    // 2. Try direct DOM button if present
+    // 2. Try direct DOM button if present on toolbar
     const directBtn = document.querySelector(
-      'button[data-tid="closed-captions-button"], button[data-tid*="caption" i], button[aria-label*="Turn on live captions" i]'
+      'button[data-tid="closed-captions-button"], button[data-tid*="caption" i], button[aria-label*="Turn on live captions" i], button[aria-label*="Show live captions" i]'
     );
     if (directBtn) {
       console.log("Teams AI Minutes: Found direct captions button. Clicking...");
       directBtn.click();
+      return true;
     }
 
     // 3. Try "More" (...) actions menu in Teams
     const moreBtn = document.querySelector(
-      'button[data-tid="more-actions-button"], button[data-tid="overflow-button"], button[data-tid="callingButtons-showMoreBtn"], button[aria-label*="More" i], #more-actions-button'
+      'button[data-tid="more-actions-button"], button[data-tid="overflow-button"], button[data-tid="callingButtons-showMoreBtn"], button[aria-label*="More actions" i], button[aria-label="More" i], #more-actions-button'
     );
     if (moreBtn && !directBtn) {
+      console.log("Teams AI Minutes: Opening More actions menu...");
       moreBtn.click();
       setTimeout(() => {
-        const captionMenuItem = Array.from(document.querySelectorAll('button, [role="menuitem"], [role="menuitemcheckbox"]')).find(el => {
+        const menuItems = Array.from(document.querySelectorAll('button, [role="menuitem"], [role="menuitemcheckbox"]'));
+
+        // Check if captions are already active
+        const turnOffItem = menuItems.find(el => {
           const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
-          return text.includes('caption') || text.includes('sous-titres') || text.includes('subtítulo');
+          return text.includes('turn off live captions') || text.includes('turn off captions');
+        });
+        if (turnOffItem) {
+          moreBtn.click();
+          return;
+        }
+
+        // Direct caption item in More menu
+        const captionMenuItem = menuItems.find(el => {
+          const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
+          return text.includes('turn on live captions') || text.includes('show live captions') || text.includes('turn on captions');
         });
         if (captionMenuItem) {
           console.log("Teams AI Minutes: Found captions item in More menu. Clicking...");
           captionMenuItem.click();
-        } else {
-          // Close menu if not found
-          moreBtn.click();
+          return;
         }
-      }, 250);
+
+        // Modern Teams: Language and speech submenu
+        const langSpeechItem = menuItems.find(el => {
+          const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
+          return text.includes('language and speech') || text.includes('language & speech');
+        });
+        if (langSpeechItem) {
+          console.log("Teams AI Minutes: Opening Language & speech submenu...");
+          langSpeechItem.click();
+          setTimeout(() => {
+            const subItems = Array.from(document.querySelectorAll('button, [role="menuitem"], [role="menuitemcheckbox"]'));
+            const subCaptionItem = subItems.find(el => {
+              const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
+              return text.includes('live captions') || text.includes('turn on') || text.includes('captions');
+            });
+            if (subCaptionItem) {
+              console.log("Teams AI Minutes: Found live captions in submenu. Clicking...");
+              subCaptionItem.click();
+            } else {
+              moreBtn.click();
+            }
+          }, 200);
+        } else {
+          // Fallback: search for any item containing caption
+          const genericCaptionItem = menuItems.find(el => {
+            const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
+            return text.includes('caption') || text.includes('sous-titres') || text.includes('subtítulo');
+          });
+          if (genericCaptionItem) {
+            genericCaptionItem.click();
+          } else {
+            moreBtn.click();
+          }
+        }
+      }, 200);
     }
 
-    // 4. Platform-specific keyboard shortcut dispatch
+    // 4. Safe platform-specific keyboard shortcuts
+    // IMPORTANT: NEVER dispatch KeyO (which toggles Camera in Teams) or KeyK (which raises Hand in Teams)!
     const platform = (navigator.platform || '').toUpperCase();
     const userAgent = navigator.userAgent || '';
     const isMac = platform.includes('MAC') || userAgent.includes('Macintosh') || userAgent.includes('Mac OS');
 
-    const targets = [document.activeElement, document.body, document, window].filter(Boolean);
-
-    if (isMac) {
-      console.log("Teams AI Minutes: Dispatching Mac live captions shortcuts (Cmd+Shift+O / Cmd+Shift+K / Cmd+Shift+C)...");
-      const macCombos = [
-        { key: 'o', code: 'KeyO', keyCode: 79, metaKey: true, shiftKey: true },
-        { key: 'k', code: 'KeyK', keyCode: 75, metaKey: true, shiftKey: true },
-        { key: 'c', code: 'KeyC', keyCode: 67, metaKey: true, shiftKey: true },
-        { key: 'c', code: 'KeyC', keyCode: 67, altKey: true, shiftKey: true }
-      ];
-      for (const combo of macCombos) {
-        for (const target of targets) {
-          dispatchKeyEvents(target, combo);
-        }
-      }
-    } else {
-      console.log("Teams AI Minutes: Dispatching Chromebook/Windows live captions shortcuts (Alt+Shift+C / Ctrl+Shift+K)...");
-      const nonMacCombos = [
-        { key: 'c', code: 'KeyC', keyCode: 67, altKey: true, shiftKey: true },
-        { key: 'k', code: 'KeyK', keyCode: 75, ctrlKey: true, shiftKey: true },
-        { key: 'c', code: 'KeyC', keyCode: 67, ctrlKey: true, shiftKey: true },
-        { key: 'o', code: 'KeyO', keyCode: 79, ctrlKey: true, shiftKey: true }
-      ];
-      for (const combo of nonMacCombos) {
-        for (const target of targets) {
-          dispatchKeyEvents(target, combo);
-        }
+    if (!isMac) {
+      // Windows & Chromebook: Alt+Shift+C is the documented Teams live captions shortcut
+      console.log("Teams AI Minutes: Dispatching Windows/Chromebook live captions shortcut (Alt+Shift+C)...");
+      const targets = [document.activeElement, document.body, document, window].filter(Boolean);
+      for (const target of targets) {
+        dispatchKeyEvents(target, { key: 'c', code: 'KeyC', keyCode: 67, altKey: true, shiftKey: true });
       }
     }
+  }
+
+  // --- SLEEK RECORDING PILL (30s AUTO-FADE WITH HOVER REVEAL) ---
+  function showRecordingPill() {
+    let card = document.getElementById('mast-meeting-reminder');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'mast-meeting-reminder';
+      document.body.appendChild(card);
+    }
+    reminderCard = card;
+
+    // Inject pulse animation and hover cushion styles once
+    if (!document.getElementById('mast-pill-styles')) {
+      const style = document.createElement('style');
+      style.id = 'mast-pill-styles';
+      style.textContent = `
+        @keyframes mast-red-pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.35; transform: scale(0.85); }
+        }
+        #mast-meeting-reminder.mast-recording-pill::before {
+          content: '';
+          position: absolute;
+          top: -14px;
+          right: -14px;
+          bottom: -14px;
+          left: -14px;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    card.className = 'mast-recording-pill';
+    card.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 24px;
+      z-index: 2147483647;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(209, 213, 219, 0.9);
+      border-radius: 20px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 2px 4px rgba(0, 0, 0, 0.06);
+      padding: 7px 14px;
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+      color: #1f2937;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: auto;
+      max-width: 90vw;
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    `;
+
+    card.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #ef4444; box-shadow: 0 0 6px #ef4444; animation: mast-red-pulse 1.8s infinite;"></span>
+        <span style="font-size: 12px; font-weight: 600; color: #111827; white-space: nowrap;">Transcribing AI Notes...</span>
+      </div>
+      <button id="mast-pill-stop" style="background: #fee2e2; border: 1px solid #fca5a5; color: #b91c1c; font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 5px; cursor: pointer;">
+        Stop
+      </button>
+    `;
+
+    const startedTime = Date.now();
+    let isHovered = false;
+
+    const fadeOut = () => {
+      if (!isHovered && isTranscribing) {
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(-4px)';
+      }
+    };
+
+    const fadeIn = () => {
+      card.style.opacity = '1';
+      card.style.transform = 'translateY(0)';
+    };
+
+    // Auto-hide after 30 seconds of starting
+    const autoHideTimeout = setTimeout(() => {
+      fadeOut();
+    }, 30000);
+
+    card.onmouseenter = () => {
+      isHovered = true;
+      fadeIn();
+    };
+
+    card.onmouseleave = () => {
+      isHovered = false;
+      if (Date.now() - startedTime >= 30000) {
+        fadeOut();
+      }
+    };
+
+    const stopBtn = card.querySelector('#mast-pill-stop');
+    stopBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearTimeout(autoHideTimeout);
+      chrome.storage.local.set({ isTranscribing: false, activeTabId: null });
+      isTranscribing = false;
+      captionsMap.clear();
+      if (issueTimer) clearTimeout(issueTimer);
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+
+      card.className = '';
+      card.style.opacity = '1';
+      card.style.transform = 'translateY(0)';
+      card.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="color: #10b981; font-weight: bold; font-size: 13px;">✓</span>
+          <span style="font-size: 12px; color: #111827;">Notes saved! Open <b>mast</b> extension to summarize.</span>
+          <button id="mast-pill-close" style="background: none; border: none; font-size: 15px; color: #9ca3af; cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
+        </div>
+      `;
+
+      const closePill = () => {
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(-8px)';
+        setTimeout(() => {
+          card.remove();
+          reminderCard = null;
+        }, 250);
+      };
+
+      card.querySelector('#mast-pill-close')?.addEventListener('click', closePill);
+      setTimeout(closePill, 5000);
+    });
   }
 
   // --- TEAMS MEETING DETECTION & IN-PAGE REMINDER ---
@@ -305,7 +468,7 @@
       startBtn.innerText = "Starting...";
       startBtn.disabled = true;
 
-      // 1. Enable live captions (works on both Mac and Chromebook/Windows)
+      // 1. Enable live captions (safe DOM automation, no camera/hand side effects)
       attemptEnableCaptions();
 
       // 2. Start transcription in storage
@@ -319,43 +482,7 @@
       }, () => {
         isTranscribing = true;
         startObserving();
-      });
-
-      // 3. Transform card into sleek compact pill indicating recording
-      card.innerHTML = `
-        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #ef4444; box-shadow: 0 0 6px #ef4444;"></span>
-            <span style="font-size: 12px; font-weight: 600; color: #111827;">Transcribing AI Notes...</span>
-          </div>
-          <button id="mast-pill-stop" style="background: #fee2e2; border: 1px solid #fca5a5; color: #b91c1c; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px; cursor: pointer;">
-            Stop
-          </button>
-        </div>
-      `;
-      card.style.width = 'auto';
-      card.style.padding = '10px 14px';
-
-      const stopBtn = card.querySelector('#mast-pill-stop');
-      stopBtn?.addEventListener('click', () => {
-        chrome.storage.local.set({ isTranscribing: false, activeTabId: null });
-        isTranscribing = false;
-        captionsMap.clear();
-        if (issueTimer) clearTimeout(issueTimer);
-        if (observer) {
-          observer.disconnect();
-          observer = null;
-        }
-
-        card.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="color: #10b981; font-weight: bold;">✓</span>
-            <span style="font-size: 12px; color: #111827;">Notes saved! Open the <b>mast</b> extension to generate summary.</span>
-            <button id="mast-pill-close" style="background: none; border: none; font-size: 14px; color: #9ca3af; cursor: pointer; margin-left: 6px;">&times;</button>
-          </div>
-        `;
-        card.querySelector('#mast-pill-close')?.addEventListener('click', closeCard);
-        setTimeout(closeCard, 6000);
+        showRecordingPill();
       });
     });
   }
@@ -403,8 +530,10 @@
     if (area === 'local' && changes.isTranscribing) {
       isTranscribing = changes.isTranscribing.newValue;
       if (isTranscribing) {
+        showRecordingPill();
+      } else {
         const card = document.getElementById('mast-meeting-reminder');
-        if (card && !card.querySelector('#mast-pill-stop')) {
+        if (card) {
           card.remove();
           reminderCard = null;
         }
@@ -417,6 +546,7 @@
     if (request.action === "start") {
       isTranscribing = true;
       startObserving();
+      showRecordingPill();
       sendResponse({ status: "started" });
     } else if (request.action === "stop") {
       isTranscribing = false;
@@ -425,6 +555,11 @@
       if (observer) {
         observer.disconnect();
         observer = null;
+      }
+      const card = document.getElementById('mast-meeting-reminder');
+      if (card) {
+        card.remove();
+        reminderCard = null;
       }
       sendResponse({ status: "stopped" });
     } else if (request.action === "force_captions") {
