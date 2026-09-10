@@ -11,21 +11,21 @@ let captionsMap = new Map(); // DOM Element -> { speaker, text }
 
 async function fetchRemoteConfig() {
   try {
-    const res = await fetch("https://raw.githubusercontent.com/abdale/teams-ai-minutes/main/config.json");
+    const res = await fetch("https://raw.githubusercontent.com/abdale/mast-chrome-extension/main/config.json");
     const json = await res.json();
     if (json.CAPTION_CONTAINER_SELECTOR) CAPTION_CONTAINER_SELECTOR = json.CAPTION_CONTAINER_SELECTOR;
     if (json.SPEAKER_SELECTOR) SPEAKER_SELECTOR = json.SPEAKER_SELECTOR;
     if (json.TEXT_SELECTOR) TEXT_SELECTOR = json.TEXT_SELECTOR;
-    console.log("Teams AI Minutes: Remote config loaded.");
+    console.log("mast: Remote config loaded.");
   } catch (e) {
-    console.log("Teams AI Minutes: Using default DOM selectors.");
+    console.log("mast: Using default DOM selectors.");
   }
 }
 
 async function startObserving() {
   if (observer) return;
   await fetchRemoteConfig();
-  console.log("Teams AI Minutes: startObserving() called. Looking for captions...");
+  console.log("mast: startObserving() called. Looking for captions...");
   
   chrome.storage.local.set({ issueDetected: false });
   issueTimer = setTimeout(() => {
@@ -49,7 +49,7 @@ async function startObserving() {
           const speakerEl = node.matches(SPEAKER_SELECTOR) ? node : node.querySelector(SPEAKER_SELECTOR);
           if (speakerEl && speakerEl.innerText.trim()) {
             currentSpeaker = speakerEl.innerText.trim();
-            console.log("Teams AI Minutes: Found speaker:", currentSpeaker);
+            console.log("mast: Found speaker:", currentSpeaker);
           }
 
           // Check for text elements
@@ -106,7 +106,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     sendResponse({ status: "stopped" });
   } else if (request.action === "force_captions") {
-    console.log("Teams AI Minutes: Attempting to force captions via Alt+Shift+C");
+    console.log("mast: Attempting to force captions via Alt+Shift+C");
     const event = new KeyboardEvent('keydown', {
       key: 'c',
       code: 'KeyC',

@@ -1,0 +1,29 @@
+# Environment & Secrets (Crucial for Gemini / AI Studio keys)
+.env
+.env.*
+*.key
+*.pem
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# Extension Distribution Packages
+*.zip
+*.crx
+
+# Python & Temporary Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.tmp
+*.bak
