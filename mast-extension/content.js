@@ -235,8 +235,36 @@
     }
   }
 
-  // --- SLEEK RECORDING PILL (30s AUTO-FADE WITH HOVER REVEAL) ---
+  // --- SLEEK RECORDING PILL (BOTTOM-LEFT, 30s AUTO-FADE, HOVER REVEAL) ---
+  let pillMouseMoveHandler = null;
+  let pillAutoHideTimeout = null;
+
+  function removeRecordingPill() {
+    if (pillAutoHideTimeout) {
+      clearTimeout(pillAutoHideTimeout);
+      pillAutoHideTimeout = null;
+    }
+    if (pillMouseMoveHandler) {
+      window.removeEventListener('mousemove', pillMouseMoveHandler);
+      pillMouseMoveHandler = null;
+    }
+    const card = document.getElementById('mast-meeting-reminder');
+    if (card) {
+      card.remove();
+      reminderCard = null;
+    }
+  }
+
   function showRecordingPill() {
+    if (pillMouseMoveHandler) {
+      window.removeEventListener('mousemove', pillMouseMoveHandler);
+      pillMouseMoveHandler = null;
+    }
+    if (pillAutoHideTimeout) {
+      clearTimeout(pillAutoHideTimeout);
+      pillAutoHideTimeout = null;
+    }
+
     let card = document.getElementById('mast-meeting-reminder');
     if (!card) {
       card = document.createElement('div');
@@ -245,7 +273,7 @@
     }
     reminderCard = card;
 
-    // Inject pulse animation and hover cushion styles once
+    // Inject pulse animation once
     if (!document.getElementById('mast-pill-styles')) {
       const style = document.createElement('style');
       style.id = 'mast-pill-styles';
@@ -254,14 +282,6 @@
           0%, 100% { opacity: 1; transform: scale(1); }
           50% { opacity: 0.35; transform: scale(0.85); }
         }
-        #mast-meeting-reminder.mast-recording-pill::before {
-          content: '';
-          position: absolute;
-          top: -14px;
-          right: -14px;
-          bottom: -14px;
-          left: -14px;
-        }
       `;
       document.head.appendChild(style);
     }
@@ -269,8 +289,8 @@
     card.className = 'mast-recording-pill';
     card.style.cssText = `
       position: fixed;
-      top: 20px;
-      right: 24px;
+      bottom: 24px;
+      left: 24px;
       z-index: 2147483647;
       background: rgba(255, 255, 255, 0.96);
       backdrop-filter: blur(8px);
@@ -285,8 +305,9 @@
       align-items: center;
       gap: 12px;
       width: auto;
-      max-width: 90vw;
+      max-width: calc(100vw - 48px);
       opacity: 1;
+      pointer-events: auto;
       transform: translateY(0);
       transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
     `;
@@ -307,36 +328,57 @@
     const fadeOut = () => {
       if (!isHovered && isTranscribing) {
         card.style.opacity = '0';
-        card.style.transform = 'translateY(-4px)';
+        card.style.pointerEvents = 'none'; // Critical: completely click-through when hidden
+        card.style.transform = 'translateY(6px)';
       }
     };
 
     const fadeIn = () => {
       card.style.opacity = '1';
+      card.style.pointerEvents = 'auto';
       card.style.transform = 'translateY(0)';
     };
 
     // Auto-hide after 30 seconds of starting
-    const autoHideTimeout = setTimeout(() => {
+    pillAutoHideTimeout = setTimeout(() => {
       fadeOut();
     }, 30000);
 
-    card.onmouseenter = () => {
-      isHovered = true;
-      fadeIn();
-    };
+    // Hover proximity detection in bottom-left corner
+    let lastMoveTime = 0;
+    pillMouseMoveHandler = (e) => {
+      const now = Date.now();
+      if (now - lastMoveTime < 60) return;
+      lastMoveTime = now;
 
-    card.onmouseleave = () => {
-      isHovered = false;
-      if (Date.now() - startedTime >= 30000) {
-        fadeOut();
+      // Bottom-left hover area: within 280px of left edge and 85px of bottom edge
+      const isNearBottomLeft = e.clientX <= 280 && e.clientY >= (window.innerHeight - 85);
+
+      if (isNearBottomLeft) {
+        if (!isHovered) {
+          isHovered = true;
+          fadeIn();
+        }
+      } else {
+        if (isHovered) {
+          isHovered = false;
+          if (Date.now() - startedTime >= 30000) {
+            fadeOut();
+          }
+        }
       }
     };
+    window.addEventListener('mousemove', pillMouseMoveHandler, { passive: true });
 
     const stopBtn = card.querySelector('#mast-pill-stop');
     stopBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
-      clearTimeout(autoHideTimeout);
+      if (pillAutoHideTimeout) clearTimeout(pillAutoHideTimeout);
+      if (pillMouseMoveHandler) {
+        window.removeEventListener('mousemove', pillMouseMoveHandler);
+        pillMouseMoveHandler = null;
+      }
+
       chrome.storage.local.set({ isTranscribing: false, activeTabId: null });
       isTranscribing = false;
       captionsMap.clear();
@@ -348,6 +390,7 @@
 
       card.className = '';
       card.style.opacity = '1';
+      card.style.pointerEvents = 'auto';
       card.style.transform = 'translateY(0)';
       card.innerHTML = `
         <div style="display: flex; align-items: center; gap: 8px;">
@@ -359,10 +402,10 @@
 
       const closePill = () => {
         card.style.opacity = '0';
-        card.style.transform = 'translateY(-8px)';
+        card.style.pointerEvents = 'none';
+        card.style.transform = 'translateY(6px)';
         setTimeout(() => {
-          card.remove();
-          reminderCard = null;
+          removeRecordingPill();
         }, 250);
       };
 
@@ -398,8 +441,8 @@
     card.id = 'mast-meeting-reminder';
     card.style.cssText = `
       position: fixed;
-      top: 24px;
-      right: 24px;
+      bottom: 24px;
+      left: 24px;
       z-index: 2147483647;
       background: #ffffff;
       border: 1px solid #d1d5db;
@@ -410,6 +453,9 @@
       max-width: calc(100vw - 48px);
       font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
       color: #1f2937;
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
       transition: all 0.25s ease-in-out;
     `;
 
@@ -454,10 +500,10 @@
 
     const closeCard = () => {
       card.style.opacity = '0';
-      card.style.transform = 'translateY(-10px)';
+      card.style.pointerEvents = 'none';
+      card.style.transform = 'translateY(10px)';
       setTimeout(() => {
-        card.remove();
-        reminderCard = null;
+        removeRecordingPill();
       }, 250);
     };
 
@@ -492,10 +538,7 @@
 
     // If meeting is not active, clean up any existing reminder card and reset
     if (!active) {
-      if (reminderCard) {
-        reminderCard.remove();
-        reminderCard = null;
-      }
+      removeRecordingPill();
       meetingPromptShown = false;
       return;
     }
@@ -532,11 +575,7 @@
       if (isTranscribing) {
         showRecordingPill();
       } else {
-        const card = document.getElementById('mast-meeting-reminder');
-        if (card) {
-          card.remove();
-          reminderCard = null;
-        }
+        removeRecordingPill();
       }
     }
   });
@@ -556,11 +595,7 @@
         observer.disconnect();
         observer = null;
       }
-      const card = document.getElementById('mast-meeting-reminder');
-      if (card) {
-        card.remove();
-        reminderCard = null;
-      }
+      removeRecordingPill();
       sendResponse({ status: "stopped" });
     } else if (request.action === "force_captions") {
       attemptEnableCaptions();
