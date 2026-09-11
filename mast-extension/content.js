@@ -235,8 +235,133 @@
     }
   }
 
-  // --- SLEEK RECORDING PILL (30s AUTO-FADE WITH HOVER REVEAL) ---
+  // --- DRAGGABLE SLEEK RECORDING PILL & REMINDER ---
+  let pillMouseMoveHandler = null;
+  let pillAutoHideTimeout = null;
+  let pillDragCleanup = null;
+
+  function getSavedPillPosition() {
+    try {
+      const saved = sessionStorage.getItem('mast_pill_pos');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.left === 'number' && typeof parsed.top === 'number') {
+          const left = Math.max(12, Math.min(window.innerWidth - 200, parsed.left));
+          const top = Math.max(12, Math.min(window.innerHeight - 60, parsed.top));
+          return { left, top };
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function savePillPosition(pos) {
+    try {
+      sessionStorage.setItem('mast_pill_pos', JSON.stringify(pos));
+    } catch (e) {}
+  }
+
+  function makeDraggable(element, onDragEnd) {
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let initialLeft = 0;
+    let initialTop = 0;
+
+    const onPointerDown = (e) => {
+      // Don't initiate drag if clicking buttons, links, or close buttons
+      if (e.target.closest('button, a, input, [role="button"]')) return;
+
+      isDragging = true;
+      element.style.cursor = 'grabbing';
+      element.style.userSelect = 'none';
+      element.style.transition = 'none'; // Disable transition during drag for smoothness
+      try {
+        element.setPointerCapture(e.pointerId);
+      } catch (err) {}
+
+      const rect = element.getBoundingClientRect();
+      startX = e.clientX;
+      startY = e.clientY;
+      initialLeft = rect.left;
+      initialTop = rect.top;
+
+      element.style.bottom = 'auto';
+      element.style.right = 'auto';
+      element.style.left = `${initialLeft}px`;
+      element.style.top = `${initialTop}px`;
+
+      e.preventDefault();
+    };
+
+    const onPointerMove = (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      const rect = element.getBoundingClientRect();
+      const maxLeft = Math.max(12, window.innerWidth - rect.width - 12);
+      const maxTop = Math.max(12, window.innerHeight - rect.height - 12);
+
+      const newLeft = Math.max(12, Math.min(maxLeft, initialLeft + dx));
+      const newTop = Math.max(12, Math.min(maxTop, initialTop + dy));
+
+      element.style.left = `${newLeft}px`;
+      element.style.top = `${newTop}px`;
+    };
+
+    const onPointerUp = (e) => {
+      if (!isDragging) return;
+      isDragging = false;
+      element.style.cursor = 'grab';
+      element.style.userSelect = '';
+      element.style.transition = 'opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)';
+      try {
+        element.releasePointerCapture(e.pointerId);
+      } catch (err) {}
+
+      const rect = element.getBoundingClientRect();
+      if (typeof onDragEnd === 'function') {
+        onDragEnd({ left: rect.left, top: rect.top });
+      }
+    };
+
+    element.addEventListener('pointerdown', onPointerDown);
+    element.addEventListener('pointermove', onPointerMove);
+    element.addEventListener('pointerup', onPointerUp);
+    element.addEventListener('pointercancel', onPointerUp);
+
+    return () => {
+      element.removeEventListener('pointerdown', onPointerDown);
+      element.removeEventListener('pointermove', onPointerMove);
+      element.removeEventListener('pointerup', onPointerUp);
+      element.removeEventListener('pointercancel', onPointerUp);
+    };
+  }
+
+  function removeRecordingPill() {
+    if (pillAutoHideTimeout) {
+      clearTimeout(pillAutoHideTimeout);
+      pillAutoHideTimeout = null;
+    }
+    if (pillMouseMoveHandler) {
+      window.removeEventListener('mousemove', pillMouseMoveHandler);
+      pillMouseMoveHandler = null;
+    }
+    if (pillDragCleanup) {
+      pillDragCleanup();
+      pillDragCleanup = null;
+    }
+    const card = document.getElementById('mast-meeting-reminder');
+    if (card) {
+      card.remove();
+      reminderCard = null;
+    }
+  }
+
   function showRecordingPill() {
+    removeRecordingPill();
+
     let card = document.getElementById('mast-meeting-reminder');
     if (!card) {
       card = document.createElement('div');
@@ -245,7 +370,7 @@
     }
     reminderCard = card;
 
-    // Inject pulse animation and hover cushion styles once
+    // Inject pulse animation style once
     if (!document.getElementById('mast-pill-styles')) {
       const style = document.createElement('style');
       style.id = 'mast-pill-styles';
@@ -254,23 +379,21 @@
           0%, 100% { opacity: 1; transform: scale(1); }
           50% { opacity: 0.35; transform: scale(0.85); }
         }
-        #mast-meeting-reminder.mast-recording-pill::before {
-          content: '';
-          position: absolute;
-          top: -14px;
-          right: -14px;
-          bottom: -14px;
-          left: -14px;
-        }
       `;
       document.head.appendChild(style);
     }
 
+    const savedPos = getSavedPillPosition();
+    const defaultLeft = 24;
+    const defaultTop = Math.max(12, window.innerHeight - 74);
+    const startLeft = savedPos ? savedPos.left : defaultLeft;
+    const startTop = savedPos ? savedPos.top : defaultTop;
+
     card.className = 'mast-recording-pill';
     card.style.cssText = `
       position: fixed;
-      top: 20px;
-      right: 24px;
+      left: ${startLeft}px;
+      top: ${startTop}px;
       z-index: 2147483647;
       background: rgba(255, 255, 255, 0.96);
       backdrop-filter: blur(8px);
@@ -285,58 +408,119 @@
       align-items: center;
       gap: 12px;
       width: auto;
-      max-width: 90vw;
+      max-width: calc(100vw - 48px);
       opacity: 1;
-      transform: translateY(0);
+      pointer-events: auto;
+      cursor: grab;
+      transform: scale(1);
       transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
     `;
 
     card.innerHTML = `
-      <div style="display: flex; align-items: center; gap: 8px;">
+      <div style="display: flex; align-items: center; gap: 8px; cursor: grab;" title="Drag to reposition">
+        <svg width="8" height="12" viewBox="0 0 8 12" fill="#9ca3af" style="flex-shrink: 0; opacity: 0.8;">
+          <circle cx="2" cy="2" r="1.2" />
+          <circle cx="6" cy="2" r="1.2" />
+          <circle cx="2" cy="6" r="1.2" />
+          <circle cx="6" cy="6" r="1.2" />
+          <circle cx="2" cy="10" r="1.2" />
+          <circle cx="6" cy="10" r="1.2" />
+        </svg>
         <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #ef4444; box-shadow: 0 0 6px #ef4444; animation: mast-red-pulse 1.8s infinite;"></span>
-        <span style="font-size: 12px; font-weight: 600; color: #111827; white-space: nowrap;">Transcribing AI Notes...</span>
+        <span style="font-size: 12px; font-weight: 600; color: #111827; white-space: nowrap; user-select: none;">Transcribing AI Notes...</span>
       </div>
       <button id="mast-pill-stop" style="background: #fee2e2; border: 1px solid #fca5a5; color: #b91c1c; font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 5px; cursor: pointer;">
         Stop
       </button>
     `;
 
-    const startedTime = Date.now();
+    let startedTime = Date.now();
     let isHovered = false;
+    let isCurrentlyDragging = false;
 
     const fadeOut = () => {
-      if (!isHovered && isTranscribing) {
+      if (!isHovered && !isCurrentlyDragging && isTranscribing) {
         card.style.opacity = '0';
-        card.style.transform = 'translateY(-4px)';
+        card.style.pointerEvents = 'none'; // Click-through when invisible
+        card.style.transform = 'scale(0.96)';
       }
     };
 
     const fadeIn = () => {
       card.style.opacity = '1';
-      card.style.transform = 'translateY(0)';
+      card.style.pointerEvents = 'auto';
+      card.style.transform = 'scale(1)';
     };
 
-    // Auto-hide after 30 seconds of starting
-    const autoHideTimeout = setTimeout(() => {
-      fadeOut();
-    }, 30000);
+    const resetFadeTimeout = () => {
+      if (pillAutoHideTimeout) clearTimeout(pillAutoHideTimeout);
+      startedTime = Date.now();
+      pillAutoHideTimeout = setTimeout(fadeOut, 30000);
+    };
 
-    card.onmouseenter = () => {
-      isHovered = true;
+    // Auto-hide after 30 seconds
+    pillAutoHideTimeout = setTimeout(fadeOut, 30000);
+
+    // Make pill smoothly draggable and persist position
+    pillDragCleanup = makeDraggable(card, (newPos) => {
+      isCurrentlyDragging = false;
+      savePillPosition(newPos);
       fadeIn();
-    };
+      resetFadeTimeout();
+    });
 
-    card.onmouseleave = () => {
-      isHovered = false;
-      if (Date.now() - startedTime >= 30000) {
-        fadeOut();
+    card.addEventListener('pointerdown', (e) => {
+      if (!e.target.closest('button')) {
+        isCurrentlyDragging = true;
+        fadeIn();
+      }
+    });
+
+    // Proximity hover detection near current position
+    let lastMoveTime = 0;
+    pillMouseMoveHandler = (e) => {
+      if (isCurrentlyDragging) return;
+      const now = Date.now();
+      if (now - lastMoveTime < 60) return;
+      lastMoveTime = now;
+
+      const rect = card.getBoundingClientRect();
+      const isNear = (
+        e.clientX >= rect.left - 45 &&
+        e.clientX <= rect.right + 45 &&
+        e.clientY >= rect.top - 45 &&
+        e.clientY <= rect.bottom + 45
+      );
+
+      if (isNear) {
+        if (!isHovered) {
+          isHovered = true;
+          fadeIn();
+        }
+      } else {
+        if (isHovered) {
+          isHovered = false;
+          if (Date.now() - startedTime >= 30000) {
+            fadeOut();
+          }
+        }
       }
     };
+    window.addEventListener('mousemove', pillMouseMoveHandler, { passive: true });
 
     const stopBtn = card.querySelector('#mast-pill-stop');
     stopBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
-      clearTimeout(autoHideTimeout);
+      if (pillAutoHideTimeout) clearTimeout(pillAutoHideTimeout);
+      if (pillMouseMoveHandler) {
+        window.removeEventListener('mousemove', pillMouseMoveHandler);
+        pillMouseMoveHandler = null;
+      }
+      if (pillDragCleanup) {
+        pillDragCleanup();
+        pillDragCleanup = null;
+      }
+
       chrome.storage.local.set({ isTranscribing: false, activeTabId: null });
       isTranscribing = false;
       captionsMap.clear();
@@ -347,8 +531,10 @@
       }
 
       card.className = '';
+      card.style.cursor = 'default';
       card.style.opacity = '1';
-      card.style.transform = 'translateY(0)';
+      card.style.pointerEvents = 'auto';
+      card.style.transform = 'scale(1)';
       card.innerHTML = `
         <div style="display: flex; align-items: center; gap: 8px;">
           <span style="color: #10b981; font-weight: bold; font-size: 13px;">✓</span>
@@ -359,10 +545,10 @@
 
       const closePill = () => {
         card.style.opacity = '0';
-        card.style.transform = 'translateY(-8px)';
+        card.style.pointerEvents = 'none';
+        card.style.transform = 'scale(0.96)';
         setTimeout(() => {
-          card.remove();
-          reminderCard = null;
+          removeRecordingPill();
         }, 250);
       };
 
@@ -396,10 +582,17 @@
 
     const card = document.createElement('div');
     card.id = 'mast-meeting-reminder';
+
+    const savedPos = getSavedPillPosition();
+    const defaultLeft = 24;
+    const defaultTop = Math.max(12, window.innerHeight - 175);
+    const startLeft = savedPos ? savedPos.left : defaultLeft;
+    const startTop = savedPos ? Math.min(window.innerHeight - 175, savedPos.top) : defaultTop;
+
     card.style.cssText = `
       position: fixed;
-      top: 24px;
-      right: 24px;
+      left: ${startLeft}px;
+      top: ${startTop}px;
       z-index: 2147483647;
       background: #ffffff;
       border: 1px solid #d1d5db;
@@ -410,6 +603,9 @@
       max-width: calc(100vw - 48px);
       font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
       color: #1f2937;
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
       transition: all 0.25s ease-in-out;
     `;
 
@@ -454,10 +650,10 @@
 
     const closeCard = () => {
       card.style.opacity = '0';
-      card.style.transform = 'translateY(-10px)';
+      card.style.pointerEvents = 'none';
+      card.style.transform = 'translateY(10px)';
       setTimeout(() => {
-        card.remove();
-        reminderCard = null;
+        removeRecordingPill();
       }, 250);
     };
 
@@ -492,10 +688,7 @@
 
     // If meeting is not active, clean up any existing reminder card and reset
     if (!active) {
-      if (reminderCard) {
-        reminderCard.remove();
-        reminderCard = null;
-      }
+      removeRecordingPill();
       meetingPromptShown = false;
       return;
     }
@@ -532,11 +725,7 @@
       if (isTranscribing) {
         showRecordingPill();
       } else {
-        const card = document.getElementById('mast-meeting-reminder');
-        if (card) {
-          card.remove();
-          reminderCard = null;
-        }
+        removeRecordingPill();
       }
     }
   });
@@ -556,11 +745,7 @@
         observer.disconnect();
         observer = null;
       }
-      const card = document.getElementById('mast-meeting-reminder');
-      if (card) {
-        card.remove();
-        reminderCard = null;
-      }
+      removeRecordingPill();
       sendResponse({ status: "stopped" });
     } else if (request.action === "force_captions") {
       attemptEnableCaptions();
