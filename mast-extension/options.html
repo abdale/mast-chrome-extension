@@ -1,57 +1,56 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <title>mast - Settings</title>
   <style>
     :root {
       --primary: #5B5FC7;
-      --primary-hover: #464eb8;
-      --bg-gradient: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-      --card-bg: #ffffff;
-      --text: #202124;
-      --text-muted: #5f6368;
-      --border: #dadce0;
-      --focus-ring: rgba(91, 95, 199, 0.25);
+      --primary-hover: #4F52B2;
+      --bg: #F8F9FA;
+      --card-bg: #FFFFFF;
+      --text: #242424;
+      --subtext: #616161;
+      --border: #E0E0E0;
     }
 
     body {
       font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-      background: var(--bg-gradient);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      background-color: var(--bg);
+      color: var(--text);
       margin: 0;
-      padding: 20px;
+      padding: 40px 20px;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
       box-sizing: border-box;
     }
 
     .container {
       background: var(--card-bg);
+      border: 1px solid var(--border);
       border-radius: 12px;
-      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
       width: 100%;
-      max-width: 440px;
-      padding: 30px;
+      max-width: 480px;
+      padding: 32px;
       box-sizing: border-box;
-      border: 1px solid rgba(255, 255, 255, 0.8);
     }
 
     h2 {
-      color: var(--text);
-      font-size: 24px;
       margin-top: 0;
       margin-bottom: 8px;
+      font-size: 20px;
       font-weight: 600;
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      color: var(--primary);
     }
 
     .subtitle {
-      color: var(--text-muted);
-      font-size: 14px;
-      margin-bottom: 25px;
+      font-size: 13px;
+      color: var(--subtext);
+      margin-bottom: 24px;
+      line-height: 1.4;
     }
 
     .form-group {
@@ -59,93 +58,124 @@
     }
 
     label {
+      display: block;
+      font-size: 12px;
       font-weight: 600;
-      font-size: 13px;
+      margin-bottom: 8px;
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      color: var(--text);
-      display: block;
-      margin-bottom: 8px;
+      color: var(--subtext);
     }
 
     input[type="password"],
     input[type="text"],
     select {
       width: 100%;
-      padding: 10px 14px;
-      box-sizing: border-box;
-      border: 1.5px solid var(--border);
-      border-radius: 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
       font-size: 14px;
-      color: var(--text);
-      background-color: #fff;
-      transition: all 0.2s ease;
-      font-family: inherit;
+      box-sizing: border-box;
       outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      background-color: #fff;
     }
 
     input[type="password"]:focus,
     input[type="text"]:focus,
     select:focus {
       border-color: var(--primary);
-      box-shadow: 0 0 0 4px var(--focus-ring);
-    }
-
-    button {
-      background-color: var(--primary);
-      color: white;
-      border: none;
-      padding: 12px 20px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 14px;
-      width: 100%;
-      transition: all 0.2s ease;
-      margin-top: 10px;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-    }
-
-    button:hover {
-      background-color: var(--primary-hover);
-      box-shadow: 0 4px 12px rgba(91, 95, 199, 0.2);
-    }
-
-    button:active {
-      transform: scale(0.98);
-    }
-
-    #status {
-      margin-top: 15px;
-      color: #2e7d32;
-      font-size: 14px;
-      font-weight: 500;
-      text-align: center;
-      min-height: 20px;
-      transition: opacity 0.3s ease;
+      box-shadow: 0 0 0 2px rgba(91, 95, 199, 0.15);
     }
 
     .help-text {
       font-size: 12px;
-      color: var(--text-muted);
+      color: var(--subtext);
       margin-top: 6px;
+      line-height: 1.4;
     }
 
-    .help-text a {
-      color: var(--primary);
-      text-decoration: none;
+    button#saveBtn {
+      width: 100%;
+      background-color: var(--primary);
+      color: white;
+      border: none;
+      padding: 11px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background-color 0.2s, box-shadow 0.2s;
+      margin-top: 10px;
+    }
+
+    button#saveBtn:hover {
+      background-color: var(--primary-hover);
+      box-shadow: 0 2px 6px rgba(91, 95, 199, 0.3);
+    }
+
+    #status {
+      margin-top: 15px;
+      font-size: 13px;
       font-weight: 500;
-    }
-
-    .help-text a:hover {
-      text-decoration: underline;
+      text-align: center;
+      min-height: 18px;
     }
 
     #customModelContainer {
       display: none;
       animation: fadeIn 0.3s ease;
+    }
+
+    .label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .label-row label {
+      margin-bottom: 0;
+    }
+
+    .refresh-btn {
+      background: none;
+      color: var(--primary);
+      border: 1px solid var(--border);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      width: auto;
+      margin-top: 0;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s ease;
+      text-transform: none;
+      letter-spacing: normal;
+    }
+
+    .refresh-btn:hover {
+      background-color: rgba(91, 95, 199, 0.08);
+      border-color: var(--primary);
+      box-shadow: none;
+    }
+
+    .refresh-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    @keyframes spin {
+      100% { transform: rotate(360deg); }
+    }
+
+    .spinning {
+      display: inline-block;
+      transform-origin: center;
+      animation: spin 0.8s linear infinite;
     }
 
     @keyframes fadeIn {
@@ -157,26 +187,40 @@
 <body>
   <div class="container">
     <h2>mast Settings</h2>
-    <div class="subtitle">Configure your Gemini API key and preferred model.</div>
+    <div class="subtitle">Configure your Gemini API access and intelligence preferences.</div>
     
     <div class="form-group">
-      <label for="apiKey">Google AI Studio API Key</label>
-      <input type="password" id="apiKey" placeholder="AIzaSy...">
-      <div class="help-text">Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>.</div>
+      <label for="apiKey">Gemini API Key</label>
+      <input type="password" id="apiKey" placeholder="Enter your Gemini API Key">
+      <div class="help-text">Your API key is stored locally in your browser and used only for requests to Google AI Studio. <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: var(--primary);">Get an API key</a></div>
     </div>
 
     <div class="form-group">
-      <label for="modelSelect">SELECT MODEL</label>
+      <div class="label-row">
+        <label for="modelSelect">Gemini Model</label>
+        <button type="button" id="refreshModelsBtn" class="refresh-btn" title="Fetch latest models from Google AI Studio">
+          <svg id="refreshIcon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block; vertical-align: -1px; margin-right: 2px;">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg> Refresh
+        </button>
+      </div>
       <select id="modelSelect">
-        <option value="">Loading available models...</option>
+        <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended Default)</option>
+        <option value="gemini-2.5-pro">gemini-2.5-pro (More Powerful / Slower)</option>
+        <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+        <option value="gemini-1.5-flash">gemini-1.5-flash (Older Generation)</option>
+        <option value="gemini-1.5-pro">gemini-1.5-pro (Older Generation Pro)</option>
+        <option value="custom">Custom Model...</option>
       </select>
-      <div class="help-text">Select which Gemini intelligence level to summarize with.</div>
+      <div class="help-text" id="modelHelpText">Select which Gemini intelligence level to summarize with.</div>
     </div>
 
     <div class="form-group" id="customModelContainer">
       <label for="customModel">Custom Model ID</label>
-      <input type="text" id="customModel" placeholder="e.g., gemini-3.5-flash">
-      <div class="help-text">Specify any valid model ID supported by the Gemini Developer API.</div>
+      <input type="text" id="customModel" placeholder="e.g. gemini-2.0-pro-exp-02-05">
+      <div class="help-text">Specify an experimental or fine-tuned model identifier from Google AI Studio.</div>
     </div>
     
     <button id="saveBtn">Save Settings</button>

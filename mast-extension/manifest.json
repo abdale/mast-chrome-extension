@@ -5,9 +5,20 @@
   "description": "Meeting AI Summarizer & Transcriber for MS Teams.",
   "permissions": [
     "activeTab",
+    "tabs",
     "scripting",
     "downloads",
     "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://teams.microsoft.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
   ],
   "host_permissions": [
     "https://teams.microsoft.com/*",
