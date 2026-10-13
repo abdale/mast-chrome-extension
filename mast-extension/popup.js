@@ -29,32 +29,51 @@ settingsLink.addEventListener('click', (e) => {
   window.open(chrome.runtime.getURL('options.html'));
 });
 
+function getTopStableFlashModels(models) {
+  const validModels = (models || []).filter(
+    m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent")
+  );
+
+  const familyMap = new Map();
+  for (const m of validModels) {
+    const match = m.name.match(/^models\/gemini-(\d+)(?:\.(\d+))?-flash(?:-(\d{3}))?$/i);
+    if (!match) continue;
+
+    const major = parseInt(match[1], 10);
+    const minor = match[2] !== undefined ? parseInt(match[2], 10) : 0;
+    const rev = match[3] !== undefined ? parseInt(match[3], 10) : null;
+    const familyKey = `${major}.${minor}`;
+
+    const existing = familyMap.get(familyKey);
+    if (!existing) {
+      familyMap.set(familyKey, { model: m, major, minor, rev });
+    } else if (rev === null && existing.rev !== null) {
+      familyMap.set(familyKey, { model: m, major, minor, rev });
+    } else if (rev !== null && existing.rev !== null && rev > existing.rev) {
+      familyMap.set(familyKey, { model: m, major, minor, rev });
+    }
+  }
+
+  const sorted = Array.from(familyMap.values()).sort((a, b) => {
+    if (b.major !== a.major) return b.major - a.major;
+    return b.minor - a.minor;
+  });
+
+  return sorted.slice(0, 2).map(entry => entry.model);
+}
+
 async function validateApiKey(key) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
   try {
     const response = await fetch(url);
-    if (!response.ok) return { valid: false, flashLiteModel: null };
+    if (!response.ok) return { valid: false, latestFlashModel: null };
     const data = await response.json();
-    const validModels = data.models.filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"));
-    
-    const matches = validModels.filter(m => {
-      const name = m.name.toLowerCase();
-      return name.includes('flash-lite') && !name.includes('latest') && !name.includes('tuning') && !name.includes('embed');
-    });
-    
-    matches.sort((a, b) => {
-      const aExp = a.name.includes('exp') || a.name.includes('preview');
-      const bExp = b.name.includes('exp') || b.name.includes('preview');
-      if (aExp && !bExp) return 1;
-      if (!aExp && bExp) return -1;
-      return b.name.localeCompare(a.name);
-    });
-    
-    const defaultModel = matches.length > 0 ? matches[0].name.replace('models/', '') : 'gemini-2.0-flash-lite-001';
-    
-    return { valid: true, flashLiteModel: defaultModel };
+    const topFlash = getTopStableFlashModels(data.models);
+    const defaultModel = topFlash.length > 0 ? topFlash[0].name.replace('models/', '') : 'gemini-2.5-flash';
+
+    return { valid: true, latestFlashModel: defaultModel };
   } catch (error) {
-    return { valid: false, flashLiteModel: null };
+    return { valid: false, latestFlashModel: null };
   }
 }
 
@@ -65,23 +84,26 @@ validateBtn.addEventListener('click', async () => {
     apiError.style.display = "block";
     return;
   }
-  
+
   validateBtn.innerText = "Validating...";
   validateBtn.disabled = true;
   apiError.style.display = "none";
-  
-  chrome.storage.local.get(['selectedModel'], async (result) => {
+
+  chrome.storage.local.get(['selectedModel', 'modelSelectVal'], async (result) => {
     const validation = await validateApiKey(key);
-    
+
     if (validation.valid) {
-      if (!result.selectedModel) {
-        chrome.storage.local.set({ selectedModel: validation.flashLiteModel });
+      if (!result.selectedModel || result.modelSelectVal !== 'custom') {
+        chrome.storage.local.set({
+          selectedModel: validation.latestFlashModel,
+          modelSelectVal: validation.latestFlashModel
+        });
       }
       chrome.storage.local.set({ apiKey: key }, () => {
         updateUI();
       });
     } else {
-      apiError.innerText = `Invalid API Key. Please try again.`;
+      apiError.innerText = "Invalid API Key. Please try again.";
       apiError.style.display = "block";
       validateBtn.innerText = "Save & Validate";
       validateBtn.disabled = false;
@@ -127,10 +149,10 @@ async function checkPageStatus() {
       }
     });
     if (!results) return { captionsOn: false, meetingTitle: "Meeting" };
-    
+
     let captionsOn = false;
     let meetingTitle = "Meeting";
-    
+
     for (let r of results) {
       if (r.result) {
         if (r.result.captionsOn) captionsOn = true;
@@ -144,21 +166,21 @@ async function checkPageStatus() {
 }
 
 function updateUI() {
-  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId', 'selectedModel'], async (result) => {
-    
-    let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
+  chrome.storage.local.get([
+    'apiKey',
+    'isTranscribing',
+    'savedTranscript',
+    'startTime',
+    'issueDetected',
+    'activeTabId',
+    'selectedModel',
+    'notesStatus',
+    'notesError'
+  ], async (result) => {
     const pageStatus = await checkPageStatus();
-    
+
     if (pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting") {
       chrome.storage.local.set({ meetingTitle: pageStatus.meetingTitle });
-    }
-    let currentTabId = tab ? tab.id : null;
-    
-    if (result.savedTranscript && result.savedTranscript.length > 0 && result.activeTabId && result.activeTabId !== currentTabId) {
-       chrome.storage.local.set({ savedTranscript: [], isTranscribing: false });
-       result.savedTranscript = [];
-       result.isTranscribing = false;
     }
 
     // 1. API Key View
@@ -180,22 +202,22 @@ function updateUI() {
       viewCaptions.style.display = "none";
       viewMain.style.display = "block";
       viewResults.style.display = "none";
-      
+
       if (result.issueDetected) {
-         issueBanner.style.display = "block";
+        issueBanner.style.display = "block";
       } else {
-         issueBanner.style.display = "none";
+        issueBanner.style.display = "none";
       }
 
       startBtn.disabled = true;
       stopLink.style.display = "block";
       statusEl.innerText = "Transcribing in progress...";
-      
+
       const startTime = result.startTime || Date.now();
       startTimer(startTime);
       return;
     }
-    
+
     // 3. Results View: if not transcribing but we have a transcript
     if (!result.isTranscribing && hasTranscript) {
       viewApiKey.style.display = "none";
@@ -203,12 +225,32 @@ function updateUI() {
       viewMain.style.display = "none";
       viewResults.style.display = "block";
       stopTimer();
+
+      if (result.notesStatus === 'generating') {
+        generateBtn.disabled = true;
+        generateBtn.innerText = "Generating...";
+        resultsStatus.style.color = "#333";
+        resultsStatus.innerText = "Generating AI Summary and downloading transcript...";
+      } else if (result.notesStatus === 'done') {
+        generateBtn.disabled = false;
+        generateBtn.innerText = "Generate AI Summary";
+        resultsStatus.style.color = "green";
+        resultsStatus.innerText = "Success! AI Summary and Transcript downloaded.";
+      } else if (result.notesStatus === 'error') {
+        generateBtn.disabled = false;
+        generateBtn.innerText = "Retry Generating";
+        resultsStatus.style.color = "red";
+        resultsStatus.innerText = "Error: " + (result.notesError || "Failed to generate AI summary.");
+      } else {
+        generateBtn.disabled = false;
+        generateBtn.innerText = "Generate AI Summary";
+      }
       return;
     }
 
     // 4. Captions Check View
     const captionsOn = pageStatus.captionsOn;
-    
+
     if (!captionsOn) {
       viewApiKey.style.display = "none";
       viewCaptions.style.display = "block";
@@ -216,17 +258,17 @@ function updateUI() {
       viewResults.style.display = "none";
       return;
     }
-    
+
     // 5. Main View (Ready to Start)
     viewApiKey.style.display = "none";
     viewCaptions.style.display = "none";
     viewMain.style.display = "block";
     viewResults.style.display = "none";
-    
+
     issueBanner.style.display = "none";
     stopLink.style.display = "none";
     stopTimer();
-    
+
     startBtn.disabled = false;
     statusEl.innerHTML = "Ready to start.<br><span style='font-size: 10px; color: #666; display: inline-block; margin-top: 6px; line-height: 1.2;'>By starting, you confirm you have permission from all attendees to transcribe this session.</span>";
   });
@@ -235,14 +277,22 @@ function updateUI() {
 updateUI();
 pollInterval = setInterval(updateUI, 2000);
 
-async function executeInActiveTab(action) {
+async function executeInActiveTab(action, callback) {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
+  if (!tab) {
+    if (callback) callback();
+    return;
+  }
   chrome.scripting.executeScript({
     target: { tabId: tab.id, allFrames: true },
     files: ['content.js']
   }, () => {
-    chrome.tabs.sendMessage(tab.id, { action: action });
+    chrome.tabs.sendMessage(tab.id, { action: action }, () => {
+      if (chrome.runtime.lastError) {
+        // Ignore if frame has no listener
+      }
+      if (callback) callback();
+    });
   });
 }
 
@@ -250,11 +300,11 @@ if (magicBtn) {
   magicBtn.addEventListener('click', () => {
     magicBtn.style.display = "none";
     executeInActiveTab("force_captions");
-    
+
     setTimeout(() => {
-       if (manualFallbackText) {
-         manualFallbackText.style.display = "block";
-       }
+      if (manualFallbackText) {
+        manualFallbackText.style.display = "block";
+      }
     }, 5000);
   });
 }
@@ -262,159 +312,57 @@ if (magicBtn) {
 startBtn.addEventListener('click', async () => {
   const startTime = Date.now();
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  chrome.storage.local.set({ savedTranscript: [], isTranscribing: true, startTime: startTime, issueDetected: false, activeTabId: tab ? tab.id : null });
-  executeInActiveTab("start");
-  updateUI();
+  chrome.storage.local.set({
+    savedTranscript: [],
+    isTranscribing: true,
+    startTime: startTime,
+    issueDetected: false,
+    activeTabId: tab ? tab.id : null,
+    notesStatus: 'idle',
+    notesError: '',
+    transcriptDownloaded: false
+  }, () => {
+    executeInActiveTab("start");
+    updateUI();
+  });
 });
 
 stopLink.addEventListener('click', (e) => {
   e.preventDefault();
-  chrome.storage.local.set({ isTranscribing: false });
-  executeInActiveTab("stop");
-  updateUI();
-});
-
-newSessionBtn.addEventListener('click', () => {
-  chrome.storage.local.set({ savedTranscript: [] });
-  resultsStatus.innerText = "";
-  generateBtn.innerText = "Generate AI Summary";
-  updateUI();
-});
-
-downloadBtn.addEventListener('click', () => {
-  chrome.storage.local.get(['savedTranscript'], (result) => {
-    const lines = result.savedTranscript || [];
-    if (lines.length === 0) return;
-    const fullTranscript = lines.join('\n');
-    const blob = new Blob([fullTranscript], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const d = new Date();
-    const dateStr = d.toISOString().split('T')[0];
-    const timeStr = d.toTimeString().split(' ')[0].replace(/:/g, '-');
-    chrome.downloads.download({ url: url, filename: `transcript_${dateStr}_${timeStr}.txt`, saveAs: false });
+  executeInActiveTab("stop", () => {
+    chrome.storage.local.set({ isTranscribing: false }, () => {
+      chrome.runtime.sendMessage({ action: "session_ended" }, () => {
+        updateUI();
+      });
+      updateUI();
+    });
   });
 });
 
-generateBtn.addEventListener('click', async () => {
+newSessionBtn.addEventListener('click', () => {
+  chrome.storage.local.set({
+    savedTranscript: [],
+    notesStatus: 'idle',
+    notesError: '',
+    transcriptDownloaded: false
+  }, () => {
+    resultsStatus.innerText = "";
+    generateBtn.innerText = "Generate AI Summary";
+    updateUI();
+  });
+});
+
+downloadBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ action: "download_transcript" });
+});
+
+generateBtn.addEventListener('click', () => {
   resultsStatus.style.color = "#333";
   resultsStatus.innerText = "Generating AI Summary...";
   generateBtn.disabled = true;
   generateBtn.innerText = "Generating...";
-  
-  chrome.storage.local.get(['savedTranscript', 'apiKey', 'selectedModel', 'meetingTitle'], async (result) => {
-    const apiKey = result.apiKey;
-    const model = result.selectedModel || 'gemini-3.5-flash-lite';
-    if (!apiKey) {
-      resultsStatus.style.color = "red";
-      resultsStatus.innerText = "Error: API Key missing.";
-      generateBtn.disabled = false;
-      generateBtn.innerText = "Retry Generating";
-      return;
-    }
-    
-    const lines = result.savedTranscript || [];
-    if (lines.length === 0) {
-      resultsStatus.style.color = "red";
-      resultsStatus.innerText = "Error: No captions captured.";
-      generateBtn.disabled = false;
-      generateBtn.innerText = "Retry Generating";
-      return;
-    }
 
-    const fullTranscript = lines.join('\n');
-    const meetingTitle = result.meetingTitle || "Meeting";
-
-    // Build Date String
-    const dateObj = new Date();
-    const dateFormatted = dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) + ' at ' + dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
-
-    const prompt = `## Role
-
-You are an expert meeting minutes generator. Your task is to process provided information about a meeting, such as a transcript, recording summary, or rough human notes, and generate crisp, well-structured meeting notes following a specific format.
-
-## Output Expectations
-
-Your output must be a well-structured set of meeting minutes that perfectly adheres to the required format.
-
-1.  **Strict Formatting:** You must output the meeting minutes using the exact section headings provided below. Do not modify the section names. Each bullet must be a distinct section.
-2.  **Title:** You must generate a short, concise title for the meeting based on the transcript (less than 7 words). It must be placed at the very beginning of the document in this exact format:
-# Title
-[Your Generated Title Here]
-3.  **Date, time, and attendees:** Extract and present the date, time, and attendees. The companies of the attendees must be mentioned. This section must consist of exactly two bullet points following this format:
-    *   [Date], at [Time] The time is the time showing in the transcript.
-    *   Attendees: [Name] ([Company]), [Name] ([Company]). Company may not be obvious, identify from transcript. If it is not clearly identifiable, do not mention company name. Leave it blank.
-4.  **Meeting purpose:** Clearly state the goal of the meeting to provide context.
-5.  **Agenda items:** Break the minutes into sections that match the meeting's agenda to ensure scannability.
-6.  **Key discussions:** Capture the key points discussed concisely. Do not capture every word. (e.g., "Team discussed marketing budget concerns. Decision deferred until Q2.")
-7.  **Decisions made:** Clearly state any decisions that were made. You must **bold these decisions** so they are easy to spot.
-8.  **Action items:** Identify who is responsible for what action and by when. Write these items clearly. (e.g., "John – finalize vendor contract by March 15.")
-9.  **Follow-ups:** Note any unresolved issues or topics that were deferred to future meetings.
-
-Note: The meeting took place on ${dateFormatted}.
-
-Transcript:
-${fullTranscript}`;
-
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-    const payload = {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2 }
-    };
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error?.message || "Google AI Studio Error");
-      }
-      
-      const data = await response.json();
-      let minutesText = data.candidates[0].content.parts[0].text;
-      
-      let aiTitle = "meeting";
-      const outLines = minutesText.split('\n');
-      for (let i = 0; i < outLines.length; i++) {
-          if (outLines[i].toLowerCase().includes('# title') && i + 1 < outLines.length) {
-              aiTitle = outLines[i+1].trim();
-              if (!aiTitle && i + 2 < outLines.length) {
-                  aiTitle = outLines[i+2].trim();
-              }
-              break;
-          }
-      }
-      
-      let sanitizedTitle = aiTitle.toLowerCase()
-        .replace(/[^a-z0-9\s_-]/g, '')
-        .trim()
-        .replace(/[\s-]+/g, '_')
-        .substring(0, 50);
-      
-      if (!sanitizedTitle || sanitizedTitle === 'title') sanitizedTitle = "meeting";
-      
-      const d = new Date();
-      const dateStr = d.toISOString().split('T')[0];
-      const timeStr = d.toTimeString().split(' ')[0].replace(/:/g, '-');
-      const filename = `ai_summary_${sanitizedTitle}_${dateStr}_${timeStr}.md`;
-
-      const blob = new Blob([minutesText], { type: 'text/markdown' });
-      const objUrl = URL.createObjectURL(blob);
-      chrome.downloads.download({ url: objUrl, filename: filename, saveAs: false });
-      
-      resultsStatus.style.color = "green";
-      resultsStatus.innerText = "Success! Summary downloaded.";
-      generateBtn.disabled = false;
-      generateBtn.innerText = "Generate AI Summary";
-    } catch (error) {
-      console.error("Generation failed:", error);
-      resultsStatus.style.color = "red";
-      resultsStatus.innerText = "Error: " + error.message; // Full error without 30 char limit
-      generateBtn.disabled = false;
-      generateBtn.innerText = "Retry Generating";
-    }
+  chrome.runtime.sendMessage({ action: "generate_notes" }, () => {
+    updateUI();
   });
 });

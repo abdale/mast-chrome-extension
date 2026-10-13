@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "mast",
-  "version": "2.5",
+  "version": "2.6",
   "description": "Meeting AI Summarizer & Transcriber for MS Teams.",
   "permissions": [
     "activeTab",
@@ -9,6 +9,9 @@
     "downloads",
     "storage"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "host_permissions": [
     "https://teams.microsoft.com/*",
     "https://generativelanguage.googleapis.com/*"

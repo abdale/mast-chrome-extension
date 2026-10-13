@@ -6,6 +6,39 @@ document.addEventListener('DOMContentLoaded', () => {
   const saveBtn = document.getElementById('saveBtn');
   const statusEl = document.getElementById('status');
 
+  function getTopStableFlashModels(models) {
+    const validModels = (models || []).filter(
+      m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent")
+    );
+
+    const familyMap = new Map();
+    for (const m of validModels) {
+      const match = m.name.match(/^models\/gemini-(\d+)(?:\.(\d+))?-flash(?:-(\d{3}))?$/i);
+      if (!match) continue;
+
+      const major = parseInt(match[1], 10);
+      const minor = match[2] !== undefined ? parseInt(match[2], 10) : 0;
+      const rev = match[3] !== undefined ? parseInt(match[3], 10) : null;
+      const familyKey = `${major}.${minor}`;
+
+      const existing = familyMap.get(familyKey);
+      if (!existing) {
+        familyMap.set(familyKey, { model: m, major, minor, rev });
+      } else if (rev === null && existing.rev !== null) {
+        familyMap.set(familyKey, { model: m, major, minor, rev });
+      } else if (rev !== null && existing.rev !== null && rev > existing.rev) {
+        familyMap.set(familyKey, { model: m, major, minor, rev });
+      }
+    }
+
+    const sorted = Array.from(familyMap.values()).sort((a, b) => {
+      if (b.major !== a.major) return b.major - a.major;
+      return b.minor - a.minor;
+    });
+
+    return sorted.slice(0, 2).map(entry => entry.model);
+  }
+
   // Load saved settings
   chrome.storage.local.get(['apiKey', 'modelSelectVal', 'customModelVal'], (result) => {
     if (result.apiKey) {
@@ -34,65 +67,46 @@ document.addEventListener('DOMContentLoaded', () => {
     statusEl.innerText = "Loading available models...";
     statusEl.style.color = "#5B5FC7";
     try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-        if (!response.ok) throw new Error("Invalid API key or network error");
-        const data = await response.json();
-        
-        modelSelect.innerHTML = '';
-        const validModels = data.models.filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"));
-        
-        // Helper to pick the latest/best model of a specific family
-        function getLatestModel(keyword, excludeKeyword = null) {
-            const matches = validModels.filter(m => {
-                const name = m.name.toLowerCase();
-                const hasKeyword = name.includes(keyword);
-                const hasExclude = excludeKeyword ? name.includes(excludeKeyword) : false;
-                // Exclude latest, tuning, embed
-                return hasKeyword && !hasExclude && !name.includes('latest') && !name.includes('tuning') && !name.includes('embed');
-            });
-            // Prioritize standard/stable releases over preview/exp if available, then sort descending
-            matches.sort((a, b) => {
-                const aExp = a.name.includes('exp') || a.name.includes('preview');
-                const bExp = b.name.includes('exp') || b.name.includes('preview');
-                if (aExp && !bExp) return 1;
-                if (!aExp && bExp) return -1;
-                return b.name.localeCompare(a.name);
-            });
-            return matches[0];
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      if (!response.ok) throw new Error("Invalid API key or network error");
+      const data = await response.json();
+      
+      modelSelect.innerHTML = '';
+      const finalModels = getTopStableFlashModels(data.models);
+      const validIds = finalModels.map(m => m.name.replace('models/', ''));
+      
+      finalModels.forEach(m => {
+        const modelId = m.name.replace('models/', '');
+        const option = document.createElement('option');
+        option.value = modelId;
+        option.textContent = m.displayName ? `${modelId} (${m.displayName})` : modelId;
+        modelSelect.appendChild(option);
+      });
+      
+      const customOpt = document.createElement('option');
+      customOpt.value = 'custom';
+      customOpt.textContent = 'Custom Model...';
+      modelSelect.appendChild(customOpt);
+      
+      if (selectedVal && (validIds.includes(selectedVal) || selectedVal === 'custom')) {
+        modelSelect.value = selectedVal;
+      } else {
+        const defaultModelId = validIds[0] || 'custom';
+        modelSelect.value = defaultModelId;
+        if (defaultModelId !== 'custom') {
+          chrome.storage.local.set({
+            selectedModel: defaultModelId,
+            modelSelectVal: defaultModelId
+          });
         }
-
-        const latestFlash = getLatestModel('flash', 'lite');
-        const latestFlashLite = getLatestModel('flash-lite') || getLatestModel('flash_lite');
-        
-        const finalModels = [latestFlash, latestFlashLite].filter(Boolean);
-        
-        finalModels.forEach(m => {
-            const modelId = m.name.replace('models/', '');
-            const option = document.createElement('option');
-            option.value = modelId;
-            // Always show the explicit versioned model ID prominently
-            option.textContent = m.displayName ? `${modelId} (${m.displayName})` : modelId;
-            modelSelect.appendChild(option);
-        });
-        
-        const customOpt = document.createElement('option');
-        customOpt.value = 'custom';
-        customOpt.textContent = 'Custom Model...';
-        modelSelect.appendChild(customOpt);
-        
-        if (selectedVal && (finalModels.some(m => m.name.replace('models/', '') === selectedVal) || selectedVal === 'custom')) {
-            modelSelect.value = selectedVal;
-        } else {
-            const defaultModel = latestFlashLite || latestFlash || finalModels[0];
-            modelSelect.value = defaultModel ? defaultModel.name.replace('models/', '') : 'custom';
-        }
-        
-        toggleCustomModelVisibility();
-        statusEl.innerText = "";
+      }
+      
+      toggleCustomModelVisibility();
+      statusEl.innerText = "";
     } catch (e) {
-        statusEl.innerText = "Error loading models. Check API Key.";
-        statusEl.style.color = "#d32f2f";
-        modelSelect.innerHTML = '<option value="">Error loading models</option>';
+      statusEl.innerText = "Error loading models. Check API Key.";
+      statusEl.style.color = "#d32f2f";
+      modelSelect.innerHTML = '<option value="">Error loading models</option>';
     }
   }
 
