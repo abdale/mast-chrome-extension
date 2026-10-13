@@ -14,13 +14,12 @@ const statusEl = document.getElementById('status');
 const timerEl = document.getElementById('timer');
 const settingsLink = document.getElementById('settingsLink');
 
-const generateBtn = document.getElementById('generateBtn');
-const downloadBtn = document.getElementById('downloadBtn');
-const newSessionBtn = document.getElementById('newSessionBtn');
 const resultsStatus = document.getElementById('resultsStatus');
+const retryBtn = document.getElementById('retryBtn');
 
 let timerInterval = null;
 let pollInterval = null;
+let sawSessionTransitionInPopup = false;
 
 settingsLink.addEventListener('click', (e) => {
   e.preventDefault();
@@ -189,11 +188,12 @@ function updateUI() {
     let currentTabId = tab ? tab.id : null;
     const switchedToNewTab = !!(result.activeTabId && result.activeTabId !== currentTabId);
     const startedNewCallInSameTab = !!(result.callEnded && pageStatus.inActiveCall && !result.isTranscribing);
+    const reopenedAfterCompletion = !!(result.notesStatus === 'done' && !sawSessionTransitionInPopup && !result.isTranscribing);
 
     if (
       result.savedTranscript &&
       result.savedTranscript.length > 0 &&
-      (switchedToNewTab || startedNewCallInSameTab) &&
+      (switchedToNewTab || startedNewCallInSameTab || reopenedAfterCompletion) &&
       result.notesStatus !== 'generating'
     ) {
       chrome.storage.local.set({
@@ -225,6 +225,7 @@ function updateUI() {
 
     // 2. Transcribing in progress always shows Main View
     if (result.isTranscribing) {
+      sawSessionTransitionInPopup = true;
       viewApiKey.style.display = "none";
       viewMain.style.display = "block";
       viewResults.style.display = "none";
@@ -255,29 +256,28 @@ function updateUI() {
 
     // 3. Results View: if not transcribing but we have a transcript
     if (!result.isTranscribing && hasTranscript) {
+      sawSessionTransitionInPopup = true;
       viewApiKey.style.display = "none";
       viewMain.style.display = "none";
       viewResults.style.display = "block";
       stopTimer();
 
       if (result.notesStatus === 'generating') {
-        generateBtn.disabled = true;
-        generateBtn.innerText = "Generating...";
-        resultsStatus.style.color = "#333";
-        resultsStatus.innerText = "Generating AI Summary and downloading transcript...";
-      } else if (result.notesStatus === 'done') {
-        generateBtn.disabled = false;
-        generateBtn.innerText = "Generate AI Summary";
-        resultsStatus.style.color = "green";
-        resultsStatus.innerText = "Success! AI Summary and Transcript downloaded.";
+        resultsStatus.style.color = "#5f6368";
+        resultsStatus.innerText = "Generating AI meeting notes and saving transcript...";
+        if (retryBtn) retryBtn.style.display = "none";
       } else if (result.notesStatus === 'error') {
-        generateBtn.disabled = false;
-        generateBtn.innerText = "Retry Generating";
-        resultsStatus.style.color = "red";
-        resultsStatus.innerText = "Error: " + (result.notesError || "Failed to generate AI summary.");
+        resultsStatus.style.color = "#d32f2f";
+        resultsStatus.innerText = "Transcript saved, but AI notes failed to generate." + (result.notesError ? " (" + result.notesError + ")" : "");
+        if (retryBtn) {
+          retryBtn.style.display = "block";
+          retryBtn.disabled = false;
+          retryBtn.innerText = "Retry";
+        }
       } else {
-        generateBtn.disabled = false;
-        generateBtn.innerText = "Generate AI Summary";
+        resultsStatus.style.color = "#5f6368";
+        resultsStatus.innerText = "Your AI meeting notes and transcript have been saved to your Downloads folder.";
+        if (retryBtn) retryBtn.style.display = "none";
       }
       return;
     }
@@ -325,6 +325,7 @@ async function executeInActiveTab(action, callback) {
 }
 
 startBtn.addEventListener('click', async () => {
+  sawSessionTransitionInPopup = true;
   const startTime = Date.now();
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   chrome.storage.local.set({
@@ -345,8 +346,9 @@ startBtn.addEventListener('click', async () => {
 
 stopLink.addEventListener('click', (e) => {
   e.preventDefault();
+  sawSessionTransitionInPopup = true;
   executeInActiveTab("stop", () => {
-    chrome.storage.local.set({ isTranscribing: false }, () => {
+    chrome.storage.local.set({ isTranscribing: false, notesStatus: 'generating' }, () => {
       chrome.runtime.sendMessage({ action: "session_ended" }, () => {
         updateUI();
       });
@@ -355,31 +357,14 @@ stopLink.addEventListener('click', (e) => {
   });
 });
 
-newSessionBtn.addEventListener('click', () => {
-  chrome.storage.local.set({
-    savedTranscript: [],
-    notesStatus: 'idle',
-    notesError: '',
-    transcriptDownloaded: false,
-    callEnded: false
-  }, () => {
-    resultsStatus.innerText = "";
-    generateBtn.innerText = "Generate AI Summary";
-    updateUI();
+if (retryBtn) {
+  retryBtn.addEventListener('click', () => {
+    retryBtn.disabled = true;
+    retryBtn.innerText = "Retrying...";
+    resultsStatus.style.color = "#5f6368";
+    resultsStatus.innerText = "Generating AI meeting notes and saving transcript...";
+    chrome.runtime.sendMessage({ action: "generate_notes" }, () => {
+      updateUI();
+    });
   });
-});
-
-downloadBtn.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ action: "download_transcript" });
-});
-
-generateBtn.addEventListener('click', () => {
-  resultsStatus.style.color = "#333";
-  resultsStatus.innerText = "Generating AI Summary...";
-  generateBtn.disabled = true;
-  generateBtn.innerText = "Generating...";
-
-  chrome.runtime.sendMessage({ action: "generate_notes" }, () => {
-    updateUI();
-  });
-});
+}

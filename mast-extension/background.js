@@ -258,6 +258,7 @@ async function handleSessionEnded() {
 
   const lines = result.savedTranscript || [];
   if (lines.length === 0) {
+    await chrome.storage.local.set({ notesStatus: 'idle' });
     return { status: "no_transcript" };
   }
 
