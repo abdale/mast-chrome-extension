@@ -220,7 +220,9 @@
         if (missingCallChecks >= 3) {
           console.log("mast: Call end detected. Finalizing session and auto-generating AI notes.");
           stopLocalObservation();
-          chrome.runtime.sendMessage({ action: "session_ended" });
+          chrome.storage.local.set({ callEnded: true }, () => {
+            chrome.runtime.sendMessage({ action: "session_ended" });
+          });
         }
       }
     }, 2000);

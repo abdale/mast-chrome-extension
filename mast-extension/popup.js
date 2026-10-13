@@ -139,29 +139,32 @@ function stopTimer() {
 
 async function checkPageStatus() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return { captionsOn: false, meetingTitle: "Meeting" };
+  if (!tab) return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
   try {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => {
         const captionsOn = !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"], [aria-label*="caption" i], .ui-captions-container');
-        return { captionsOn: captionsOn, meetingTitle: "Meeting" };
+        const inActiveCall = captionsOn || !!document.querySelector('[data-tid="call-duration"], #hangup-button, button[data-tid="hangup-button"], button[data-tid="call-hangup"], button[aria-label="Leave call" i], button[aria-label="Leave meeting" i], button[aria-label="Hang up" i], [data-tid="calling-top-bar"], [data-tid="calling-screen"], [data-tid="meeting-stage"], [data-tid="calling-stage"]');
+        return { captionsOn: captionsOn, inActiveCall: inActiveCall, meetingTitle: "Meeting" };
       }
     });
-    if (!results) return { captionsOn: false, meetingTitle: "Meeting" };
+    if (!results) return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
 
     let captionsOn = false;
+    let inActiveCall = false;
     let meetingTitle = "Meeting";
 
     for (let r of results) {
       if (r.result) {
         if (r.result.captionsOn) captionsOn = true;
+        if (r.result.inActiveCall) inActiveCall = true;
         if (r.result.meetingTitle && r.result.meetingTitle !== "Meeting") meetingTitle = r.result.meetingTitle;
       }
     }
-    return { captionsOn, meetingTitle };
+    return { captionsOn, inActiveCall, meetingTitle };
   } catch (e) {
-    return { captionsOn: false, meetingTitle: "Meeting" };
+    return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
   }
 }
 
@@ -175,12 +178,39 @@ function updateUI() {
     'activeTabId',
     'selectedModel',
     'notesStatus',
-    'notesError'
+    'notesError',
+    'callEnded'
   ], async (result) => {
+    let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const pageStatus = await checkPageStatus();
 
     if (pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting") {
       chrome.storage.local.set({ meetingTitle: pageStatus.meetingTitle });
+    }
+
+    let currentTabId = tab ? tab.id : null;
+    const switchedToNewTab = !!(result.activeTabId && result.activeTabId !== currentTabId);
+    const startedNewCallInSameTab = !!(result.callEnded && pageStatus.inActiveCall && !result.isTranscribing);
+
+    if (
+      result.savedTranscript &&
+      result.savedTranscript.length > 0 &&
+      (switchedToNewTab || startedNewCallInSameTab) &&
+      result.notesStatus !== 'generating'
+    ) {
+      chrome.storage.local.set({
+        savedTranscript: [],
+        isTranscribing: false,
+        notesStatus: 'idle',
+        notesError: '',
+        transcriptDownloaded: false,
+        callEnded: false
+      });
+      result.savedTranscript = [];
+      result.isTranscribing = false;
+      result.notesStatus = 'idle';
+      result.notesError = '';
+      result.callEnded = false;
     }
 
     // 1. API Key View
@@ -320,7 +350,8 @@ startBtn.addEventListener('click', async () => {
     activeTabId: tab ? tab.id : null,
     notesStatus: 'idle',
     notesError: '',
-    transcriptDownloaded: false
+    transcriptDownloaded: false,
+    callEnded: false
   }, () => {
     executeInActiveTab("start");
     updateUI();
@@ -344,7 +375,8 @@ newSessionBtn.addEventListener('click', () => {
     savedTranscript: [],
     notesStatus: 'idle',
     notesError: '',
-    transcriptDownloaded: false
+    transcriptDownloaded: false,
+    callEnded: false
   }, () => {
     resultsStatus.innerText = "";
     generateBtn.innerText = "Generate AI Summary";

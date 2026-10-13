@@ -282,13 +282,24 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
 });
 
-// Safety net: if the user closes the Teams tab while transcribing, finalize & auto-download
+// Safety net: if the user closes the Teams tab, finalize any active session & clean up state
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const result = await chrome.storage.local.get(['isTranscribing', 'activeTabId', 'savedTranscript']);
-  if (result.isTranscribing && result.activeTabId === tabId) {
-    await chrome.storage.local.set({ isTranscribing: false });
-    if (result.savedTranscript && result.savedTranscript.length > 0) {
-      await handleSessionEnded();
+  const result = await chrome.storage.local.get(['isTranscribing', 'activeTabId', 'savedTranscript', 'notesStatus']);
+  if (result.activeTabId === tabId) {
+    if (result.isTranscribing) {
+      await chrome.storage.local.set({ isTranscribing: false });
+      if (result.savedTranscript && result.savedTranscript.length > 0) {
+        await handleSessionEnded();
+      }
+    }
+    if (!isGeneratingInMemory) {
+      await chrome.storage.local.set({
+        savedTranscript: [],
+        activeTabId: null,
+        notesStatus: 'idle',
+        notesError: '',
+        transcriptDownloaded: false
+      });
     }
   }
 });
