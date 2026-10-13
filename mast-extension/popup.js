@@ -1,5 +1,4 @@
 const viewApiKey = document.getElementById('view-api-key');
-const viewCaptions = document.getElementById('view-captions');
 const viewMain = document.getElementById('view-main');
 const viewResults = document.getElementById('view-results');
 
@@ -8,8 +7,7 @@ const validateBtn = document.getElementById('validateBtn');
 const apiError = document.getElementById('apiError');
 
 const startBtn = document.getElementById('startBtn');
-const magicBtn = document.getElementById('magicBtn');
-const manualFallbackText = document.getElementById('manualFallbackText');
+const captionHelperText = document.getElementById('captionHelperText');
 const issueBanner = document.getElementById('issueBanner');
 const stopLink = document.getElementById('stopLink');
 const statusEl = document.getElementById('status');
@@ -216,7 +214,6 @@ function updateUI() {
     // 1. API Key View
     if (!result.apiKey) {
       viewApiKey.style.display = "block";
-      viewCaptions.style.display = "none";
       viewMain.style.display = "none";
       viewResults.style.display = "none";
       validateBtn.innerText = "Save & Validate";
@@ -229,7 +226,6 @@ function updateUI() {
     // 2. Transcribing in progress always shows Main View
     if (result.isTranscribing) {
       viewApiKey.style.display = "none";
-      viewCaptions.style.display = "none";
       viewMain.style.display = "block";
       viewResults.style.display = "none";
 
@@ -245,13 +241,21 @@ function updateUI() {
 
       const startTime = result.startTime || Date.now();
       startTimer(startTime);
+
+      if (captionHelperText) {
+        if (!pageStatus.captionsOn && !hasTranscript && Date.now() - startTime >= 5000) {
+          captionHelperText.style.display = "block";
+          captionHelperText.innerText = "Did captions turn on? Press Alt + Shift + C to toggle manually.";
+        } else {
+          captionHelperText.style.display = "none";
+        }
+      }
       return;
     }
 
     // 3. Results View: if not transcribing but we have a transcript
     if (!result.isTranscribing && hasTranscript) {
       viewApiKey.style.display = "none";
-      viewCaptions.style.display = "none";
       viewMain.style.display = "none";
       viewResults.style.display = "block";
       stopTimer();
@@ -278,20 +282,8 @@ function updateUI() {
       return;
     }
 
-    // 4. Captions Check View
-    const captionsOn = pageStatus.captionsOn;
-
-    if (!captionsOn) {
-      viewApiKey.style.display = "none";
-      viewCaptions.style.display = "block";
-      viewMain.style.display = "none";
-      viewResults.style.display = "none";
-      return;
-    }
-
-    // 5. Main View (Ready to Start)
+    // 4. Main View (Action-First Ready to Capture)
     viewApiKey.style.display = "none";
-    viewCaptions.style.display = "none";
     viewMain.style.display = "block";
     viewResults.style.display = "none";
 
@@ -300,7 +292,13 @@ function updateUI() {
     stopTimer();
 
     startBtn.disabled = false;
-    statusEl.innerHTML = "Ready to start.<br><span style='font-size: 10px; color: #666; display: inline-block; margin-top: 6px; line-height: 1.2;'>By starting, you confirm you have permission from all attendees to transcribe this session.</span>";
+    if (captionHelperText) {
+      captionHelperText.style.display = "block";
+      captionHelperText.innerText = pageStatus.captionsOn
+        ? "Captions enabled and ready."
+        : "Live captions will automatically be enabled upon capture.";
+    }
+    statusEl.innerHTML = "<span style='font-size: 10px; color: #666; display: inline-block; margin-top: 2px; line-height: 1.2;'>By starting, you confirm you have permission from all attendees to transcribe this session.</span>";
   });
 }
 
@@ -323,19 +321,6 @@ async function executeInActiveTab(action, callback) {
       }
       if (callback) callback();
     });
-  });
-}
-
-if (magicBtn) {
-  magicBtn.addEventListener('click', () => {
-    magicBtn.style.display = "none";
-    executeInActiveTab("force_captions");
-
-    setTimeout(() => {
-      if (manualFallbackText) {
-        manualFallbackText.style.display = "block";
-      }
-    }, 5000);
   });
 }
 

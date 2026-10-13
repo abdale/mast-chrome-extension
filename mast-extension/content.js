@@ -324,29 +324,57 @@
     }
   });
 
+  function areCaptionsVisible() {
+    const captionSelectors = [
+      CAPTION_CONTAINER_SELECTOR,
+      TEXT_SELECTOR,
+      SPEAKER_SELECTOR,
+      '[data-tid="closed-captions-container"]',
+      '[data-tid="closed-caption-renderer-wrapper"]',
+      '[data-tid="closed-caption-text"]',
+      '.ui-captions-container'
+    ];
+    return captionSelectors.some((sel) => {
+      try {
+        return !!document.querySelector(sel);
+      } catch (_) {
+        return false;
+      }
+    });
+  }
+
+  function ensureCaptionsEnabled() {
+    if (areCaptionsVisible()) {
+      console.log("mast: Captions already active.");
+      return;
+    }
+    console.log("mast: Attempting to enable captions via Alt+Shift+C");
+    const event = new KeyboardEvent('keydown', {
+      key: 'c',
+      code: 'KeyC',
+      keyCode: 67,
+      which: 67,
+      altKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true
+    });
+    document.dispatchEvent(event);
+  }
+
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "start") {
       shouldGuardUnload = false;
       removeStatusToast();
       isTranscribing = true;
+      ensureCaptionsEnabled();
       startObserving();
       sendResponse({ status: "started" });
     } else if (request.action === "stop") {
       stopLocalObservation();
       sendResponse({ status: "stopped" });
     } else if (request.action === "force_captions") {
-      console.log("mast: Attempting to force captions via Alt+Shift+C");
-      const event = new KeyboardEvent('keydown', {
-        key: 'c',
-        code: 'KeyC',
-        keyCode: 67,
-        which: 67,
-        altKey: true,
-        shiftKey: true,
-        bubbles: true,
-        cancelable: true
-      });
-      document.dispatchEvent(event);
+      ensureCaptionsEnabled();
       sendResponse({ status: "force_captions_sent" });
     }
   });
