@@ -295,8 +295,8 @@ function updateUI() {
     if (captionHelperText) {
       captionHelperText.style.display = "block";
       captionHelperText.innerText = pageStatus.captionsOn
-        ? "Captions enabled and ready."
-        : "Live captions will automatically be enabled upon capture.";
+        ? "Captions enabled and ready. Do not disable live captions during the call."
+        : "Live captions will be automatically enabled upon capture. Do not disable live captions during the call.";
     }
     statusEl.innerHTML = "<span style='font-size: 10px; color: #666; display: inline-block; margin-top: 2px; line-height: 1.2;'>By starting, you confirm you have permission from all attendees to transcribe this session.</span>";
   });

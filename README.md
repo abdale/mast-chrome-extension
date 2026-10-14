@@ -31,5 +31,5 @@ To use the AI generation features securely without maintaining a backend, the ex
 
 ## Usage Guide
 1. Join a browser-based Microsoft Teams meeting.
-2. Click the mast extension icon and click **Capture Meeting Notes**. Live captions will automatically be enabled in Teams and the extension will passively collect captions.
+2. Click the mast extension icon and click **Capture Meeting Notes**. Live captions will be automatically enabled in Teams and the extension will passively collect captions. Do not disable live captions during the call.
 3. When the meeting ends (or when you click **Stop**), the extension automatically generates and downloads both your AI meeting summary (`.md`) and raw transcript (`.txt`) to your Downloads folder.
