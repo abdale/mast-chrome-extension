@@ -379,6 +379,9 @@
           0%, 100% { opacity: 1; transform: scale(1); }
           50% { opacity: 0.35; transform: scale(0.85); }
         }
+        @keyframes spin {
+          100% { transform: rotate(360deg); }
+        }
       `;
       document.head.appendChild(style);
     }
@@ -511,49 +514,121 @@
     const stopBtn = card.querySelector('#mast-pill-stop');
     stopBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (pillAutoHideTimeout) clearTimeout(pillAutoHideTimeout);
-      if (pillMouseMoveHandler) {
-        window.removeEventListener('mousemove', pillMouseMoveHandler);
-        pillMouseMoveHandler = null;
-      }
-      if (pillDragCleanup) {
-        pillDragCleanup();
-        pillDragCleanup = null;
-      }
+      finalizeTranscriptionAndDownload("pill_stop");
+    });
+  }
 
-      chrome.storage.local.set({ isTranscribing: false, activeTabId: null });
-      isTranscribing = false;
-      captionsMap.clear();
-      if (issueTimer) clearTimeout(issueTimer);
-      if (observer) {
-        observer.disconnect();
-        observer = null;
-      }
+  let isFinalizing = false;
 
-      card.className = '';
-      card.style.cursor = 'default';
-      card.style.opacity = '1';
-      card.style.pointerEvents = 'auto';
-      card.style.transform = 'scale(1)';
-      card.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="color: #10b981; font-weight: bold; font-size: 13px;">✓</span>
-          <span style="font-size: 12px; color: #111827;">Notes saved! Open <b>mast</b> extension to summarize.</span>
-          <button id="mast-pill-close" style="background: none; border: none; font-size: 15px; color: #9ca3af; cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
-        </div>
-      `;
+  function finalizeTranscriptionAndDownload(reason = "user_stop") {
+    if (isFinalizing) return;
+    isFinalizing = true;
+
+    if (pillAutoHideTimeout) clearTimeout(pillAutoHideTimeout);
+    if (pillMouseMoveHandler) {
+      window.removeEventListener('mousemove', pillMouseMoveHandler);
+      pillMouseMoveHandler = null;
+    }
+    if (pillDragCleanup) {
+      pillDragCleanup();
+      pillDragCleanup = null;
+    }
+
+    isTranscribing = false;
+    captionsMap.clear();
+    if (issueTimer) clearTimeout(issueTimer);
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+
+    let card = document.getElementById('mast-meeting-reminder');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'mast-meeting-reminder';
+      card.style.position = 'fixed';
+      card.style.bottom = '24px';
+      card.style.left = '24px';
+      card.style.zIndex = '2147483647';
+      document.body.appendChild(card);
+      reminderCard = card;
+    }
+
+    card.className = '';
+    card.style.cursor = 'default';
+    card.style.opacity = '1';
+    card.style.pointerEvents = 'auto';
+    card.style.transform = 'scale(1)';
+    card.style.background = 'rgba(255, 255, 255, 0.98)';
+    card.style.border = '1px solid #d1d5db';
+    card.style.borderRadius = '20px';
+    card.style.padding = '8px 16px';
+    card.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.12)';
+    card.style.display = 'flex';
+    card.style.alignItems = 'center';
+    card.style.gap = '10px';
+    card.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+
+    card.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="display: inline-block; width: 12px; height: 12px; border: 2px solid #5B5FC7; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;"></span>
+        <span style="font-size: 12px; color: #111827; font-weight: 500;">Generating AI summary & saving files...</span>
+      </div>
+    `;
+
+    chrome.runtime.sendMessage({ action: "auto_finalize_session", reason: reason }, (response) => {
+      isFinalizing = false;
+      const cardEl = document.getElementById('mast-meeting-reminder');
+      if (!cardEl) return;
+
+      if (chrome.runtime.lastError || !response) {
+        cardEl.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: #10b981; font-weight: bold; font-size: 13px;">✓</span>
+            <span style="font-size: 12px; color: #111827;">Notes saved to storage.</span>
+            <button id="mast-pill-close" style="background: none; border: none; font-size: 15px; color: #9ca3af; cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
+          </div>
+        `;
+      } else if (response.status === "no_transcript") {
+        cardEl.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 12px; color: #6b7280;">No speech detected to summarize.</span>
+            <button id="mast-pill-close" style="background: none; border: none; font-size: 15px; color: #9ca3af; cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
+          </div>
+        `;
+      } else {
+        let msg = "Transcript downloaded!";
+        if (response.summaryDownloaded && response.transcriptDownloaded) {
+          msg = response.retriedWithSecondary
+            ? `✓ AI Summary (${response.usedModel}) & Transcript downloaded!`
+            : "✓ AI Summary & Transcript downloaded!";
+        } else if (response.summaryDownloaded) {
+          msg = "✓ AI Summary downloaded!";
+        } else if (response.summaryError) {
+          msg = `✓ Transcript saved! (${response.summaryError})`;
+        }
+
+        cardEl.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: #10b981; font-weight: bold; font-size: 13px;">✓</span>
+            <span style="font-size: 12px; color: #111827; font-weight: 500;">${msg}</span>
+            <button id="mast-pill-close" style="background: none; border: none; font-size: 15px; color: #9ca3af; cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
+          </div>
+        `;
+      }
 
       const closePill = () => {
-        card.style.opacity = '0';
-        card.style.pointerEvents = 'none';
-        card.style.transform = 'scale(0.96)';
+        if (!cardEl) return;
+        cardEl.style.opacity = '0';
+        cardEl.style.pointerEvents = 'none';
+        cardEl.style.transform = 'scale(0.96)';
         setTimeout(() => {
           removeRecordingPill();
-        }, 250);
+        }, 300);
       };
 
-      card.querySelector('#mast-pill-close')?.addEventListener('click', closePill);
-      setTimeout(closePill, 5000);
+      cardEl.querySelector('#mast-pill-close')?.addEventListener('click', closePill);
+      setTimeout(closePill, 6000);
     });
   }
 
@@ -686,9 +761,13 @@
   function checkAndShowMeetingReminder() {
     const active = isTeamsMeetingActive();
 
-    // If meeting is not active, clean up any existing reminder card and reset
+    // If meeting is not active, check if we need to finalize a session that just ended
     if (!active) {
-      removeRecordingPill();
+      if (isTranscribing) {
+        finalizeTranscriptionAndDownload("meeting_ended");
+      } else {
+        removeRecordingPill();
+      }
       meetingPromptShown = false;
       return;
     }
@@ -738,18 +817,20 @@
       showRecordingPill();
       sendResponse({ status: "started" });
     } else if (request.action === "stop") {
-      isTranscribing = false;
-      captionsMap.clear();
-      if (issueTimer) clearTimeout(issueTimer);
-      if (observer) {
-        observer.disconnect();
-        observer = null;
-      }
-      removeRecordingPill();
+      finalizeTranscriptionAndDownload("popup_stop");
       sendResponse({ status: "stopped" });
     } else if (request.action === "force_captions") {
       attemptEnableCaptions();
       sendResponse({ status: "force_captions_sent" });
+    }
+  });
+
+  // Safely trigger finalization if tab is closed while transcribing
+  window.addEventListener('beforeunload', () => {
+    if (isTranscribing) {
+      try {
+        chrome.runtime.sendMessage({ action: "auto_finalize_session", reason: "page_unload" });
+      } catch (e) {}
     }
   });
 

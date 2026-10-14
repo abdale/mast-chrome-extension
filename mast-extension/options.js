@@ -9,12 +9,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const refreshIcon = document.getElementById('refreshIcon');
   const modelHelpText = document.getElementById('modelHelpText');
 
+  const autoDownloadSummaryCheckbox = document.getElementById('autoDownloadSummary');
+  const autoDownloadTranscriptCheckbox = document.getElementById('autoDownloadTranscript');
+
   const FALLBACK_MODELS = [
-    { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash (Recommended Default)', isRecommended: true },
-    { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro (More Powerful / Slower)' },
-    { id: 'gemini-2.0-flash', label: 'gemini-2.0-flash' },
-    { id: 'gemini-1.5-flash', label: 'gemini-1.5-flash (Older Generation)' },
-    { id: 'gemini-1.5-pro', label: 'gemini-1.5-pro (Older Generation Pro)' }
+    { id: 'gemini-3.0-flash', label: 'gemini-3.0-flash (Recommended Default)', isRecommended: true },
+    { id: 'gemini-3.0-pro', label: 'gemini-3.0-pro (More Powerful / Slower)' },
+    { id: 'gemini-3.1-flash', label: 'gemini-3.1-flash' },
+    { id: 'gemini-3.1-pro', label: 'gemini-3.1-pro' },
+    { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash (Older Generation)' }
   ];
 
   // Helper to populate dropdown options with bias towards recent models
@@ -35,7 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Identify the most recent recommended model
     const recommendedModel = models.find(m => m.isRecommended) || models[0];
-    const defaultModelId = recommendedModel ? recommendedModel.id : 'gemini-2.5-flash';
+    const defaultModelId = recommendedModel ? recommendedModel.id : 'gemini-3.0-flash';
 
     if (selectedValue && (models.some(m => m.id === selectedValue) || selectedValue === 'custom')) {
       modelSelect.value = selectedValue;
@@ -47,7 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
     toggleCustomModelVisibility();
   }
 
-  // Filter and sort raw API models with strong bias towards recent models
+  // Filter and sort raw API models: eliminate non-text models (nano banana, omni, etc.), limit to Gemini 3+, top 5
   function parseAndFilterModels(apiModels) {
     const eligible = apiModels.filter(m =>
       m.supportedGenerationMethods &&
@@ -64,22 +67,35 @@ document.addEventListener('DOMContentLoaded', () => {
       // Must be a Gemini family model
       if (!lower.startsWith('gemini')) continue;
 
-      // Filter out non-text/specialized models
-      if (lower.includes('imagen') || lower.includes('embed') ||
+      // Filter out non-text/specialized/creative models (Nano Banana image models, Omni video models, speech, robotics, etc.)
+      if (lower.includes('banana') || lower.includes('omni') ||
+          lower.includes('imagen') || lower.includes('embed') ||
           lower.includes('tuning') || lower.includes('realtime') ||
-          lower.includes('tts') || lower.includes('robotics')) {
+          lower.includes('tts') || lower.includes('robotics') ||
+          lower.includes('vision') || lower.includes('computer-use') ||
+          lower.includes('live')) {
         continue;
       }
 
       // Filter out -latest alias pointers to keep clean versioned IDs
       if (lower.endsWith('-latest')) continue;
 
+      // Filter out internal snapshot/checkpoint suffixes (e.g. -001, -002, preview-02-05)
+      if (/-\d{3,4}$/.test(lower) || /preview-\d{2}-\d{2}/.test(lower)) {
+        continue;
+      }
+
       if (seenIds.has(id)) continue;
       seenIds.add(id);
 
-      // Extract version number (e.g. gemini-2.5-flash -> 2.5)
+      // Extract version number (e.g. gemini-3.0-flash -> 3.0, gemini-3-flash -> 3.0)
       const versionMatch = lower.match(/gemini-(\d+(?:\.\d+)?)/i);
       const version = versionMatch ? parseFloat(versionMatch[1]) : 0;
+
+      // Exclude models below Gemini 3
+      if (version < 3.0) {
+        continue;
+      }
 
       const isFlash = lower.includes('flash');
       const isLite = lower.includes('lite');
@@ -97,36 +113,66 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    // Sort: bias strongly towards recent models (version desc), stable over preview, flash over pro
-    parsed.sort((a, b) => {
-      // 1. Highest version first (e.g. 2.5 > 2.0 > 1.5)
-      if (b.version !== a.version) return b.version - a.version;
-
-      // 2. Stable release over experimental/preview
-      if (a.isStable && !b.isStable) return -1;
-      if (!a.isStable && b.isStable) return 1;
-
-      // 3. Flash prioritized over Pro for transcription performance/cost
-      if (a.isFlash && !b.isFlash) return -1;
-      if (!a.isFlash && b.isFlash) return 1;
-
-      // 4. Standard Flash before Flash-Lite
-      if (!a.isLite && b.isLite) return -1;
-      if (a.isLite && !b.isLite) return 1;
-
-      return a.id.localeCompare(b.id);
-    });
+    // Safety fallback: if no models >= 3.0 were found, allow >= 2.5 as a safety net
+    if (parsed.length === 0) {
+      for (const m of eligible) {
+        const id = m.name.replace(/^models\//, '');
+        const lower = id.toLowerCase();
+        if (!lower.startsWith('gemini')) continue;
+        if (lower.includes('banana') || lower.includes('omni') ||
+            lower.includes('imagen') || lower.includes('embed') ||
+            lower.includes('tuning') || lower.includes('realtime') ||
+            lower.includes('tts') || lower.includes('robotics') ||
+            lower.includes('vision') || lower.includes('computer-use') ||
+            lower.includes('live')) continue;
+        if (lower.endsWith('-latest')) continue;
+        if (/-\d{3,4}$/.test(lower) || /preview-\d{2}-\d{2}/.test(lower)) continue;
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        const versionMatch = lower.match(/gemini-(\d+(?:\.\d+)?)/i);
+        const version = versionMatch ? parseFloat(versionMatch[1]) : 0;
+        if (version < 2.5) continue;
+        parsed.push({
+          id,
+          version,
+          isFlash: lower.includes('flash'),
+          isLite: lower.includes('lite'),
+          isPro: lower.includes('pro'),
+          isStable: !lower.includes('exp') && !lower.includes('preview'),
+          displayName: m.displayName || id
+        });
+      }
+    }
 
     if (parsed.length === 0) return [];
 
-    // Find the latest stable Flash model to designate as the primary recommended default
-    const maxVersion = parsed[0].version;
-    const recommended = parsed.find(m => m.isStable && m.isFlash && !m.isLite) ||
-                        parsed.find(m => m.isStable && m.isFlash) ||
-                        parsed[0];
+    // Comparator function: highest version first, flash over pro, standard over lite
+    const modelComparator = (a, b) => {
+      if (b.version !== a.version) return b.version - a.version;
+      if (a.isFlash && !b.isFlash) return -1;
+      if (!a.isFlash && b.isFlash) return 1;
+      if (!a.isLite && b.isLite) return -1;
+      if (a.isLite && !b.isLite) return 1;
+      return a.id.localeCompare(b.id);
+    };
+
+    // Partition into stable and preview/experimental models
+    const stableModels = parsed.filter(m => m.isStable).sort(modelComparator);
+    const previewModels = parsed.filter(m => !m.isStable).sort(modelComparator);
+
+    // Prioritize official stable models first; only show preview/exp models if fewer than 5 stable exist
+    const topCandidates = [...stableModels, ...previewModels].slice(0, 5);
+
+    if (topCandidates.length === 0) return [];
+
+    // Find recommended model: latest stable Flash, or first candidate
+    const maxVersion = Math.max(...topCandidates.map(m => m.version));
+    const recommended = topCandidates.find(m => m.isStable && m.isFlash && !m.isLite) ||
+                        topCandidates.find(m => m.isStable && m.isFlash) ||
+                        topCandidates[0];
 
     // Build user-friendly labels with recency bias
-    return parsed.map(m => {
+    return topCandidates.map(m => {
       let label = m.id;
       if (m.id === recommended.id) {
         label = `${m.id} (Recommended Default)`;
@@ -217,13 +263,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Load saved settings on startup
-  chrome.storage.local.get(['apiKey', 'modelSelectVal', 'customModelVal', 'cachedModels'], (result) => {
+  chrome.storage.local.get(['apiKey', 'modelSelectVal', 'customModelVal', 'cachedModels', 'autoDownloadSummary', 'autoDownloadTranscript'], (result) => {
     if (result.apiKey) {
       apiKeyInput.value = result.apiKey;
     }
 
     if (result.customModelVal) {
       customModelInput.value = result.customModelVal;
+    }
+
+    if (autoDownloadSummaryCheckbox) {
+      autoDownloadSummaryCheckbox.checked = result.autoDownloadSummary !== false;
+    }
+
+    if (autoDownloadTranscriptCheckbox) {
+      autoDownloadTranscriptCheckbox.checked = result.autoDownloadTranscript !== false;
     }
 
     // Render immediately from cache or fallback to avoid empty dropdown
@@ -275,6 +329,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const apiKey = apiKeyInput.value.trim();
     const modelSelectVal = modelSelect.value;
     const customModelVal = customModelInput.value.trim();
+    const autoDownloadSummary = autoDownloadSummaryCheckbox ? autoDownloadSummaryCheckbox.checked : true;
+    const autoDownloadTranscript = autoDownloadTranscriptCheckbox ? autoDownloadTranscriptCheckbox.checked : true;
 
     let selectedModel = modelSelectVal;
 
@@ -294,7 +350,9 @@ document.addEventListener('DOMContentLoaded', () => {
       apiKey: apiKey,
       selectedModel: selectedModel,
       modelSelectVal: modelSelectVal,
-      customModelVal: customModelVal
+      customModelVal: customModelVal,
+      autoDownloadSummary: autoDownloadSummary,
+      autoDownloadTranscript: autoDownloadTranscript
     }, () => {
       statusEl.innerText = "Settings saved successfully!";
       statusEl.style.color = "#2e7d32";

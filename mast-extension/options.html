@@ -207,20 +207,35 @@
         </button>
       </div>
       <select id="modelSelect">
-        <option value="gemini-2.5-flash">gemini-2.5-flash (Recommended Default)</option>
-        <option value="gemini-2.5-pro">gemini-2.5-pro (More Powerful / Slower)</option>
-        <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-        <option value="gemini-1.5-flash">gemini-1.5-flash (Older Generation)</option>
-        <option value="gemini-1.5-pro">gemini-1.5-pro (Older Generation Pro)</option>
+        <option value="gemini-3.0-flash">gemini-3.0-flash (Recommended Default)</option>
+        <option value="gemini-3.0-pro">gemini-3.0-pro (More Powerful / Slower)</option>
+        <option value="gemini-3.1-flash">gemini-3.1-flash</option>
+        <option value="gemini-3.1-pro">gemini-3.1-pro</option>
+        <option value="gemini-2.5-flash">gemini-2.5-flash (Older Generation)</option>
         <option value="custom">Custom Model...</option>
       </select>
-      <div class="help-text" id="modelHelpText">Select which Gemini intelligence level to summarize with.</div>
+      <div class="help-text" id="modelHelpText">Select which Gemini intelligence level to summarize with (top 5 Gemini 3+ models).</div>
     </div>
 
     <div class="form-group" id="customModelContainer">
       <label for="customModel">Custom Model ID</label>
-      <input type="text" id="customModel" placeholder="e.g. gemini-2.0-pro-exp-02-05">
+      <input type="text" id="customModel" placeholder="e.g. gemini-3.0-flash-exp">
       <div class="help-text">Specify an experimental or fine-tuned model identifier from Google AI Studio.</div>
+    </div>
+
+    <div class="form-group" style="border-top: 1px solid var(--border); padding-top: 18px; margin-top: 20px;">
+      <label>Automatic Downloads</label>
+      <div class="help-text" style="margin-top: 0; margin-bottom: 10px;">Automatically save files when a meeting ends or when you click Stop.</div>
+      <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+        <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; font-size: 13px; text-transform: none; letter-spacing: normal; cursor: pointer; color: var(--text);">
+          <input type="checkbox" id="autoDownloadSummary" style="width: auto; cursor: pointer; accent-color: var(--primary);" checked>
+          <span>Auto-download AI Summary (<code>.md</code>)</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; font-size: 13px; text-transform: none; letter-spacing: normal; cursor: pointer; color: var(--text);">
+          <input type="checkbox" id="autoDownloadTranscript" style="width: auto; cursor: pointer; accent-color: var(--primary);" checked>
+          <span>Auto-download Raw Transcript (<code>.txt</code>)</span>
+        </label>
+      </div>
     </div>
     
     <button id="saveBtn">Save Settings</button>

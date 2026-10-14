@@ -32,7 +32,7 @@ settingsLink.addEventListener('click', (e) => {
 });
 
 async function validateApiKey(key, model) {
-  const cleanModel = (model || 'gemini-2.5-flash').trim().replace(/^models\//, '');
+  const cleanModel = (model || 'gemini-3.0-flash').trim().replace(/^models\//, '');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}?key=${key.trim()}`;
   try {
     const res = await fetch(url);
@@ -61,7 +61,7 @@ validateBtn.addEventListener('click', async () => {
       model = result.cachedModels[0].id;
     }
     if (!model) {
-      model = 'gemini-2.5-flash';
+      model = 'gemini-3.0-flash';
     }
     const isValid = await validateApiKey(key, model);
     if (isValid) {
@@ -165,7 +165,7 @@ function updateUI() {
       model = result.cachedModels[0].id;
     }
     if (!model) {
-      model = 'gemini-2.5-flash';
+      model = 'gemini-3.0-flash';
     }
     if (activeModelDisplay) {
       activeModelDisplay.innerText = `Model: ${model.replace('-latest', '')}`;
@@ -352,6 +352,9 @@ stopLink.addEventListener('click', (e) => {
   e.preventDefault();
   chrome.storage.local.set({ isTranscribing: false });
   executeInActiveTab("stop");
+  try {
+    chrome.runtime.sendMessage({ action: "auto_finalize_session", reason: "popup_stop" });
+  } catch (err) {}
   updateUI();
 });
 
@@ -389,7 +392,7 @@ generateBtn.addEventListener('click', async () => {
       model = result.cachedModels[0].id;
     }
     if (!model) {
-      model = 'gemini-2.5-flash';
+      model = 'gemini-3.0-flash';
     }
 
     if (!apiKey) {
@@ -443,67 +446,110 @@ Transcript:
 ${fullTranscript}`;
 
     const cleanModel = model.trim().replace(/^models\//, '');
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey.trim()}`;
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.2 }
     };
 
-    try {
+    let minutesText = null;
+    let usedModel = cleanModel;
+    let retriedWithSecondary = false;
+
+    // Helper for calling API
+    async function requestGemini(modelName) {
+      const targetModel = modelName.trim().replace(/^models\//, '');
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey.trim()}`;
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error?.message || "Google AI Studio Error");
+        const errorData = await response.json().catch(() => ({}));
+        const err = new Error(errorData.error?.message || `Google AI Studio Error (${response.status})`);
+        err.status = response.status;
+        throw err;
       }
-      
       const data = await response.json();
-      let minutesText = data.candidates[0].content.parts[0].text;
-      
-      let aiTitle = "meeting";
-      const outLines = minutesText.split('\n');
-      for (let i = 0; i < outLines.length; i++) {
-        if (outLines[i].toLowerCase().includes('# title') && i + 1 < outLines.length) {
-          aiTitle = outLines[i+1].trim();
-          if (!aiTitle && i + 2 < outLines.length) {
-            aiTitle = outLines[i+2].trim();
-          }
-          break;
-        }
-      }
-      
-      let sanitizedTitle = aiTitle.toLowerCase()
-        .replace(/[^a-z0-9\s_-]/g, '')
-        .trim()
-        .replace(/[\s-]+/g, '_')
-        .substring(0, 50);
-      
-      if (!sanitizedTitle || sanitizedTitle === 'title') sanitizedTitle = "meeting";
-      
-      const d = new Date();
-      const dateStr = d.toISOString().split('T')[0];
-      const timeStr = d.toTimeString().split(' ')[0].replace(/:/g, '-');
-      const filename = `ai_summary_${sanitizedTitle}_${dateStr}_${timeStr}.md`;
+      return data.candidates?.[0]?.content?.parts?.[0]?.text;
+    }
 
-      const blob = new Blob([minutesText], { type: 'text/markdown' });
-      const objUrl = URL.createObjectURL(blob);
-      chrome.downloads.download({ url: objUrl, filename: filename, saveAs: false });
-      
-      resultsStatus.style.color = "green";
-      resultsStatus.innerText = "Success! Summary downloaded.";
-      generateBtn.disabled = false;
-      generateBtn.innerText = "Generate AI Summary";
-    } catch (error) {
-      console.error("Generation failed:", error);
+    try {
+      minutesText = await requestGemini(cleanModel);
+    } catch (primaryErr) {
+      console.warn("Primary model failed:", primaryErr);
+      const modelPool = (result.cachedModels && result.cachedModels.length > 0)
+        ? result.cachedModels.map(m => m.id)
+        : ['gemini-3.0-flash', 'gemini-3.0-pro', 'gemini-3.1-flash', 'gemini-3.1-pro', 'gemini-2.5-flash'];
+      const secondaryModel = modelPool.find(m => m !== cleanModel) || 'gemini-3.0-pro';
+
+      if (secondaryModel && secondaryModel !== cleanModel) {
+        resultsStatus.style.color = "#856404";
+        resultsStatus.innerText = `Primary model busy (${primaryErr.status || 'error'}). Retrying with ${secondaryModel}...`;
+        try {
+          minutesText = await requestGemini(secondaryModel);
+          usedModel = secondaryModel;
+          retriedWithSecondary = true;
+        } catch (secondaryErr) {
+          console.error("Secondary model also failed:", secondaryErr);
+          resultsStatus.style.color = "red";
+          resultsStatus.innerText = "Error: " + secondaryErr.message;
+          generateBtn.disabled = false;
+          generateBtn.innerText = "Retry Generating";
+          return;
+        }
+      } else {
+        resultsStatus.style.color = "red";
+        resultsStatus.innerText = "Error: " + primaryErr.message;
+        generateBtn.disabled = false;
+        generateBtn.innerText = "Retry Generating";
+        return;
+      }
+    }
+
+    if (!minutesText) {
       resultsStatus.style.color = "red";
-      resultsStatus.innerText = "Error: " + error.message;
+      resultsStatus.innerText = "Error: Empty response from model.";
       generateBtn.disabled = false;
       generateBtn.innerText = "Retry Generating";
+      return;
     }
+
+    let aiTitle = "meeting";
+    const outLines = minutesText.split('\n');
+    for (let i = 0; i < outLines.length; i++) {
+      if (outLines[i].toLowerCase().includes('# title') && i + 1 < outLines.length) {
+        aiTitle = outLines[i+1].trim();
+        if (!aiTitle && i + 2 < outLines.length) {
+          aiTitle = outLines[i+2].trim();
+        }
+        break;
+      }
+    }
+    
+    let sanitizedTitle = aiTitle.toLowerCase()
+      .replace(/[^a-z0-9\s_-]/g, '')
+      .trim()
+      .replace(/[\s-]+/g, '_')
+      .substring(0, 50);
+    
+    if (!sanitizedTitle || sanitizedTitle === 'title') sanitizedTitle = "meeting";
+    
+    const d = new Date();
+    const dateStr = d.toISOString().split('T')[0];
+    const timeStr = d.toTimeString().split(' ')[0].replace(/:/g, '-');
+    const filename = `ai_summary_${sanitizedTitle}_${dateStr}_${timeStr}.md`;
+
+    const blob = new Blob([minutesText], { type: 'text/markdown' });
+    const objUrl = URL.createObjectURL(blob);
+    chrome.downloads.download({ url: objUrl, filename: filename, saveAs: false });
+    
+    resultsStatus.style.color = "green";
+    resultsStatus.innerText = retriedWithSecondary
+      ? `Success! Summary generated via ${usedModel} and downloaded.`
+      : "Success! Summary downloaded.";
+    generateBtn.disabled = false;
+    generateBtn.innerText = "Generate AI Summary";
   });
 });
 
