@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "mast",
+  "name": "mast (DEV)",
   "version": "2.7",
   "description": "Meeting AI Summarizer & Transcriber for MS Teams.",
   "permissions": [
