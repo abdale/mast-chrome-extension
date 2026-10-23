@@ -25,7 +25,7 @@ To use the AI generation features securely without maintaining a backend, the ex
 2. **Configure the Extension**
    - Click the "mast" extension icon in your toolbar.
    - Paste your Google AI Studio API Key into the popup to dynamically load the latest stable Gemini Flash model as your default.
-   - Click **Settings** in the popup if you'd like to select between the last two stable Gemini Flash models or specify a custom model ID.
+   - Click **Settings** in the popup to choose between the last two stable Gemini Flash models, specify a custom model ID, or configure whether your AI meeting notes file is named using an **AI-Generated Title** (default) or the **Teams Meeting Name**.
 
 ---
 

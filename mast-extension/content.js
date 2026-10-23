@@ -70,6 +70,80 @@
     });
   }
 
+  function extractTeamsMeetingTitle() {
+    const genericNames = new Set([
+      'microsoft teams',
+      'teams',
+      'chat',
+      'calendar',
+      'activity',
+      'calls',
+      'files',
+      'onedrive',
+      'approvals',
+      'meeting',
+      'general',
+      'unknown'
+    ]);
+    const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
+    const isValidTitle = (str) => {
+      if (!str || str.length < 2) return false;
+      if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) return false;
+      return !genericNames.has(str.toLowerCase());
+    };
+
+    const titleSelectors = [
+      '[data-tid="call-title"]',
+      '[data-tid="meeting-title"]',
+      '[data-tid="calling-header-title"]',
+      '[data-tid="SimplifiedCallHeader-title"]',
+      '[data-tid="ubar-header-title"]',
+      '[data-tid="calling-top-bar"] [data-tid*="title" i]',
+      '[aria-label*="Meeting title" i]',
+      '.meeting-title',
+      '.call-title'
+    ];
+    for (const sel of titleSelectors) {
+      try {
+        const el = document.querySelector(sel);
+        if (el) {
+          const candidate = cleanSegment(el.innerText || el.textContent || el.getAttribute('title') || '');
+          if (isValidTitle(candidate)) {
+            return candidate;
+          }
+        }
+      } catch (_) {}
+    }
+
+    const docTitlesToCheck = [];
+    if (document.title) docTitlesToCheck.push(document.title);
+    try {
+      if (window.top && window.top.document && window.top.document.title) {
+        docTitlesToCheck.push(window.top.document.title);
+      }
+    } catch (_) {}
+
+    for (const rawDocTitle of docTitlesToCheck) {
+      const cleanDocTitle = cleanSegment(rawDocTitle);
+      const parts = cleanDocTitle.split('|').map(cleanSegment).filter(Boolean);
+      for (const part of parts) {
+        if (isValidTitle(part)) {
+          return part;
+        }
+      }
+    }
+
+    return "Meeting";
+  }
+
+  function syncMeetingTitleToStorage() {
+    if (!isTeamsMeetingActive()) return;
+    const title = extractTeamsMeetingTitle();
+    if (title && title !== "Meeting") {
+      chrome.storage.local.set({ meetingTitle: title });
+    }
+  }
+
   function removeStatusToast() {
     if (statusToastTimer) {
       clearTimeout(statusToastTimer);
@@ -199,6 +273,7 @@
     if (callCheckInterval) clearInterval(callCheckInterval);
     sawActiveMeeting = isTeamsMeetingActive();
     missingCallChecks = 0;
+    syncMeetingTitleToStorage();
 
     callCheckInterval = setInterval(() => {
       if (!isTranscribing) {
@@ -211,6 +286,7 @@
       if (active) {
         sawActiveMeeting = true;
         missingCallChecks = 0;
+        syncMeetingTitleToStorage();
         return;
       }
 
@@ -232,6 +308,7 @@
     if (observer) return;
     await fetchRemoteConfig();
     console.log("mast: startObserving() called. Looking for captions...");
+    syncMeetingTitleToStorage();
 
     chrome.storage.local.set({ issueDetected: false });
     if (issueTimer) clearTimeout(issueTimer);

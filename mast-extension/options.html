@@ -178,6 +178,15 @@
       <input type="text" id="customModel" placeholder="e.g., gemini-3.5-flash">
       <div class="help-text">Specify any valid model ID supported by the Gemini Developer API.</div>
     </div>
+
+    <div class="form-group">
+      <label for="titleSource">NOTES FILE NAMING</label>
+      <select id="titleSource">
+        <option value="ai">AI-Generated Title (Default)</option>
+        <option value="teams">Teams Meeting Name</option>
+      </select>
+      <div class="help-text">Choose whether the AI notes file is named by AI or matches the Teams meeting name.</div>
+    </div>
     
     <button id="saveBtn">Save Settings</button>
     <div id="status"></div>

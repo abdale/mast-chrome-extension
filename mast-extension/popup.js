@@ -1,4 +1,5 @@
 const viewApiKey = document.getElementById('view-api-key');
+const viewNoCall = document.getElementById('view-no-call');
 const viewMain = document.getElementById('view-main');
 const viewResults = document.getElementById('view-results');
 
@@ -141,9 +142,81 @@ async function checkPageStatus() {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => {
-        const captionsOn = !!document.querySelector('[data-tid="closed-captions-container"], [data-tid="closed-caption-text"], [data-tid="author"], [aria-label*="caption" i], .ui-captions-container');
-        const inActiveCall = captionsOn || !!document.querySelector('[data-tid="call-duration"], #hangup-button, button[data-tid="hangup-button"], button[data-tid="call-hangup"], button[aria-label="Leave call" i], button[aria-label="Leave meeting" i], button[aria-label="Hang up" i], [data-tid="calling-top-bar"], [data-tid="calling-screen"], [data-tid="meeting-stage"], [data-tid="calling-stage"]');
-        return { captionsOn: captionsOn, inActiveCall: inActiveCall, meetingTitle: "Meeting" };
+        const host = (window.location.hostname || '').toLowerCase();
+        const isTeamsHost =
+          host.includes('teams.microsoft.com') ||
+          host.includes('teams.live.com') ||
+          host.includes('teams.cloud.microsoft');
+
+        if (!isTeamsHost) {
+          return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
+        }
+
+        const captionsOn = !!document.querySelector(
+          '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], [data-tid="author"], .ui-captions-container'
+        );
+        const inActiveCall =
+          captionsOn ||
+          !!document.querySelector(
+            '[data-tid="call-duration"], #hangup-button, button[data-tid="hangup-button"], button[data-tid="call-hangup"], button[aria-label="Leave call" i], button[aria-label="Leave meeting" i], button[aria-label="Hang up" i], [data-tid="calling-top-bar"], [data-tid="calling-screen"], [data-tid="meeting-stage"], [data-tid="calling-stage"]'
+          );
+
+        const genericNames = new Set([
+          'microsoft teams',
+          'teams',
+          'chat',
+          'calendar',
+          'activity',
+          'calls',
+          'files',
+          'onedrive',
+          'approvals',
+          'meeting',
+          'general',
+          'unknown'
+        ]);
+        const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
+        const isValidTitle = (str) => {
+          if (!str || str.length < 2) return false;
+          if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) return false;
+          return !genericNames.has(str.toLowerCase());
+        };
+
+        let meetingTitle = "Meeting";
+        const titleSelectors = [
+          '[data-tid="call-title"]',
+          '[data-tid="meeting-title"]',
+          '[data-tid="calling-header-title"]',
+          '[data-tid="SimplifiedCallHeader-title"]',
+          '[data-tid="ubar-header-title"]',
+          '[data-tid="calling-top-bar"] [data-tid*="title" i]',
+          '[aria-label*="Meeting title" i]',
+          '.meeting-title',
+          '.call-title'
+        ];
+        for (const sel of titleSelectors) {
+          const el = document.querySelector(sel);
+          if (el) {
+            const candidate = cleanSegment(el.innerText || el.textContent || el.getAttribute('title') || '');
+            if (isValidTitle(candidate)) {
+              meetingTitle = candidate;
+              break;
+            }
+          }
+        }
+
+        if (meetingTitle === "Meeting" && document.title) {
+          const cleanDocTitle = cleanSegment(document.title);
+          const parts = cleanDocTitle.split('|').map(cleanSegment).filter(Boolean);
+          for (const part of parts) {
+            if (isValidTitle(part)) {
+              meetingTitle = part;
+              break;
+            }
+          }
+        }
+
+        return { captionsOn: captionsOn, inActiveCall: inActiveCall, meetingTitle: meetingTitle };
       }
     });
     if (!results) return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
@@ -159,6 +232,32 @@ async function checkPageStatus() {
         if (r.result.meetingTitle && r.result.meetingTitle !== "Meeting") meetingTitle = r.result.meetingTitle;
       }
     }
+
+    if (inActiveCall && meetingTitle === "Meeting" && tab.title) {
+      const genericNames = new Set([
+        'microsoft teams',
+        'teams',
+        'chat',
+        'calendar',
+        'activity',
+        'calls',
+        'files',
+        'onedrive',
+        'approvals',
+        'meeting',
+        'general',
+        'unknown'
+      ]);
+      const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
+      const parts = cleanSegment(tab.title).split('|').map(cleanSegment).filter(Boolean);
+      for (const part of parts) {
+        if (part.length >= 2 && !/^\d{1,2}:\d{2}(:\d{2})?$/.test(part) && !genericNames.has(part.toLowerCase())) {
+          meetingTitle = part;
+          break;
+        }
+      }
+    }
+
     return { captionsOn, inActiveCall, meetingTitle };
   } catch (e) {
     return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
@@ -181,7 +280,7 @@ function updateUI() {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const pageStatus = await checkPageStatus();
 
-    if (pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting") {
+    if (pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting") {
       chrome.storage.local.set({ meetingTitle: pageStatus.meetingTitle });
     }
 
@@ -196,13 +295,18 @@ function updateUI() {
       (switchedToNewTab || startedNewCallInSameTab || reopenedAfterCompletion) &&
       result.notesStatus !== 'generating'
     ) {
+      const nextMeetingTitle =
+        pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting"
+          ? pageStatus.meetingTitle
+          : "Meeting";
       chrome.storage.local.set({
         savedTranscript: [],
         isTranscribing: false,
         notesStatus: 'idle',
         notesError: '',
         transcriptDownloaded: false,
-        callEnded: false
+        callEnded: false,
+        meetingTitle: nextMeetingTitle
       });
       result.savedTranscript = [];
       result.isTranscribing = false;
@@ -214,6 +318,7 @@ function updateUI() {
     // 1. API Key View
     if (!result.apiKey) {
       viewApiKey.style.display = "block";
+      if (viewNoCall) viewNoCall.style.display = "none";
       viewMain.style.display = "none";
       viewResults.style.display = "none";
       validateBtn.innerText = "Save & Validate";
@@ -227,6 +332,7 @@ function updateUI() {
     if (result.isTranscribing) {
       sawSessionTransitionInPopup = true;
       viewApiKey.style.display = "none";
+      if (viewNoCall) viewNoCall.style.display = "none";
       viewMain.style.display = "block";
       viewResults.style.display = "none";
 
@@ -258,6 +364,7 @@ function updateUI() {
     if (!result.isTranscribing && hasTranscript) {
       sawSessionTransitionInPopup = true;
       viewApiKey.style.display = "none";
+      if (viewNoCall) viewNoCall.style.display = "none";
       viewMain.style.display = "none";
       viewResults.style.display = "block";
       stopTimer();
@@ -282,8 +389,19 @@ function updateUI() {
       return;
     }
 
-    // 4. Main View (Action-First Ready to Capture)
+    // 4. No Active Teams Call View
+    if (!pageStatus.inActiveCall) {
+      viewApiKey.style.display = "none";
+      if (viewNoCall) viewNoCall.style.display = "block";
+      viewMain.style.display = "none";
+      viewResults.style.display = "none";
+      stopTimer();
+      return;
+    }
+
+    // 5. Main View (Action-First Ready to Capture inside an active Teams call)
     viewApiKey.style.display = "none";
+    if (viewNoCall) viewNoCall.style.display = "none";
     viewMain.style.display = "block";
     viewResults.style.display = "none";
 
@@ -298,7 +416,7 @@ function updateUI() {
         ? "Captions enabled and ready. Do not disable live captions during the call."
         : "Live captions will be automatically enabled upon capture. Do not disable live captions during the call.";
     }
-    statusEl.innerHTML = "<span style='font-size: 10px; color: #666; display: inline-block; margin-top: 2px; line-height: 1.2;'>By starting, you confirm you have permission from all attendees to transcribe this session.</span>";
+    statusEl.innerText = "";
   });
 }
 
@@ -328,6 +446,11 @@ startBtn.addEventListener('click', async () => {
   sawSessionTransitionInPopup = true;
   const startTime = Date.now();
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const pageStatus = await checkPageStatus();
+  const initialMeetingTitle =
+    pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting"
+      ? pageStatus.meetingTitle
+      : "Meeting";
   chrome.storage.local.set({
     savedTranscript: [],
     isTranscribing: true,
@@ -337,7 +460,8 @@ startBtn.addEventListener('click', async () => {
     notesStatus: 'idle',
     notesError: '',
     transcriptDownloaded: false,
-    callEnded: false
+    callEnded: false,
+    meetingTitle: initialMeetingTitle
   }, () => {
     executeInActiveTab("start");
     updateUI();

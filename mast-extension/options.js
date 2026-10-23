@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const modelSelect = document.getElementById('modelSelect');
   const customModelContainer = document.getElementById('customModelContainer');
   const customModelInput = document.getElementById('customModel');
+  const titleSourceSelect = document.getElementById('titleSource');
   const saveBtn = document.getElementById('saveBtn');
   const statusEl = document.getElementById('status');
 
@@ -40,7 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Load saved settings
-  chrome.storage.local.get(['apiKey', 'modelSelectVal', 'customModelVal'], (result) => {
+  chrome.storage.local.get(['apiKey', 'modelSelectVal', 'customModelVal', 'titleSource'], (result) => {
     if (result.apiKey) {
       apiKeyInput.value = result.apiKey;
       loadModels(result.apiKey, result.modelSelectVal);
@@ -50,6 +51,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (result.customModelVal) {
       customModelInput.value = result.customModelVal;
+    }
+
+    if (titleSourceSelect) {
+      titleSourceSelect.value = result.titleSource === 'teams' ? 'teams' : 'ai';
     }
 
     // Trigger initial visibility of custom model container
@@ -125,6 +130,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const apiKey = apiKeyInput.value.trim();
     const modelSelectVal = modelSelect.value;
     const customModelVal = customModelInput.value.trim();
+    const titleSource = titleSourceSelect ? titleSourceSelect.value : 'ai';
     
     let selectedModel = modelSelectVal;
     
@@ -144,7 +150,8 @@ document.addEventListener('DOMContentLoaded', () => {
       apiKey: apiKey,
       selectedModel: selectedModel,
       modelSelectVal: modelSelectVal,
-      customModelVal: customModelVal
+      customModelVal: customModelVal,
+      titleSource: titleSource
     }, () => {
       statusEl.innerText = "Settings saved successfully!";
       statusEl.style.color = "#2e7d32";

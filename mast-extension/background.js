@@ -69,10 +69,25 @@ async function resolveActiveModel(apiKey, storedState) {
   return 'gemini-2.5-flash';
 }
 
-function getDateAndTimeStrings(dateObj = new Date()) {
-  const dateStr = dateObj.toISOString().split('T')[0];
-  const timeStr = dateObj.toTimeString().split(' ')[0].replace(/:/g, '-');
-  return { dateStr, timeStr };
+function formatShortDate(dateObj = new Date()) {
+  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const mon = months[dateObj.getMonth()];
+  const day = dateObj.getDate();
+  const year = dateObj.getFullYear();
+  return `${mon}${day}-${year}`;
+}
+
+function sanitizeFilenameTitle(rawTitle, fallback = 'meeting') {
+  if (!rawTitle || typeof rawTitle !== 'string') return fallback;
+  const sanitized = rawTitle
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .trim()
+    .replace(/[\s_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .substring(0, 60);
+  if (!sanitized || sanitized === 'title') return fallback;
+  return sanitized;
 }
 
 function downloadTextViaDataUrl(content, mimeType, filename) {
@@ -89,14 +104,15 @@ function downloadTextViaDataUrl(content, mimeType, filename) {
 }
 
 async function downloadTranscriptIfNeeded(forceDownload = false) {
-  const result = await chrome.storage.local.get(['savedTranscript', 'transcriptDownloaded']);
+  const result = await chrome.storage.local.get(['savedTranscript', 'transcriptDownloaded', 'meetingTitle']);
   const lines = result.savedTranscript || [];
   if (lines.length === 0) return false;
   if (!forceDownload && result.transcriptDownloaded) return false;
 
   const fullTranscript = lines.join('\n');
-  const { dateStr, timeStr } = getDateAndTimeStrings();
-  const filename = `transcript_${dateStr}_${timeStr}.txt`;
+  const meetingName = sanitizeFilenameTitle(result.meetingTitle, 'meeting');
+  const shortDate = formatShortDate();
+  const filename = `transcript_${meetingName}_${shortDate}.txt`;
 
   await downloadTextViaDataUrl(fullTranscript, 'text/plain', filename);
   await chrome.storage.local.set({ transcriptDownloaded: true });
@@ -116,7 +132,8 @@ async function generateAndDownloadNotes() {
       'selectedModel',
       'modelSelectVal',
       'customModelVal',
-      'meetingTitle'
+      'meetingTitle',
+      'titleSource'
     ]);
 
     const lines = result.savedTranscript || [];
@@ -218,17 +235,17 @@ ${fullTranscript}`;
       }
     }
 
-    let sanitizedTitle = aiTitle
-      .toLowerCase()
-      .replace(/[^a-z0-9\s_-]/g, '')
-      .trim()
-      .replace(/[\s-]+/g, '_')
-      .substring(0, 50);
+    const useTeamsTitle = result.titleSource === 'teams';
+    const hasTeamsTitle =
+      result.meetingTitle &&
+      typeof result.meetingTitle === 'string' &&
+      result.meetingTitle.trim() &&
+      result.meetingTitle.trim().toLowerCase() !== 'meeting';
 
-    if (!sanitizedTitle || sanitizedTitle === 'title') sanitizedTitle = "meeting";
-
-    const { dateStr, timeStr } = getDateAndTimeStrings();
-    const filename = `ai_summary_${sanitizedTitle}_${dateStr}_${timeStr}.md`;
+    const chosenTitle = useTeamsTitle && hasTeamsTitle ? result.meetingTitle.trim() : aiTitle;
+    const sanitizedTitle = sanitizeFilenameTitle(chosenTitle, 'meeting');
+    const shortDate = formatShortDate();
+    const filename = `ai_summary_${sanitizedTitle}_${shortDate}.md`;
 
     await downloadTextViaDataUrl(minutesText, 'text/markdown', filename);
 
@@ -299,7 +316,8 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
         activeTabId: null,
         notesStatus: 'idle',
         notesError: '',
-        transcriptDownloaded: false
+        transcriptDownloaded: false,
+        meetingTitle: 'Meeting'
       });
     }
   }
