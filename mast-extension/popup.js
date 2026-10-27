@@ -24,6 +24,13 @@ let timerInterval = null;
 let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 
+const WORKER_BUILD_VERSION = '2.7.6';
+chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
+  if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
+    chrome.runtime.reload();
+  }
+});
+
 settingsLink.addEventListener('click', (e) => {
   e.preventDefault();
   window.open(chrome.runtime.getURL('options.html'));
@@ -141,28 +148,33 @@ function stopTimer() {
 async function checkPageStatus() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
+  const tabUrl = (tab.url || '').toLowerCase();
+  const isTeamsTab =
+    tabUrl.includes('teams.microsoft.com') ||
+    tabUrl.includes('teams.live.com') ||
+    tabUrl.includes('teams.cloud.microsoft');
+  if (!isTeamsTab) {
+    return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
+  }
   try {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => {
-        const host = (window.location.hostname || '').toLowerCase();
-        const isTeamsHost =
-          host.includes('teams.microsoft.com') ||
-          host.includes('teams.live.com') ||
-          host.includes('teams.cloud.microsoft');
-
-        if (!isTeamsHost) {
-          return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
-        }
-
         const captionsOn = !!document.querySelector(
           '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], [data-tid="author"], .ui-captions-container'
         );
+        const isPreJoin =
+          !!document.querySelector(
+            '[data-tid="prejoin-join-button"], button[data-tid="prejoin-join-button"], button[aria-label^="Join now" i]'
+          ) &&
+          !document.querySelector('#hangup-button, [data-tid="hangup-main-btn"], [data-tid="hangup-button"]');
+
         const inActiveCall =
           captionsOn ||
-          !!document.querySelector(
-            '[data-tid="call-duration"], #hangup-button, button[data-tid="hangup-button"], button[data-tid="call-hangup"], button[aria-label="Leave call" i], button[aria-label="Leave meeting" i], button[aria-label="Hang up" i], [data-tid="calling-top-bar"], [data-tid="calling-screen"], [data-tid="meeting-stage"], [data-tid="calling-stage"]'
-          );
+          (!isPreJoin &&
+            !!document.querySelector(
+              '[data-tid="call-duration"], #hangup-button, button[data-tid="hangup-button"], [data-tid="hangup-main-btn"], [data-tid="hangup-chevron-btn"], button[data-tid="call-hangup"], button[id*="hangup" i], button[data-tid*="hangup" i], button[aria-label="Leave" i], button[aria-label^="Leave (" i], button[aria-label*="Leave call" i], button[aria-label*="Leave meeting" i], button[aria-label*="Hang up" i], #callingButtons-showMoreBtn, [data-tid="callingButtons-showMoreBtn"], #share-button, [data-tid="share-button"], [data-tid="calling-top-bar"], [data-tid="calling-screen"], [data-tid="meeting-stage"], [data-tid="calling-stage"], [data-tid="modern-calling-Header"], [data-tid="call-Composite"], [data-tid="call-status-container"]'
+            ));
 
         const genericNames = new Set([
           'microsoft teams',
@@ -292,7 +304,11 @@ function updateUI() {
     const switchedToNewTab = !!(result.activeTabId && result.activeTabId !== currentTabId);
     const startedNewCallInSameTab = !!(result.callEnded && pageStatus.inActiveCall && !result.isTranscribing);
     const inNewActiveMeeting = !!(pageStatus.inActiveCall && (switchedToNewTab || result.callEnded) && !result.isTranscribing);
-    const reopenedAfterCompletion = !!(result.notesStatus === 'done' && !sawSessionTransitionInPopup && !result.isTranscribing);
+    const reopenedAfterCompletion = !!(
+      (result.notesStatus === 'done' || !result.notesStatus || result.notesStatus === 'idle') &&
+      !sawSessionTransitionInPopup &&
+      !result.isTranscribing
+    );
     const isGeneratingStale =
       result.notesStatus === 'generating' &&
       (!result.generationStartedAt || Date.now() - result.generationStartedAt > 75000);

@@ -1,6 +1,32 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
+const WORKER_BUILD_VERSION = '2.7.6';
 let isGeneratingInMemory = false;
+
+const TEAMS_URL_PATTERNS = [
+  "https://teams.microsoft.com/*",
+  "https://*.teams.microsoft.com/*",
+  "https://teams.live.com/*",
+  "https://*.teams.live.com/*",
+  "https://teams.cloud.microsoft/*",
+  "https://*.teams.cloud.microsoft/*"
+];
+
+async function injectContentScriptIntoOpenTeamsTabs() {
+  try {
+    const tabs = await chrome.tabs.query({ url: TEAMS_URL_PATTERNS });
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          files: ['content.js']
+        }, () => {
+          void chrome.runtime.lastError;
+        });
+      }
+    }
+  } catch (_) {}
+}
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 45000) {
   const controller = new AbortController();
@@ -134,7 +160,10 @@ function downloadTextViaDataUrl(content, mimeType, filename) {
 
 async function saveToRecentMeetings(lines, meetingTitle, startTime) {
   if (!lines || lines.length === 0) return null;
-  const sessionTimestamp = startTime || Date.now();
+  const stored = await chrome.storage.local.get(['recentMeetings', 'startTime']);
+  const recent = Array.isArray(stored.recentMeetings) ? stored.recentMeetings : [];
+
+  const sessionTimestamp = startTime || stored.startTime || Date.now();
   const sessionId = String(sessionTimestamp);
   const dateObj = new Date(sessionTimestamp);
   const shortDate = formatShortDate(dateObj);
@@ -147,9 +176,6 @@ async function saveToRecentMeetings(lines, meetingTitle, startTime) {
     meetingTitle && typeof meetingTitle === 'string' && meetingTitle.trim()
       ? meetingTitle.trim()
       : 'Meeting';
-
-  const stored = await chrome.storage.local.get(['recentMeetings']);
-  const recent = Array.isArray(stored.recentMeetings) ? stored.recentMeetings : [];
 
   const existingIdx = recent.findIndex((m) => m.id === sessionId);
   const existingEntry = existingIdx >= 0 ? recent[existingIdx] : null;
@@ -170,16 +196,23 @@ async function saveToRecentMeetings(lines, meetingTitle, startTime) {
   recent.unshift(entry);
 
   const trimmed = recent.slice(0, 5);
-  await chrome.storage.local.set({ recentMeetings: trimmed });
+  await chrome.storage.local.set({
+    recentMeetings: trimmed,
+    startTime: sessionTimestamp
+  });
   return entry;
 }
 
 async function updateRecentMeetingTitle(sessionId, newTitle) {
-  if (!sessionId || !newTitle || newTitle === 'Meeting') return;
+  if (!newTitle || newTitle === 'Meeting') return;
   const stored = await chrome.storage.local.get(['recentMeetings']);
   const recent = Array.isArray(stored.recentMeetings) ? stored.recentMeetings : [];
-  const idx = recent.findIndex((m) => m.id === String(sessionId));
-  if (idx >= 0 && (!recent[idx].title || recent[idx].title === 'Meeting')) {
+  if (recent.length === 0) return;
+
+  let idx = sessionId ? recent.findIndex((m) => m.id === String(sessionId)) : 0;
+  if (idx < 0) idx = 0;
+
+  if (!recent[idx].title || recent[idx].title === 'Meeting' || recent[idx].title === 'meeting') {
     recent[idx].title = newTitle;
     await chrome.storage.local.set({ recentMeetings: recent });
   }
@@ -253,8 +286,9 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
       return { status: "error", error: "API Key missing." };
     }
 
+    let savedEntry = null;
     if (!isHistoryRegen) {
-      await saveToRecentMeetings(lines, result.meetingTitle, result.startTime);
+      savedEntry = await saveToRecentMeetings(lines, result.meetingTitle, result.startTime);
       await chrome.storage.local.set({
         notesStatus: 'generating',
         notesError: '',
@@ -362,7 +396,7 @@ ${fullTranscript}`;
     if (isHistoryRegen) {
       await updateRecentMeetingTitle(overrideMeeting.id, chosenTitle);
     } else {
-      await updateRecentMeetingTitle(result.startTime, chosenTitle);
+      await updateRecentMeetingTitle(savedEntry ? savedEntry.id : result.startTime, chosenTitle);
       await chrome.storage.local.set({
         notesStatus: 'done',
         notesError: ''
@@ -439,6 +473,48 @@ async function stopTabAndFinalize(tabId) {
   return await handleSessionEnded();
 }
 
+async function startFromToast(sender, meetingTitle) {
+  const stored = await chrome.storage.local.get(['apiKey']);
+  if (!stored.apiKey || !stored.apiKey.trim()) {
+    chrome.runtime.openOptionsPage();
+    return { status: "no_api_key" };
+  }
+
+  const startTime = Date.now();
+  const tabId = sender && sender.tab ? sender.tab.id : null;
+  const initialTitle =
+    meetingTitle && typeof meetingTitle === 'string' && meetingTitle.trim() && meetingTitle.trim() !== 'Meeting'
+      ? meetingTitle.trim()
+      : 'Meeting';
+
+  await chrome.storage.local.set({
+    savedTranscript: [],
+    isTranscribing: true,
+    startTime: startTime,
+    issueDetected: false,
+    activeTabId: tabId,
+    notesStatus: 'idle',
+    notesError: '',
+    transcriptDownloaded: false,
+    callEnded: false,
+    meetingTitle: initialTitle
+  });
+
+  if (tabId) {
+    chrome.scripting.executeScript({
+      target: { tabId: tabId, allFrames: true },
+      files: ['content.js']
+    }, () => {
+      void chrome.runtime.lastError;
+      chrome.tabs.sendMessage(tabId, { action: "start" }, () => {
+        void chrome.runtime.lastError;
+      });
+    });
+  }
+
+  return { status: "started", startTime };
+}
+
 async function recoverStuckGenerationIfNeeded() {
   if (isGeneratingInMemory) {
     return { status: "generating_in_memory" };
@@ -453,8 +529,6 @@ async function recoverStuckGenerationIfNeeded() {
     return { status: result.notesStatus || "idle" };
   }
 
-  // If notesStatus is 'generating' in storage but the worker is NOT running a generation in memory,
-  // wait a brief grace window if it was just set, otherwise resume or recover immediately.
   const ageMs = result.generationStartedAt ? Date.now() - result.generationStartedAt : Infinity;
   if (ageMs < 2000) {
     return { status: "starting" };
@@ -474,23 +548,57 @@ async function recoverStuckGenerationIfNeeded() {
   return await handleSessionEnded();
 }
 
-// Auto-migrate model selection and recover any interrupted generation when extension is installed or updated
+async function backfillRecentMeetingsIfNeeded() {
+  const result = await chrome.storage.local.get(['savedTranscript', 'meetingTitle', 'startTime']);
+  if (result.savedTranscript && result.savedTranscript.length > 0) {
+    await saveToRecentMeetings(result.savedTranscript, result.meetingTitle, result.startTime);
+  }
+}
+
+// Auto-migrate model selection, inject content script, and recover any interrupted generation on install/reload
 chrome.runtime.onInstalled.addListener(async () => {
   const result = await chrome.storage.local.get([
     'apiKey',
     'selectedModel',
     'modelSelectVal',
     'customModelVal',
-    'userSelectedModel'
+    'userSelectedModel',
+    'reopenOptionsAfterReload'
   ]);
+  if (result.reopenOptionsAfterReload) {
+    await chrome.storage.local.set({ reopenOptionsAfterReload: false });
+    chrome.runtime.openOptionsPage();
+  }
   if (result.apiKey) {
     await resolveActiveModel(result.apiKey, result);
   }
+  await backfillRecentMeetingsIfNeeded();
+  await injectContentScriptIntoOpenTeamsTabs();
   await recoverStuckGenerationIfNeeded();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
+  await backfillRecentMeetingsIfNeeded();
+  await injectContentScriptIntoOpenTeamsTabs();
   await recoverStuckGenerationIfNeeded();
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab && tab.url) {
+    const url = tab.url.toLowerCase();
+    if (
+      url.includes('teams.microsoft.com') ||
+      url.includes('teams.live.com') ||
+      url.includes('teams.cloud.microsoft')
+    ) {
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        files: ['content.js']
+      }, () => {
+        void chrome.runtime.lastError;
+      });
+    }
+  }
 });
 
 // Safety net: if the user closes the Teams tab, finalize any active session & clean up state
@@ -518,7 +626,17 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === "session_ended") {
+  if (request.action === "get_worker_version") {
+    sendResponse({ version: WORKER_BUILD_VERSION });
+    return false;
+  } else if (request.action === "start_from_toast") {
+    startFromToast(sender, request.meetingTitle).then(sendResponse);
+    return true;
+  } else if (request.action === "open_options") {
+    chrome.runtime.openOptionsPage();
+    sendResponse({ status: "opened" });
+    return false;
+  } else if (request.action === "session_ended") {
     handleSessionEnded().then(sendResponse);
     return true;
   } else if (request.action === "stop_and_finalize") {

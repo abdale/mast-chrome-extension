@@ -1,4 +1,13 @@
 document.addEventListener('DOMContentLoaded', () => {
+  const WORKER_BUILD_VERSION = '2.7.6';
+  chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
+    if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
+      chrome.storage.local.set({ reopenOptionsAfterReload: true }, () => {
+        chrome.runtime.reload();
+      });
+    }
+  });
+
   const apiKeyInput = document.getElementById('apiKey');
   const modelSelect = document.getElementById('modelSelect');
   const customModelContainer = document.getElementById('customModelContainer');
@@ -116,7 +125,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Load saved settings
   chrome.storage.local.get(
-    ['apiKey', 'modelSelectVal', 'customModelVal', 'userSelectedModel', 'titleSource', 'recentMeetings'],
+    [
+      'apiKey',
+      'modelSelectVal',
+      'customModelVal',
+      'userSelectedModel',
+      'titleSource',
+      'recentMeetings',
+      'savedTranscript',
+      'meetingTitle',
+      'startTime'
+    ],
     (result) => {
       if (result.apiKey) {
         apiKeyInput.value = result.apiKey;
@@ -133,7 +152,24 @@ document.addEventListener('DOMContentLoaded', () => {
         titleSourceSelect.value = result.titleSource === 'teams' ? 'teams' : 'ai';
       }
 
-      renderRecentMeetings(result.recentMeetings || []);
+      let recent = Array.isArray(result.recentMeetings) ? result.recentMeetings : [];
+      if (recent.length === 0 && Array.isArray(result.savedTranscript) && result.savedTranscript.length > 0) {
+        const ts = result.startTime || Date.now();
+        const dateObj = new Date(ts);
+        const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+        const entry = {
+          id: String(ts),
+          title: result.meetingTitle || 'Meeting',
+          teamsTitle: result.meetingTitle || 'Meeting',
+          shortDate: `${months[dateObj.getMonth()]}${dateObj.getDate()}-${dateObj.getFullYear()}`,
+          displayDate: dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          timestamp: ts,
+          lines: result.savedTranscript
+        };
+        recent = [entry];
+        chrome.storage.local.set({ recentMeetings: recent });
+      }
+      renderRecentMeetings(recent);
 
       // Trigger initial visibility of custom model container
       toggleCustomModelVisibility();
