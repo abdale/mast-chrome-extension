@@ -68,7 +68,8 @@ async function validateApiKey(key) {
     if (!response.ok) return { valid: false, latestFlashModel: null };
     const data = await response.json();
     const topFlash = getTopStableFlashModels(data.models);
-    const defaultModel = topFlash.length > 0 ? topFlash[0].name.replace('models/', '') : 'gemini-2.5-flash';
+    const preferredModel = topFlash.length >= 2 ? topFlash[1] : topFlash[0];
+    const defaultModel = preferredModel ? preferredModel.name.replace('models/', '') : 'gemini-2.5-flash';
 
     return { valid: true, latestFlashModel: defaultModel };
   } catch (error) {
@@ -298,7 +299,8 @@ function updateUI() {
       result.savedTranscript &&
       result.savedTranscript.length > 0 &&
       (switchedToNewTab || startedNewCallInSameTab || reopenedAfterCompletion) &&
-      (result.notesStatus !== 'generating' || isGeneratingStale)
+      (result.notesStatus !== 'generating' || isGeneratingStale) &&
+      (result.notesStatus !== 'error' || startedNewCallInSameTab)
     ) {
       const nextMeetingTitle =
         pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting"

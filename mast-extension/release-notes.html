@@ -123,8 +123,8 @@
         <li><strong>Active Call Detection:</strong> Displays a clean empty state when no active Microsoft Teams call is detected in the current tab.</li>
         <li><strong>Notes File Naming Setting:</strong> Added an option in Settings to name AI summary files using either an <strong>AI-Generated Title</strong> (default) or the <strong>Teams Meeting Name</strong>.</li>
         <li><strong>Improved Teams Meeting Title Extraction:</strong> Reliably detects the Teams meeting title from the call header and tab title while ignoring unread notification counts and chat/navigation labels.</li>
-        <li><strong>Streamlined File Naming Format:</strong> Standardized downloaded filenames to <code>transcript_&lt;meeting_name&gt;_&lt;monDD-YYYY&gt;.txt</code> and <code>ai_summary_&lt;title&gt;_&lt;monDD-YYYY&gt;.md</code>.</li>
-        <li><strong>Reliability &amp; Recovery Improvements:</strong> Added background service worker keepalive, request timeouts, and automatic recovery so note generation never gets stuck on completion.</li>
+        <li><strong>Streamlined File Naming Format:</strong> Standardized downloaded filenames to <code>transcript_&lt;meeting_name&gt;_&lt;monDD-YYYY&gt;.txt</code> and <code>&lt;title&gt;_&lt;monDD-YYYY&gt;.md</code>.</li>
+        <li><strong>Recent Meetings &amp; Reliability Improvements:</strong> Defaulted to the second-latest stable Gemini Flash model for higher endpoint availability, preserved failed sessions for retry even after closing the call tab, and added a <strong>Recent Meetings</strong> list in Settings to regenerate notes for the last 5 meetings.</li>
         <li><strong>UI Refinements:</strong> Updated header branding to <strong>mast</strong> for Teams, added an About section and Release Notes in Settings, and linked <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a> for API key setup instructions.</li>
       </ul>
     </div>
