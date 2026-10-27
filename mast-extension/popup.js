@@ -1,6 +1,5 @@
 const viewApiKey = document.getElementById('view-api-key');
-const viewNoMeeting = document.getElementById('view-no-meeting');
-const viewCaptions = document.getElementById('view-captions');
+const viewNoCall = document.getElementById('view-no-call');
 const viewMain = document.getElementById('view-main');
 const viewResults = document.getElementById('view-results');
 
@@ -10,36 +9,80 @@ const apiError = document.getElementById('apiError');
 const activeModelDisplay = document.getElementById('activeModelDisplay');
 
 const startBtn = document.getElementById('startBtn');
-const magicBtn = document.getElementById('magicBtn');
-const stopLink = document.getElementById('stopLink');
-const downloadBtn = document.getElementById('downloadBtn');
-const generateBtn = document.getElementById('generateBtn');
-const newSessionBtn = document.getElementById('newSessionBtn');
-
-const timerEl = document.getElementById('timer');
-const statusEl = document.getElementById('status');
-const resultsStatus = document.getElementById('resultsStatus');
+const captionHelperText = document.getElementById('captionHelperText');
+const enableCaptionsBtn = document.getElementById('enableCaptionsBtn');
 const issueBanner = document.getElementById('issueBanner');
+const stopLink = document.getElementById('stopLink');
+const statusEl = document.getElementById('status');
+const timerEl = document.getElementById('timer');
 const settingsLink = document.getElementById('settingsLink');
-const manualFallbackText = document.getElementById('manualFallbackText');
+
+const resultsStatus = document.getElementById('resultsStatus');
+const retryBtn = document.getElementById('retryBtn');
+const dismissBtn = document.getElementById('dismissBtn');
 
 let timerInterval = null;
 let pollInterval = null;
+let sawSessionTransitionInPopup = false;
+
+const WORKER_BUILD_VERSION = '2.7.6';
+chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
+  if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
+    chrome.runtime.reload();
+  }
+});
 
 settingsLink.addEventListener('click', (e) => {
   e.preventDefault();
   window.open(chrome.runtime.getURL('options.html'));
 });
 
-async function validateApiKey(key, model) {
-  const cleanModel = (model || 'gemini-3.0-flash').trim().replace(/^models\//, '');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}?key=${key.trim()}`;
+function getTopStableFlashModels(models) {
+  const validModels = (models || []).filter(
+    m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent")
+  );
+
+  const familyMap = new Map();
+  for (const m of validModels) {
+    const match = m.name.match(/^models\/gemini-(\d+)(?:\.(\d+))?-flash(?:-(\d{3}))?$/i);
+    if (!match) continue;
+
+    const major = parseInt(match[1], 10);
+    const minor = match[2] !== undefined ? parseInt(match[2], 10) : 0;
+    const rev = match[3] !== undefined ? parseInt(match[3], 10) : null;
+    const familyKey = `${major}.${minor}`;
+
+    const existing = familyMap.get(familyKey);
+    if (!existing) {
+      familyMap.set(familyKey, { model: m, major, minor, rev });
+    } else if (rev === null && existing.rev !== null) {
+      familyMap.set(familyKey, { model: m, major, minor, rev });
+    } else if (rev !== null && existing.rev !== null && rev > existing.rev) {
+      familyMap.set(familyKey, { model: m, major, minor, rev });
+    }
+  }
+
+  const sorted = Array.from(familyMap.values()).sort((a, b) => {
+    if (b.major !== a.major) return b.major - a.major;
+    return b.minor - a.minor;
+  });
+
+  return sorted.slice(0, 2).map(entry => entry.model);
+}
+
+async function validateApiKey(key) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
   try {
-    const res = await fetch(url);
-    if (!res.ok) return false;
-    return true;
-  } catch (e) {
-    return false;
+    const response = await fetch(url);
+    if (!response.ok) return { valid: false, latestFlashModel: null };
+    const data = await response.json();
+    const topFlash = getTopStableFlashModels(data.models);
+    const preferredModel = topFlash.length >= 2 ? topFlash[1] : topFlash[0];
+    const defaultModel = preferredModel ? preferredModel.name.replace('models/', '') : 'gemini-2.5-flash';
+
+    return { valid: true, latestFlashModel: defaultModel };
+  } catch (error) {
+    return { valid: false, latestFlashModel: null };
   }
 }
 
@@ -54,22 +97,22 @@ validateBtn.addEventListener('click', async () => {
   validateBtn.innerText = "Validating...";
   validateBtn.disabled = true;
   apiError.style.display = "none";
-  
-  chrome.storage.local.get(['selectedModel', 'cachedModels'], async (result) => {
-    let model = result.selectedModel;
-    if (!model && result.cachedModels && result.cachedModels.length > 0) {
-      model = result.cachedModels[0].id;
-    }
-    if (!model) {
-      model = 'gemini-3.0-flash';
-    }
-    const isValid = await validateApiKey(key, model);
-    if (isValid) {
+
+  chrome.storage.local.get(['selectedModel', 'modelSelectVal'], async (result) => {
+    const validation = await validateApiKey(key);
+
+    if (validation.valid) {
+      if (!result.selectedModel || result.modelSelectVal !== 'custom') {
+        chrome.storage.local.set({
+          selectedModel: validation.latestFlashModel,
+          modelSelectVal: validation.latestFlashModel
+        });
+      }
       chrome.storage.local.set({ apiKey: key }, () => {
         updateUI();
       });
     } else {
-      apiError.innerText = `Invalid API Key or model (${model}) is unavailable. Please try again.`;
+      apiError.innerText = "Invalid API Key. Please try again.";
       apiError.style.display = "block";
       validateBtn.innerText = "Save & Validate";
       validateBtn.disabled = false;
@@ -100,93 +143,203 @@ function stopTimer() {
 
 async function checkActiveMeeting() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id || !tab.url || (!tab.url.includes("teams.microsoft.com") && !tab.url.includes("teams.live.com"))) {
-    return { isTeams: false, inMeeting: false };
+  if (!tab) return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
+  const tabUrl = (tab.url || '').toLowerCase();
+  const isTeamsTab =
+    tabUrl.includes('teams.microsoft.com') ||
+    tabUrl.includes('teams.live.com') ||
+    tabUrl.includes('teams.cloud.microsoft');
+  if (!isTeamsTab) {
+    return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
   }
   try {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => {
-        const callIndicators = [
-          '[data-tid="call-duration"]',
-          '#hangup-button',
-          'button[data-tid="hangup-button"]',
-          'button[data-tid="call-hangup"]',
-          'button[aria-label="Leave call" i]',
-          'button[aria-label="Leave meeting" i]',
-          'button[aria-label="Hang up" i]',
-          '[data-tid="calling-top-bar"]',
-          '[data-tid="calling-screen"]',
-          '[data-tid="meeting-stage"]',
-          '[data-tid="calling-stage"]',
-          '[data-tid="closed-captions-container"]',
-          '[data-tid="closed-caption-renderer-wrapper"]'
+        const captionsOn = !!document.querySelector(
+          '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], [data-tid="author"], .ui-captions-container'
+        );
+        const isPreJoin =
+          !!document.querySelector(
+            '[data-tid="prejoin-join-button"], button[data-tid="prejoin-join-button"], button[aria-label^="Join now" i]'
+          ) &&
+          !document.querySelector('#hangup-button, [data-tid="hangup-main-btn"], [data-tid="hangup-button"]');
+
+        const inActiveCall =
+          captionsOn ||
+          (!isPreJoin &&
+            !!document.querySelector(
+              '[data-tid="call-duration"], #hangup-button, button[data-tid="hangup-button"], [data-tid="hangup-main-btn"], [data-tid="hangup-chevron-btn"], button[data-tid="call-hangup"], button[id*="hangup" i], button[data-tid*="hangup" i], button[aria-label="Leave" i], button[aria-label^="Leave (" i], button[aria-label*="Leave call" i], button[aria-label*="Leave meeting" i], button[aria-label*="Hang up" i], #callingButtons-showMoreBtn, [data-tid="callingButtons-showMoreBtn"], #share-button, [data-tid="share-button"], [data-tid="calling-top-bar"], [data-tid="calling-screen"], [data-tid="meeting-stage"], [data-tid="calling-stage"], [data-tid="modern-calling-Header"], [data-tid="call-Composite"], [data-tid="call-status-container"]'
+            ));
+
+        const genericNames = new Set([
+          'microsoft teams',
+          'teams',
+          'chat',
+          'calendar',
+          'activity',
+          'calls',
+          'files',
+          'onedrive',
+          'approvals',
+          'meeting',
+          'general',
+          'unknown'
+        ]);
+        const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
+        const isValidTitle = (str) => {
+          if (!str || str.length < 2) return false;
+          if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) return false;
+          return !genericNames.has(str.toLowerCase());
+        };
+
+        let meetingTitle = "Meeting";
+        const titleSelectors = [
+          '[data-tid="call-title"]',
+          '[data-tid="meeting-title"]',
+          '[data-tid="calling-header-title"]',
+          '[data-tid="SimplifiedCallHeader-title"]',
+          '[data-tid="ubar-header-title"]',
+          '[data-tid="calling-top-bar"] [data-tid*="title" i]',
+          '[aria-label*="Meeting title" i]',
+          '.meeting-title',
+          '.call-title'
         ];
-        return callIndicators.some(sel => !!document.querySelector(sel));
+        for (const sel of titleSelectors) {
+          const el = document.querySelector(sel);
+          if (el) {
+            const candidate = cleanSegment(el.innerText || el.textContent || el.getAttribute('title') || '');
+            if (isValidTitle(candidate)) {
+              meetingTitle = candidate;
+              break;
+            }
+          }
+        }
+
+        if (meetingTitle === "Meeting" && document.title) {
+          const cleanDocTitle = cleanSegment(document.title);
+          const parts = cleanDocTitle.split('|').map(cleanSegment).filter(Boolean);
+          for (const part of parts) {
+            if (isValidTitle(part)) {
+              meetingTitle = part;
+              break;
+            }
+          }
+        }
+
+        return { captionsOn: captionsOn, inActiveCall: inActiveCall, meetingTitle: meetingTitle };
       }
     });
-    const inMeeting = results && results.some(r => r.result === true);
-    return { isTeams: true, inMeeting };
-  } catch (e) {
-    return { isTeams: true, inMeeting: false };
-  }
-}
+    if (!results) return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
 
-async function checkCaptions() {
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id) return false;
-  try {
-    let results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
-      func: () => {
-        // True caption rendering elements
-        const captionElements = document.querySelector(
-          '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], .ui-captions-container'
-        );
-        if (captionElements) return true;
+    let captionsOn = false;
+    let inActiveCall = false;
+    let meetingTitle = "Meeting";
 
-        // Button that is already turned on (pressed/checked or labeled 'Turn off')
-        const activeToggle = document.querySelector(
-          'button[aria-label*="Turn off live captions" i], button[aria-label*="caption" i][aria-pressed="true"], button[aria-label*="caption" i][aria-checked="true"], button[data-tid*="caption"][aria-pressed="true"]'
-        );
-        return !!activeToggle;
+    for (let r of results) {
+      if (r.result) {
+        if (r.result.captionsOn) captionsOn = true;
+        if (r.result.inActiveCall) inActiveCall = true;
+        if (r.result.meetingTitle && r.result.meetingTitle !== "Meeting") meetingTitle = r.result.meetingTitle;
       }
-    });
-    return results && results.some(r => r.result === true);
+    }
+
+    if (inActiveCall && meetingTitle === "Meeting" && tab.title) {
+      const genericNames = new Set([
+        'microsoft teams',
+        'teams',
+        'chat',
+        'calendar',
+        'activity',
+        'calls',
+        'files',
+        'onedrive',
+        'approvals',
+        'meeting',
+        'general',
+        'unknown'
+      ]);
+      const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
+      const parts = cleanSegment(tab.title).split('|').map(cleanSegment).filter(Boolean);
+      for (const part of parts) {
+        if (part.length >= 2 && !/^\d{1,2}:\d{2}(:\d{2})?$/.test(part) && !genericNames.has(part.toLowerCase())) {
+          meetingTitle = part;
+          break;
+        }
+      }
+    }
+
+    return { captionsOn, inActiveCall, meetingTitle };
   } catch (e) {
-    return false;
+    return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
   }
 }
 
 function updateUI() {
-  chrome.storage.local.get(['apiKey', 'isTranscribing', 'savedTranscript', 'startTime', 'issueDetected', 'activeTabId', 'selectedModel', 'cachedModels'], async (result) => {
-    let model = result.selectedModel;
-    if (!model && result.cachedModels && result.cachedModels.length > 0) {
-      model = result.cachedModels[0].id;
-    }
-    if (!model) {
-      model = 'gemini-3.0-flash';
-    }
-    if (activeModelDisplay) {
-      activeModelDisplay.innerText = `Model: ${model.replace('-latest', '')}`;
-    }
-    
+  chrome.storage.local.get([
+    'apiKey',
+    'isTranscribing',
+    'savedTranscript',
+    'startTime',
+    'issueDetected',
+    'activeTabId',
+    'selectedModel',
+    'notesStatus',
+    'notesError',
+    'callEnded',
+    'generationStartedAt'
+  ], async (result) => {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const pageStatus = await checkPageStatus();
+
+    if (pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting") {
+      chrome.storage.local.set({ meetingTitle: pageStatus.meetingTitle });
+    }
+
     let currentTabId = tab ? tab.id : null;
-    
-    // Only clear if a live transcription session was active and user switched away from that tab
-    if (result.isTranscribing && result.activeTabId && result.activeTabId !== currentTabId) {
-       chrome.storage.local.set({ savedTranscript: [], isTranscribing: false, activeTabId: null });
-       result.savedTranscript = [];
-       result.isTranscribing = false;
-       result.activeTabId = null;
+    const switchedToNewTab = !!(result.activeTabId && result.activeTabId !== currentTabId);
+    const startedNewCallInSameTab = !!(result.callEnded && pageStatus.inActiveCall && !result.isTranscribing);
+    const inNewActiveMeeting = !!(pageStatus.inActiveCall && (switchedToNewTab || result.callEnded) && !result.isTranscribing);
+    const reopenedAfterCompletion = !!(
+      (result.notesStatus === 'done' || !result.notesStatus || result.notesStatus === 'idle') &&
+      !sawSessionTransitionInPopup &&
+      !result.isTranscribing
+    );
+    const isGeneratingStale =
+      result.notesStatus === 'generating' &&
+      (!result.generationStartedAt || Date.now() - result.generationStartedAt > 75000);
+
+    if (
+      result.savedTranscript &&
+      result.savedTranscript.length > 0 &&
+      (switchedToNewTab || startedNewCallInSameTab || reopenedAfterCompletion) &&
+      (result.notesStatus !== 'generating' || isGeneratingStale) &&
+      (result.notesStatus !== 'error' || inNewActiveMeeting)
+    ) {
+      const nextMeetingTitle =
+        pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting"
+          ? pageStatus.meetingTitle
+          : "Meeting";
+      chrome.storage.local.set({
+        savedTranscript: [],
+        isTranscribing: false,
+        notesStatus: 'idle',
+        notesError: '',
+        transcriptDownloaded: false,
+        callEnded: false,
+        meetingTitle: nextMeetingTitle
+      });
+      result.savedTranscript = [];
+      result.isTranscribing = false;
+      result.notesStatus = 'idle';
+      result.notesError = '';
+      result.callEnded = false;
     }
 
     // 1. API Key View
     if (!result.apiKey) {
       viewApiKey.style.display = "block";
-      if (viewNoMeeting) viewNoMeeting.style.display = "none";
-      viewCaptions.style.display = "none";
+      if (viewNoCall) viewNoCall.style.display = "none";
       viewMain.style.display = "none";
       viewResults.style.display = "none";
       const viewUpload = document.getElementById('view-upload');
@@ -208,16 +361,16 @@ function updateUI() {
 
     // 2. Transcribing in progress always shows Main View
     if (result.isTranscribing) {
+      sawSessionTransitionInPopup = true;
       viewApiKey.style.display = "none";
-      if (viewNoMeeting) viewNoMeeting.style.display = "none";
-      viewCaptions.style.display = "none";
+      if (viewNoCall) viewNoCall.style.display = "none";
       viewMain.style.display = "block";
       viewResults.style.display = "none";
 
       if (result.issueDetected) {
-         issueBanner.style.display = "block";
+        issueBanner.style.display = "block";
       } else {
-         issueBanner.style.display = "none";
+        issueBanner.style.display = "none";
       }
 
       const promptEl = document.getElementById('mainMeetingPrompt');
@@ -226,404 +379,202 @@ function updateUI() {
       startBtn.disabled = true;
       stopLink.style.display = "block";
       statusEl.innerText = "Transcribing in progress...";
-      if (result.startTime) {
-        startTimer(result.startTime);
+
+      const startTime = result.startTime || Date.now();
+      startTimer(startTime);
+
+      if (captionHelperText) {
+        if (!pageStatus.captionsOn && Date.now() - startTime >= 4000) {
+          captionHelperText.style.display = "block";
+          captionHelperText.style.color = "#d32f2f";
+          captionHelperText.innerText = "Live captions are off. Enable captions to continue capturing.";
+          if (enableCaptionsBtn) enableCaptionsBtn.style.display = "block";
+        } else {
+          captionHelperText.style.display = "none";
+          captionHelperText.style.color = "#5f6368";
+          if (enableCaptionsBtn) enableCaptionsBtn.style.display = "none";
+        }
       }
       return;
     }
 
     // 3. Results View: if not transcribing but we have a transcript
     if (!result.isTranscribing && hasTranscript) {
+      sawSessionTransitionInPopup = true;
       viewApiKey.style.display = "none";
-      if (viewNoMeeting) viewNoMeeting.style.display = "none";
-      viewCaptions.style.display = "none";
+      if (viewNoCall) viewNoCall.style.display = "none";
       viewMain.style.display = "none";
       viewResults.style.display = "block";
       stopTimer();
+
+      if (result.notesStatus === 'generating') {
+        resultsStatus.style.color = "#5f6368";
+        resultsStatus.innerText = "Generating AI meeting notes and saving transcript...";
+        if (retryBtn) retryBtn.style.display = "none";
+        if (dismissBtn) dismissBtn.style.display = "none";
+        chrome.runtime.sendMessage({ action: "check_generation_status" }, () => {
+          void chrome.runtime.lastError;
+        });
+      } else if (result.notesStatus === 'error') {
+        resultsStatus.style.color = "#d32f2f";
+        resultsStatus.innerText = "Transcript saved, but AI notes failed to generate." + (result.notesError ? " (" + result.notesError + ")" : "");
+        if (retryBtn) {
+          retryBtn.style.display = "block";
+          retryBtn.disabled = false;
+          retryBtn.innerText = "Retry";
+        }
+        if (dismissBtn) {
+          dismissBtn.style.display = "block";
+        }
+      } else {
+        resultsStatus.style.color = "#5f6368";
+        resultsStatus.innerText = "Your AI meeting notes and transcript have been saved to your Downloads folder.";
+        if (retryBtn) retryBtn.style.display = "none";
+        if (dismissBtn) dismissBtn.style.display = "none";
+      }
       return;
     }
 
-    // 4. Meeting Check: Is the active tab in an active Teams meeting?
-    const { inMeeting } = await checkActiveMeeting();
-
-    if (!inMeeting) {
+    // 4. No Active Teams Call View
+    if (!pageStatus.inActiveCall) {
       viewApiKey.style.display = "none";
-      if (viewNoMeeting) viewNoMeeting.style.display = "block";
-      viewCaptions.style.display = "none";
+      if (viewNoCall) viewNoCall.style.display = "block";
       viewMain.style.display = "none";
       viewResults.style.display = "none";
       stopTimer();
       return;
     }
 
-    // 5. User IS in an active meeting: Check Captions
-    if (viewNoMeeting) viewNoMeeting.style.display = "none";
-    const captionsOn = await checkCaptions();
-    
-    if (!captionsOn) {
-      viewApiKey.style.display = "none";
-      viewCaptions.style.display = "block";
-      viewMain.style.display = "none";
-      viewResults.style.display = "none";
-      stopTimer();
-      return;
-    }
-    
-    // 6. In active meeting AND captions are ON (Ready to Start)
+    // 5. Main View (Action-First Ready to Capture inside an active Teams call)
     viewApiKey.style.display = "none";
-    viewCaptions.style.display = "none";
+    if (viewNoCall) viewNoCall.style.display = "none";
     viewMain.style.display = "block";
     viewResults.style.display = "none";
 
-    const promptEl = document.getElementById('mainMeetingPrompt');
-    if (promptEl) promptEl.style.display = "block";
-    
     issueBanner.style.display = "none";
     stopLink.style.display = "none";
     stopTimer();
-    
+
     startBtn.disabled = false;
-    statusEl.innerText = "Ready to start.";
+    if (enableCaptionsBtn) enableCaptionsBtn.style.display = "none";
+    if (captionHelperText) {
+      captionHelperText.style.display = "block";
+      captionHelperText.style.color = "#5f6368";
+      captionHelperText.innerText = pageStatus.captionsOn
+        ? "Captions enabled and ready. Do not disable live captions during the call."
+        : "Live captions will be automatically enabled upon capture. Do not disable live captions during the call.";
+    }
+    statusEl.innerText = "";
   });
 }
 
 updateUI();
 pollInterval = setInterval(updateUI, 2000);
 
-async function executeInActiveTab(action) {
+async function executeInActiveTab(action, callback) {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id) return;
-  chrome.tabs.sendMessage(tab.id, { action: action }, (response) => {
-    if (chrome.runtime.lastError) {
-      // Content script not yet attached to tab; inject content.js and retry
-      chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        files: ['content.js']
-      }, () => {
-        chrome.tabs.sendMessage(tab.id, { action: action });
-      });
-    }
-  });
-}
-
-if (magicBtn) {
-  magicBtn.addEventListener('click', () => {
-    magicBtn.innerText = "Enabling...";
-    magicBtn.disabled = true;
-    executeInActiveTab("force_captions");
-    
-    setTimeout(() => {
-      if (manualFallbackText) {
-        const platform = (navigator.platform || '').toUpperCase();
-        const userAgent = navigator.userAgent || '';
-        const isMac = platform.includes('MAC') || userAgent.includes('Macintosh') || userAgent.includes('Mac OS');
-        if (isMac) {
-          manualFallbackText.innerHTML = `
-            <div style="margin-top: 6px; padding: 6px; background: #ffffff; border-radius: 4px; border: 1px dashed #93c5fd;">
-              <div style="font-size: 11px; color: #1e3a8a; font-weight: 600;">To enable in Teams:</div>
-              <div style="font-size: 10px; color: #374151; margin-top: 2px;">Click <b>More (...) &gt; Language &amp; speech &gt; Turn on live captions</b></div>
-            </div>
-          `;
-        } else {
-          manualFallbackText.innerHTML = `
-            <div style="margin-top: 6px; padding: 6px; background: #ffffff; border-radius: 4px; border: 1px dashed #93c5fd;">
-              <div>Shortcut: <b style="color: #1e3a8a;">Alt + Shift + C</b></div>
-              <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">or <b>More (...) &gt; Language &amp; speech &gt; Turn on live captions</b></div>
-            </div>
-          `;
-        }
-        manualFallbackText.style.display = "block";
+  if (!tab) {
+    if (callback) callback();
+    return;
+  }
+  chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true },
+    files: ['content.js']
+  }, () => {
+    chrome.tabs.sendMessage(tab.id, { action: action }, () => {
+      if (chrome.runtime.lastError) {
+        // Ignore if frame has no listener
       }
-      magicBtn.innerText = "Enable Captions";
-      magicBtn.disabled = false;
-    }, 1500);
+      if (callback) callback();
+    });
   });
 }
 
 startBtn.addEventListener('click', async () => {
+  sawSessionTransitionInPopup = true;
   const startTime = Date.now();
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  chrome.storage.local.set({ savedTranscript: [], isTranscribing: true, startTime: startTime, issueDetected: false, activeTabId: tab ? tab.id : null });
-  executeInActiveTab("start");
-  updateUI();
+  const pageStatus = await checkPageStatus();
+  const initialMeetingTitle =
+    pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting"
+      ? pageStatus.meetingTitle
+      : "Meeting";
+  chrome.storage.local.set({
+    savedTranscript: [],
+    isTranscribing: true,
+    startTime: startTime,
+    issueDetected: false,
+    activeTabId: tab ? tab.id : null,
+    notesStatus: 'idle',
+    notesError: '',
+    transcriptDownloaded: false,
+    callEnded: false,
+    meetingTitle: initialMeetingTitle
+  }, () => {
+    executeInActiveTab("start");
+    updateUI();
+  });
 });
 
-stopLink.addEventListener('click', (e) => {
+stopLink.addEventListener('click', async (e) => {
   e.preventDefault();
-  chrome.storage.local.set({ isTranscribing: false });
-  executeInActiveTab("stop");
-  try {
-    chrome.runtime.sendMessage({ action: "auto_finalize_session", reason: "popup_stop" });
-  } catch (err) {}
-  updateUI();
-});
-
-newSessionBtn.addEventListener('click', () => {
-  chrome.storage.local.set({ savedTranscript: [] });
-  resultsStatus.innerText = "";
-  generateBtn.innerText = "Generate AI Summary";
-  updateUI();
-});
-
-downloadBtn.addEventListener('click', () => {
-  chrome.storage.local.get(['savedTranscript'], (result) => {
-    const lines = result.savedTranscript || [];
-    if (lines.length === 0) return;
-    const fullTranscript = lines.join('\n');
-    const blob = new Blob([fullTranscript], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const d = new Date();
-    const dateStr = d.toISOString().split('T')[0];
-    const timeStr = d.toTimeString().split(' ')[0].replace(/:/g, '-');
-    chrome.downloads.download({ url: url, filename: `transcript_${dateStr}_${timeStr}.txt`, saveAs: false });
-  });
-});
-
-generateBtn.addEventListener('click', async () => {
-  resultsStatus.style.color = "#333";
-  resultsStatus.innerText = "Generating AI Summary...";
-  generateBtn.disabled = true;
-  generateBtn.innerText = "Generating...";
-  
-  chrome.storage.local.get(['savedTranscript', 'apiKey', 'selectedModel', 'cachedModels'], async (result) => {
-    const apiKey = result.apiKey;
-    let model = result.selectedModel;
-    if (!model && result.cachedModels && result.cachedModels.length > 0) {
-      model = result.cachedModels[0].id;
-    }
-    if (!model) {
-      model = 'gemini-3.0-flash';
-    }
-
-    if (!apiKey) {
-      resultsStatus.style.color = "red";
-      resultsStatus.innerText = "Error: API Key missing.";
-      generateBtn.disabled = false;
-      generateBtn.innerText = "Retry Generating";
-      return;
-    }
-    
-    const lines = result.savedTranscript || [];
-    if (lines.length === 0) {
-      resultsStatus.style.color = "red";
-      resultsStatus.innerText = "Error: No captions captured.";
-      generateBtn.disabled = false;
-      generateBtn.innerText = "Retry Generating";
-      return;
-    }
-
-    const fullTranscript = lines.join('\n');
-
-    // Build Date String
-    const dateObj = new Date();
-    const dateFormatted = dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) + ' at ' + dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
-
-    const prompt = `## Role
-
-You are an expert meeting minutes generator. Your task is to process provided information about a meeting, such as a transcript, recording summary, or rough human notes, and generate crisp, well-structured meeting notes following a specific format.
-
-## Output Expectations
-
-Your output must be a well-structured set of meeting minutes that perfectly adheres to the required format.
-
-1.  **Strict Formatting:** You must output the meeting minutes using the exact section headings provided below. Do not modify the section names. Each bullet must be a distinct section.
-2.  **Title:** You must generate a short, concise title for the meeting based on the transcript (less than 7 words). It must be placed at the very beginning of the document in this exact format:
-# Title
-[Your Generated Title Here]
-3.  **Date, time, and attendees:** Extract and present the date, time, and attendees. The companies of the attendees must be mentioned. This section must consist of exactly two bullet points following this format:
-    *   [Date], at [Time] The time is the time showing in the transcript.
-    *   Attendees: [Name] ([Company]), [Name] ([Company]). Company may not be obvious, identify from transcript. If it is not clearly identifiable, do not mention company name. Leave it blank.
-4.  **Meeting purpose:** Clearly state the goal of the meeting to provide context.
-5.  **Agenda items:** Break the minutes into sections that match the meeting's agenda to ensure scannability.
-6.  **Key discussions:** Capture the key points discussed concisely. Do not capture every word. (e.g., "Team discussed marketing budget concerns. Decision deferred until Q2.")
-7.  **Decisions made:** Clearly state any decisions that were made. You must **bold these decisions** so they are easy to spot.
-8.  **Action items:** Identify who is responsible for what action and by when. Write these items clearly. (e.g., "John – finalize vendor contract by March 15.")
-9.  **Follow-ups:** Note any unresolved issues or topics that were deferred to future meetings.
-
-Note: The meeting took place on ${dateFormatted}.
-
-Transcript:
-${fullTranscript}`;
-
-    const cleanModel = model.trim().replace(/^models\//, '');
-    const payload = {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2 }
-    };
-
-    let minutesText = null;
-    let usedModel = cleanModel;
-    let retriedWithSecondary = false;
-
-    // Helper for calling API
-    async function requestGemini(modelName) {
-      const targetModel = modelName.trim().replace(/^models\//, '');
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey.trim()}`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+  sawSessionTransitionInPopup = true;
+  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  chrome.storage.local.set(
+    {
+      isTranscribing: false,
+      notesStatus: 'generating',
+      generationStartedAt: Date.now()
+    },
+    () => {
+      chrome.runtime.sendMessage({ action: "stop_and_finalize", tabId: tab ? tab.id : null }, () => {
+        void chrome.runtime.lastError;
+        updateUI();
       });
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const err = new Error(errorData.error?.message || `Google AI Studio Error (${response.status})`);
-        err.status = response.status;
-        throw err;
-      }
-      const data = await response.json();
-      return data.candidates?.[0]?.content?.parts?.[0]?.text;
+      executeInActiveTab("stop", () => {
+        updateUI();
+      });
+      updateUI();
     }
-
-    try {
-      minutesText = await requestGemini(cleanModel);
-    } catch (primaryErr) {
-      console.warn("Primary model failed:", primaryErr);
-      const modelPool = (result.cachedModels && result.cachedModels.length > 0)
-        ? result.cachedModels.map(m => m.id)
-        : ['gemini-3.0-flash', 'gemini-3.0-pro', 'gemini-3.1-flash', 'gemini-3.1-pro', 'gemini-2.5-flash'];
-      const secondaryModel = modelPool.find(m => m !== cleanModel) || 'gemini-3.0-pro';
-
-      if (secondaryModel && secondaryModel !== cleanModel) {
-        resultsStatus.style.color = "#856404";
-        resultsStatus.innerText = `Primary model busy (${primaryErr.status || 'error'}). Retrying with ${secondaryModel}...`;
-        try {
-          minutesText = await requestGemini(secondaryModel);
-          usedModel = secondaryModel;
-          retriedWithSecondary = true;
-        } catch (secondaryErr) {
-          console.error("Secondary model also failed:", secondaryErr);
-          resultsStatus.style.color = "red";
-          resultsStatus.innerText = "Error: " + secondaryErr.message;
-          generateBtn.disabled = false;
-          generateBtn.innerText = "Retry Generating";
-          return;
-        }
-      } else {
-        resultsStatus.style.color = "red";
-        resultsStatus.innerText = "Error: " + primaryErr.message;
-        generateBtn.disabled = false;
-        generateBtn.innerText = "Retry Generating";
-        return;
-      }
-    }
-
-    if (!minutesText) {
-      resultsStatus.style.color = "red";
-      resultsStatus.innerText = "Error: Empty response from model.";
-      generateBtn.disabled = false;
-      generateBtn.innerText = "Retry Generating";
-      return;
-    }
-
-    let aiTitle = "meeting";
-    const outLines = minutesText.split('\n');
-    for (let i = 0; i < outLines.length; i++) {
-      if (outLines[i].toLowerCase().includes('# title') && i + 1 < outLines.length) {
-        aiTitle = outLines[i+1].trim();
-        if (!aiTitle && i + 2 < outLines.length) {
-          aiTitle = outLines[i+2].trim();
-        }
-        break;
-      }
-    }
-    
-    let sanitizedTitle = aiTitle.toLowerCase()
-      .replace(/[^a-z0-9\s_-]/g, '')
-      .trim()
-      .replace(/[\s-]+/g, '_')
-      .substring(0, 50);
-    
-    if (!sanitizedTitle || sanitizedTitle === 'title') sanitizedTitle = "meeting";
-    
-    const d = new Date();
-    const dateStr = d.toISOString().split('T')[0];
-    const timeStr = d.toTimeString().split(' ')[0].replace(/:/g, '-');
-    const filename = `ai_summary_${sanitizedTitle}_${dateStr}_${timeStr}.md`;
-
-    const blob = new Blob([minutesText], { type: 'text/markdown' });
-    const objUrl = URL.createObjectURL(blob);
-    chrome.downloads.download({ url: objUrl, filename: filename, saveAs: false });
-    
-    resultsStatus.style.color = "green";
-    resultsStatus.innerText = retriedWithSecondary
-      ? `Success! Summary generated via ${usedModel} and downloaded.`
-      : "Success! Summary downloaded.";
-    generateBtn.disabled = false;
-    generateBtn.innerText = "Generate AI Summary";
-  });
+  );
 });
 
-// File Upload Logic
-const uploadZone = document.getElementById('view-upload');
-const transcriptFileInput = document.getElementById('transcriptFile');
-
-if (uploadZone && transcriptFileInput) {
-  uploadZone.addEventListener('click', (e) => {
-    if (e.target !== transcriptFileInput) {
-      transcriptFileInput.click();
-    }
-  });
-
-  // Drag and Drop styles
-  uploadZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    uploadZone.style.backgroundColor = "#f5f6ff";
-    uploadZone.style.borderColor = "#464eb8";
-  });
-
-  uploadZone.addEventListener('dragleave', () => {
-    uploadZone.style.backgroundColor = "#fcfcff";
-    uploadZone.style.borderColor = "#5B5FC7";
-  });
-
-  uploadZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    uploadZone.style.backgroundColor = "#fcfcff";
-    uploadZone.style.borderColor = "#5B5FC7";
-    
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleTranscriptFile(e.dataTransfer.files[0]);
-    }
-  });
-
-  transcriptFileInput.addEventListener('click', (e) => {
-    e.stopPropagation();
-  });
-
-  transcriptFileInput.addEventListener('change', (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleTranscriptFile(e.target.files[0]);
-      e.target.value = '';
-    }
+if (enableCaptionsBtn) {
+  enableCaptionsBtn.addEventListener('click', () => {
+    executeInActiveTab("force_captions", () => {
+      updateUI();
+    });
   });
 }
 
-function handleTranscriptFile(file) {
-  if (!file.name.toLowerCase().endsWith('.txt')) {
-    alert("Please upload a valid .txt transcript file.");
-    return;
-  }
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const text = e.target.result;
-    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
-    
-    if (lines.length === 0) {
-      alert("The uploaded file is empty.");
-      return;
-    }
-
-    // Set savedTranscript and clear activeTabId and isTranscribing so it's a clean offline session
-    chrome.storage.local.set({ savedTranscript: lines, activeTabId: null, isTranscribing: false }, () => {
+if (retryBtn) {
+  retryBtn.addEventListener('click', () => {
+    retryBtn.disabled = true;
+    retryBtn.innerText = "Retrying...";
+    if (dismissBtn) dismissBtn.style.display = "none";
+    resultsStatus.style.color = "#5f6368";
+    resultsStatus.innerText = "Generating AI meeting notes and saving transcript...";
+    chrome.runtime.sendMessage({ action: "generate_notes" }, () => {
+      void chrome.runtime.lastError;
       updateUI();
-      // Auto-trigger AI summary generation immediately
-      setTimeout(() => {
-        if (generateBtn && !generateBtn.disabled) {
-          generateBtn.click();
-        }
-      }, 150);
     });
-  };
-  reader.readAsText(file);
+  });
+}
+
+if (dismissBtn) {
+  dismissBtn.addEventListener('click', () => {
+    chrome.storage.local.set(
+      {
+        savedTranscript: [],
+        isTranscribing: false,
+        notesStatus: 'idle',
+        notesError: '',
+        transcriptDownloaded: false,
+        callEnded: false
+      },
+      () => {
+        updateUI();
+      }
+    );
+  });
 }

@@ -1,9 +1,14 @@
-// Content Script for mast (Meeting AI Summarizer & Transcriber for MS Teams)
-
 (function () {
-  if (window.__mastContentScriptLoaded) {
+  const CONTENT_SCRIPT_VERSION = '2.7.6';
+  if (window.__mastContentScriptVersion === CONTENT_SCRIPT_VERSION) {
     return;
   }
+  if (typeof window.__mastContentScriptCleanup === 'function') {
+    try {
+      window.__mastContentScriptCleanup();
+    } catch (_) {}
+  }
+  window.__mastContentScriptVersion = CONTENT_SCRIPT_VERSION;
   window.__mastContentScriptLoaded = true;
 
   let isTranscribing = false;
@@ -17,10 +22,47 @@
   let issueTimer = null;
   let captionsMap = new Map(); // DOM Element -> { speaker, text }
 
-  // Meeting reminder state
-  let reminderCard = null;
-  let meetingPromptShown = false;
-  let meetingCheckInterval = null;
+  let callCheckInterval = null;
+  let meetingDetectInterval = null;
+  let sawActiveMeeting = false;
+  let missingCallChecks = 0;
+  let shouldGuardUnload = false;
+  let statusToastTimer = null;
+  let currentToastState = null;
+  let sawCaptionsActive = false;
+  let captionsOffDismissed = false;
+  let meetingDetectedToastDismissed = false;
+  let transcriptionStartedAt = 0;
+  let lastRecentSyncAt = 0;
+
+  let lastChildFrameActiveAt = 0;
+  let lastChildFrameCaptionsAt = 0;
+  let lastChildFrameTitle = "Meeting";
+
+  function onBeforeUnload(e) {
+    if (shouldGuardUnload) {
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
+  }
+  window.addEventListener('beforeunload', onBeforeUnload);
+
+  function onWindowMessage(e) {
+    if (window !== window.top) return;
+    const data = e && e.data;
+    if (!data || data.type !== 'MAST_FRAME_MEETING_STATUS') return;
+    if (data.active) {
+      lastChildFrameActiveAt = Date.now();
+    }
+    if (data.captionsVisible) {
+      lastChildFrameCaptionsAt = Date.now();
+    }
+    if (data.title && data.title !== 'Meeting') {
+      lastChildFrameTitle = data.title;
+    }
+  }
+  window.addEventListener('message', onWindowMessage);
 
   async function fetchRemoteConfig() {
     try {
@@ -35,141 +77,126 @@
     }
   }
 
-  async function startObserving() {
-    if (observer) return;
-    await fetchRemoteConfig();
-    console.log("mast: startObserving() called. Looking for captions...");
-
-    chrome.storage.local.set({ issueDetected: false });
-    if (issueTimer) clearTimeout(issueTimer);
-    issueTimer = setTimeout(() => {
-      if (captionsMap.size === 0) {
-        chrome.storage.local.set({ issueDetected: true });
+  function isTeamsMeetingActiveLocal() {
+    try {
+      const isPreJoin = !!document.querySelector(
+        '[data-tid="prejoin-join-button"], button[data-tid="prejoin-join-button"], button[aria-label^="Join now" i]'
+      );
+      if (isPreJoin && !document.querySelector('#hangup-button, [data-tid="hangup-main-btn"], [data-tid="hangup-button"]')) {
+        return false;
       }
-    }, 5 * 60 * 1000); // 5 minutes
+    } catch (_) {}
 
-    const targetNode = document.querySelector('body');
-    if (!targetNode) return;
-
-    observer = new MutationObserver((mutations) => {
-      if (!isTranscribing) return;
-
-      let domChanged = false;
-
-      // 1. Check for newly added caption or speaker elements
-      mutations.forEach((mutation) => {
-        for (let node of mutation.addedNodes) {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            // Check for speaker
-            const speakerEl = node.matches(SPEAKER_SELECTOR) ? node : node.querySelector(SPEAKER_SELECTOR);
-            if (speakerEl && speakerEl.innerText && speakerEl.innerText.trim()) {
-              currentSpeaker = speakerEl.innerText.trim();
-              console.log("mast: Found speaker:", currentSpeaker);
-            }
-
-            // Check for text elements
-            const textEls = node.matches(TEXT_SELECTOR) ? [node] : node.querySelectorAll(TEXT_SELECTOR);
-            for (let textEl of textEls) {
-              if (!captionsMap.has(textEl)) {
-                captionsMap.set(textEl, { speaker: currentSpeaker, text: textEl.innerText ? textEl.innerText.trim() : "" });
-                domChanged = true;
-              }
-            }
-          }
-        }
-      });
-
-      // 2. On EVERY mutation, sync the text for ALL tracked caption elements still on screen
-      for (let [textEl, data] of captionsMap.entries()) {
-        if (document.body.contains(textEl)) {
-          const newText = textEl.innerText ? textEl.innerText.trim() : "";
-          if (newText && newText !== data.text) {
-            data.text = newText;
-            domChanged = true;
-          }
-        }
-      }
-
-      // 3. If anything changed, save the entire consolidated map to storage
-      if (domChanged) {
-        const transcriptLines = [];
-        for (let data of captionsMap.values()) {
-          if (data.text) {
-            transcriptLines.push(`[${data.speaker}]: ${data.text}`);
-          }
-        }
-        chrome.storage.local.set({ savedTranscript: transcriptLines });
+    const meetingSelectors = [
+      '[data-tid="call-duration"]',
+      '#hangup-button',
+      'button[data-tid="hangup-button"]',
+      '[data-tid="hangup-main-btn"]',
+      '[data-tid="hangup-chevron-btn"]',
+      'button[data-tid="call-hangup"]',
+      'button[id*="hangup" i]',
+      'button[data-tid*="hangup" i]',
+      'button[aria-label="Leave" i]',
+      'button[aria-label^="Leave (" i]',
+      'button[aria-label*="Leave call" i]',
+      'button[aria-label*="Leave meeting" i]',
+      'button[aria-label*="Hang up" i]',
+      '#callingButtons-showMoreBtn',
+      '[data-tid="callingButtons-showMoreBtn"]',
+      '#share-button',
+      '[data-tid="share-button"]',
+      '[data-tid="calling-top-bar"]',
+      '[data-tid="calling-screen"]',
+      '[data-tid="meeting-stage"]',
+      '[data-tid="calling-stage"]',
+      '[data-tid="modern-calling-Header"]',
+      '[data-tid="call-Composite"]',
+      '[data-tid="call-status-container"]',
+      '[data-tid="closed-captions-container"]',
+      '[data-tid="closed-caption-renderer-wrapper"]',
+      CAPTION_CONTAINER_SELECTOR,
+      TEXT_SELECTOR
+    ];
+    return meetingSelectors.some((sel) => {
+      try {
+        return !!document.querySelector(sel);
+      } catch (_) {
+        return false;
       }
     });
-
-    observer.observe(targetNode, { childList: true, subtree: true, characterData: true });
   }
 
-  // --- CROSS-PLATFORM CAPTION ACTIVATION (MAC & CHROMEBOOK / WINDOWS) ---
-  function dispatchKeyEvents(target, combo) {
-    if (!target || typeof target.dispatchEvent !== 'function') return;
-    const eventInit = {
-      key: combo.key,
-      code: combo.code,
-      keyCode: combo.keyCode,
-      which: combo.keyCode,
-      ctrlKey: !!combo.ctrlKey,
-      altKey: !!combo.altKey,
-      shiftKey: !!combo.shiftKey,
-      metaKey: !!combo.metaKey,
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      view: window
+  function isTeamsMeetingActive() {
+    if (isTeamsMeetingActiveLocal()) return true;
+    if (window === window.top && Date.now() - lastChildFrameActiveAt < 4500) {
+      return true;
+    }
+    return false;
+  }
+
+  function extractTeamsMeetingTitle() {
+    const genericNames = new Set([
+      'microsoft teams',
+      'teams',
+      'chat',
+      'calendar',
+      'activity',
+      'calls',
+      'files',
+      'onedrive',
+      'approvals',
+      'meeting',
+      'general',
+      'unknown'
+    ]);
+    const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
+    const isValidTitle = (str) => {
+      if (!str || str.length < 2) return false;
+      if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) return false;
+      return !genericNames.has(str.toLowerCase());
     };
+
+    const titleSelectors = [
+      '[data-tid="call-title"]',
+      '[data-tid="meeting-title"]',
+      '[data-tid="calling-header-title"]',
+      '[data-tid="SimplifiedCallHeader-title"]',
+      '[data-tid="ubar-header-title"]',
+      '[data-tid="calling-top-bar"] [data-tid*="title" i]',
+      '[aria-label*="Meeting title" i]',
+      '.meeting-title',
+      '.call-title'
+    ];
+    for (const sel of titleSelectors) {
+      try {
+        const el = document.querySelector(sel);
+        if (el) {
+          const candidate = cleanSegment(el.innerText || el.textContent || el.getAttribute('title') || '');
+          if (isValidTitle(candidate)) {
+            return candidate;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (window === window.top && lastChildFrameTitle && isValidTitle(lastChildFrameTitle)) {
+      return lastChildFrameTitle;
+    }
+
+    const docTitlesToCheck = [];
+    if (document.title) docTitlesToCheck.push(document.title);
     try {
-      target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
-      target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
-    } catch (e) {
-      // Ignore errors on restricted elements
-    }
-  }
+      if (window.top && window.top.document && window.top.document.title) {
+        docTitlesToCheck.push(window.top.document.title);
+      }
+    } catch (_) {}
 
-  function attemptEnableCaptions() {
-    console.log("mast: Attempting to enable live captions...");
-
-    // 1. Check if captions are already active
-    const activeCaptions = document.querySelector(
-      '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], .ui-captions-container'
-    );
-    if (activeCaptions) {
-      console.log("mast: Captions are already active.");
-      return true;
-    }
-
-    // 2. Try direct DOM button if present on toolbar
-    const directBtn = document.querySelector(
-      'button[data-tid="closed-captions-button"], button[data-tid*="caption" i], button[aria-label*="Turn on live captions" i], button[aria-label*="Show live captions" i]'
-    );
-    if (directBtn) {
-      console.log("mast: Found direct captions button. Clicking...");
-      directBtn.click();
-      return true;
-    }
-
-    // 3. Try "More" (...) actions menu in Teams
-    const moreBtn = document.querySelector(
-      'button[data-tid="more-actions-button"], button[data-tid="overflow-button"], button[data-tid="callingButtons-showMoreBtn"], button[aria-label*="More actions" i], button[aria-label="More" i], #more-actions-button'
-    );
-    if (moreBtn && !directBtn) {
-      console.log("mast: Opening More actions menu...");
-      moreBtn.click();
-      setTimeout(() => {
-        const menuItems = Array.from(document.querySelectorAll('button, [role="menuitem"], [role="menuitemcheckbox"]'));
-
-        // Check if captions are already active
-        const turnOffItem = menuItems.find(el => {
-          const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
-          return text.includes('turn off live captions') || text.includes('turn off captions');
-        });
-        if (turnOffItem) {
-          moreBtn.click();
-          return;
+    for (const rawDocTitle of docTitlesToCheck) {
+      const cleanDocTitle = cleanSegment(rawDocTitle);
+      const parts = cleanDocTitle.split('|').map(cleanSegment).filter(Boolean);
+      for (const part of parts) {
+        if (isValidTitle(part)) {
+          return part;
         }
 
         // Direct caption item in More menu
@@ -235,603 +262,610 @@
     }
   }
 
-  // --- DRAGGABLE SLEEK RECORDING PILL & REMINDER ---
-  let pillMouseMoveHandler = null;
-  let pillAutoHideTimeout = null;
-  let pillDragCleanup = null;
-
-  function getSavedPillPosition() {
-    try {
-      const saved = sessionStorage.getItem('mast_pill_pos');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (typeof parsed.left === 'number' && typeof parsed.top === 'number') {
-          const left = Math.max(12, Math.min(window.innerWidth - 200, parsed.left));
-          const top = Math.max(12, Math.min(window.innerHeight - 60, parsed.top));
-          return { left, top };
-        }
-      }
-    } catch (e) {}
-    return null;
+    return "Meeting";
   }
 
-  function savePillPosition(pos) {
-    try {
-      sessionStorage.setItem('mast_pill_pos', JSON.stringify(pos));
-    } catch (e) {}
-  }
-
-  function makeDraggable(element, onDragEnd) {
-    let isDragging = false;
-    let startX = 0;
-    let startY = 0;
-    let initialLeft = 0;
-    let initialTop = 0;
-
-    const onPointerDown = (e) => {
-      // Don't initiate drag if clicking buttons, links, or close buttons
-      if (e.target.closest('button, a, input, [role="button"]')) return;
-
-      isDragging = true;
-      element.style.cursor = 'grabbing';
-      element.style.userSelect = 'none';
-      element.style.transition = 'none'; // Disable transition during drag for smoothness
+  function syncMeetingTitleToStorage() {
+    if (!isTeamsMeetingActive()) return;
+    const title = extractTeamsMeetingTitle();
+    if (title && title !== "Meeting") {
       try {
-        element.setPointerCapture(e.pointerId);
-      } catch (err) {}
-
-      const rect = element.getBoundingClientRect();
-      startX = e.clientX;
-      startY = e.clientY;
-      initialLeft = rect.left;
-      initialTop = rect.top;
-
-      element.style.bottom = 'auto';
-      element.style.right = 'auto';
-      element.style.left = `${initialLeft}px`;
-      element.style.top = `${initialTop}px`;
-
-      e.preventDefault();
-    };
-
-    const onPointerMove = (e) => {
-      if (!isDragging) return;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-
-      const rect = element.getBoundingClientRect();
-      const maxLeft = Math.max(12, window.innerWidth - rect.width - 12);
-      const maxTop = Math.max(12, window.innerHeight - rect.height - 12);
-
-      const newLeft = Math.max(12, Math.min(maxLeft, initialLeft + dx));
-      const newTop = Math.max(12, Math.min(maxTop, initialTop + dy));
-
-      element.style.left = `${newLeft}px`;
-      element.style.top = `${newTop}px`;
-    };
-
-    const onPointerUp = (e) => {
-      if (!isDragging) return;
-      isDragging = false;
-      element.style.cursor = 'grab';
-      element.style.userSelect = '';
-      element.style.transition = 'opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)';
-      try {
-        element.releasePointerCapture(e.pointerId);
-      } catch (err) {}
-
-      const rect = element.getBoundingClientRect();
-      if (typeof onDragEnd === 'function') {
-        onDragEnd({ left: rect.left, top: rect.top });
-      }
-    };
-
-    element.addEventListener('pointerdown', onPointerDown);
-    element.addEventListener('pointermove', onPointerMove);
-    element.addEventListener('pointerup', onPointerUp);
-    element.addEventListener('pointercancel', onPointerUp);
-
-    return () => {
-      element.removeEventListener('pointerdown', onPointerDown);
-      element.removeEventListener('pointermove', onPointerMove);
-      element.removeEventListener('pointerup', onPointerUp);
-      element.removeEventListener('pointercancel', onPointerUp);
-    };
-  }
-
-  function removeRecordingPill() {
-    if (pillAutoHideTimeout) {
-      clearTimeout(pillAutoHideTimeout);
-      pillAutoHideTimeout = null;
-    }
-    if (pillMouseMoveHandler) {
-      window.removeEventListener('mousemove', pillMouseMoveHandler);
-      pillMouseMoveHandler = null;
-    }
-    if (pillDragCleanup) {
-      pillDragCleanup();
-      pillDragCleanup = null;
-    }
-    const card = document.getElementById('mast-meeting-reminder');
-    if (card) {
-      card.remove();
-      reminderCard = null;
+        chrome.storage.local.set({ meetingTitle: title });
+      } catch (_) {}
     }
   }
 
-  function showRecordingPill() {
-    removeRecordingPill();
+  function formatShortDate(dateObj = new Date()) {
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    return `${months[dateObj.getMonth()]}${dateObj.getDate()}-${dateObj.getFullYear()}`;
+  }
 
-    let card = document.getElementById('mast-meeting-reminder');
-    if (!card) {
-      card = document.createElement('div');
-      card.id = 'mast-meeting-reminder';
-      document.body.appendChild(card);
+  function syncTranscriptToRecentMeetings(lines, force = false) {
+    if (!lines || lines.length === 0) return;
+    const now = Date.now();
+    if (!force && now - lastRecentSyncAt < 3000) return;
+    lastRecentSyncAt = now;
+
+    try {
+      chrome.storage.local.get(['recentMeetings', 'startTime', 'meetingTitle'], (stored) => {
+        if (chrome.runtime.lastError) return;
+        const recent = Array.isArray(stored.recentMeetings) ? stored.recentMeetings : [];
+        const sessionTimestamp = stored.startTime || transcriptionStartedAt || now;
+        const sessionId = String(sessionTimestamp);
+        const dateObj = new Date(sessionTimestamp);
+        const shortDate = formatShortDate(dateObj);
+        const displayDate = dateObj.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric'
+        });
+
+        const liveTitle = extractTeamsMeetingTitle();
+        const rawTitle = liveTitle !== 'Meeting' ? liveTitle : (stored.meetingTitle || 'Meeting');
+        const cleanTitle = rawTitle && typeof rawTitle === 'string' && rawTitle.trim() ? rawTitle.trim() : 'Meeting';
+
+        const existingIdx = recent.findIndex((m) => m.id === sessionId);
+        const existingEntry = existingIdx >= 0 ? recent[existingIdx] : null;
+
+        const entry = {
+          id: sessionId,
+          title: existingEntry && cleanTitle === 'Meeting' ? existingEntry.title : cleanTitle,
+          teamsTitle: cleanTitle !== 'Meeting' ? cleanTitle : (existingEntry?.teamsTitle || 'Meeting'),
+          shortDate,
+          displayDate,
+          timestamp: sessionTimestamp,
+          lines
+        };
+
+        if (existingIdx >= 0) {
+          recent.splice(existingIdx, 1);
+        }
+        recent.unshift(entry);
+
+        chrome.storage.local.set({
+          recentMeetings: recent.slice(0, 5),
+          startTime: sessionTimestamp
+        });
+      });
+    } catch (_) {}
+  }
+
+  function removeStatusToast() {
+    if (statusToastTimer) {
+      clearTimeout(statusToastTimer);
+      statusToastTimer = null;
     }
-    reminderCard = card;
+    currentToastState = null;
+    const existing = document.getElementById('mast-status-toast');
+    if (existing) {
+      existing.remove();
+    }
+  }
 
-    // Inject pulse animation style once
-    if (!document.getElementById('mast-pill-styles')) {
-      const style = document.createElement('style');
-      style.id = 'mast-pill-styles';
-      style.textContent = `
-        @keyframes mast-red-pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.35; transform: scale(0.85); }
-        }
-        @keyframes spin {
-          100% { transform: rotate(360deg); }
-        }
-      `;
-      document.head.appendChild(style);
+  function renderStatusToast(state, errorMessage) {
+    if (window !== window.top) return;
+
+    if (statusToastTimer) {
+      clearTimeout(statusToastTimer);
+      statusToastTimer = null;
+    }
+    currentToastState = state;
+
+    let toast = document.getElementById('mast-status-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'mast-status-toast';
+      toast.style.cssText = [
+        'position: fixed',
+        'bottom: 24px',
+        'left: 24px',
+        'z-index: 2147483647',
+        'background: #ffffff',
+        'color: #202124',
+        'border: 1px solid #dadce0',
+        'border-left: 4px solid #5B5FC7',
+        'border-radius: 6px',
+        'box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14)',
+        'padding: 12px 16px',
+        'font-family: Segoe UI, Tahoma, sans-serif',
+        'font-size: 13px',
+        'line-height: 1.4',
+        'max-width: 340px',
+        'display: flex',
+        'flex-direction: column',
+        'gap: 8px'
+      ].join('; ');
+      document.body.appendChild(toast);
     }
 
-    const savedPos = getSavedPillPosition();
-    const defaultLeft = 24;
-    const defaultTop = Math.max(12, window.innerHeight - 74);
-    const startLeft = savedPos ? savedPos.left : defaultLeft;
-    const startTop = savedPos ? savedPos.top : defaultTop;
+    toast.innerHTML = '';
 
-    card.className = 'mast-recording-pill';
-    card.style.cssText = `
-      position: fixed;
-      left: ${startLeft}px;
-      top: ${startTop}px;
-      z-index: 2147483647;
-      background: rgba(255, 255, 255, 0.96);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(209, 213, 219, 0.9);
-      border-radius: 20px;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 2px 4px rgba(0, 0, 0, 0.06);
-      padding: 7px 14px;
-      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-      color: #1f2937;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      width: auto;
-      max-width: calc(100vw - 48px);
-      opacity: 1;
-      pointer-events: auto;
-      cursor: grab;
-      transform: scale(1);
-      transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-    `;
+    const messageEl = document.createElement('div');
+    messageEl.style.fontWeight = '500';
 
-    card.innerHTML = `
-      <div style="display: flex; align-items: center; gap: 8px; cursor: grab;" title="Drag to reposition">
-        <svg width="8" height="12" viewBox="0 0 8 12" fill="#9ca3af" style="flex-shrink: 0; opacity: 0.8;">
-          <circle cx="2" cy="2" r="1.2" />
-          <circle cx="6" cy="2" r="1.2" />
-          <circle cx="2" cy="6" r="1.2" />
-          <circle cx="6" cy="6" r="1.2" />
-          <circle cx="2" cy="10" r="1.2" />
-          <circle cx="6" cy="10" r="1.2" />
-        </svg>
-        <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #ef4444; box-shadow: 0 0 6px #ef4444; animation: mast-red-pulse 1.8s infinite;"></span>
-        <span style="font-size: 12px; font-weight: 600; color: #111827; white-space: nowrap; user-select: none;">Transcribing AI Notes...</span>
-      </div>
-      <button id="mast-pill-stop" style="background: #fee2e2; border: 1px solid #fca5a5; color: #b91c1c; font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 5px; cursor: pointer;">
-        Stop
-      </button>
-    `;
+    if (state === 'meeting_detected') {
+      toast.style.borderLeftColor = '#5B5FC7';
+      messageEl.textContent = 'mast: Teams meeting detected.';
+      toast.appendChild(messageEl);
 
-    let startedTime = Date.now();
-    let isHovered = false;
-    let isCurrentlyDragging = false;
+      const subEl = document.createElement('div');
+      subEl.style.cssText = 'font-size: 12px; color: #5f6368; font-weight: 400;';
+      subEl.textContent = 'Capture live captions and generate AI meeting notes.';
+      toast.appendChild(subEl);
 
-    const fadeOut = () => {
-      if (!isHovered && !isCurrentlyDragging && isTranscribing) {
-        card.style.opacity = '0';
-        card.style.pointerEvents = 'none'; // Click-through when invisible
-        card.style.transform = 'scale(0.96)';
-      }
-    };
+      const actionsRow = document.createElement('div');
+      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
 
-    const fadeIn = () => {
-      card.style.opacity = '1';
-      card.style.pointerEvents = 'auto';
-      card.style.transform = 'scale(1)';
-    };
-
-    const resetFadeTimeout = () => {
-      if (pillAutoHideTimeout) clearTimeout(pillAutoHideTimeout);
-      startedTime = Date.now();
-      pillAutoHideTimeout = setTimeout(fadeOut, 30000);
-    };
-
-    // Auto-hide after 30 seconds
-    pillAutoHideTimeout = setTimeout(fadeOut, 30000);
-
-    // Make pill smoothly draggable and persist position
-    pillDragCleanup = makeDraggable(card, (newPos) => {
-      isCurrentlyDragging = false;
-      savePillPosition(newPos);
-      fadeIn();
-      resetFadeTimeout();
-    });
-
-    card.addEventListener('pointerdown', (e) => {
-      if (!e.target.closest('button')) {
-        isCurrentlyDragging = true;
-        fadeIn();
-      }
-    });
-
-    // Proximity hover detection near current position
-    let lastMoveTime = 0;
-    pillMouseMoveHandler = (e) => {
-      if (isCurrentlyDragging) return;
-      const now = Date.now();
-      if (now - lastMoveTime < 60) return;
-      lastMoveTime = now;
-
-      const rect = card.getBoundingClientRect();
-      const isNear = (
-        e.clientX >= rect.left - 45 &&
-        e.clientX <= rect.right + 45 &&
-        e.clientY >= rect.top - 45 &&
-        e.clientY <= rect.bottom + 45
-      );
-
-      if (isNear) {
-        if (!isHovered) {
-          isHovered = true;
-          fadeIn();
-        }
-      } else {
-        if (isHovered) {
-          isHovered = false;
-          if (Date.now() - startedTime >= 30000) {
-            fadeOut();
+      const captureBtn = document.createElement('button');
+      captureBtn.textContent = 'Capture Meeting Notes';
+      captureBtn.style.cssText =
+        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer; font-weight: 500;';
+      captureBtn.addEventListener('click', () => {
+        captureBtn.disabled = true;
+        captureBtn.textContent = 'Starting...';
+        const title = extractTeamsMeetingTitle();
+        chrome.runtime.sendMessage({ action: 'start_from_toast', meetingTitle: title }, (res) => {
+          void chrome.runtime.lastError;
+          if (res && res.status === 'no_api_key') {
+            renderStatusToast('api_key_needed');
+            return;
           }
-        }
-      }
-    };
-    window.addEventListener('mousemove', pillMouseMoveHandler, { passive: true });
+          isTranscribing = true;
+          transcriptionStartedAt = (res && res.startTime) || Date.now();
+          sawCaptionsActive = areCaptionsVisible();
+          captionsOffDismissed = false;
+          ensureCaptionsEnabled();
+          startObserving();
+          renderStatusToast('capturing_started');
+        });
+      });
 
-    const stopBtn = card.querySelector('#mast-pill-stop');
-    stopBtn?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      finalizeTranscriptionAndDownload("pill_stop");
-    });
+      const dismissBtn = document.createElement('button');
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.style.cssText =
+        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 6px 10px; font-size: 12px; cursor: pointer;';
+      dismissBtn.addEventListener('click', () => {
+        meetingDetectedToastDismissed = true;
+        removeStatusToast();
+      });
+
+      actionsRow.appendChild(captureBtn);
+      actionsRow.appendChild(dismissBtn);
+      toast.appendChild(actionsRow);
+    } else if (state === 'capturing_started') {
+      toast.style.borderLeftColor = '#2e7d32';
+      messageEl.textContent = 'mast: Capturing meeting notes...';
+      toast.appendChild(messageEl);
+      statusToastTimer = setTimeout(() => {
+        if (currentToastState === 'capturing_started') {
+          removeStatusToast();
+        }
+      }, 3500);
+    } else if (state === 'api_key_needed') {
+      toast.style.borderLeftColor = '#d9534f';
+      messageEl.textContent = 'mast: Please save your Google AI Studio API key in Settings first.';
+      toast.appendChild(messageEl);
+      statusToastTimer = setTimeout(() => {
+        if (currentToastState === 'api_key_needed') {
+          removeStatusToast();
+        }
+      }, 6000);
+    } else if (state === 'generating') {
+      toast.style.borderLeftColor = '#5B5FC7';
+      messageEl.textContent = 'mast: Transcript saved. Generating AI notes...';
+      toast.appendChild(messageEl);
+    } else if (state === 'done') {
+      toast.style.borderLeftColor = '#2e7d32';
+      messageEl.textContent = 'mast: AI notes and transcript downloaded.';
+      toast.appendChild(messageEl);
+      statusToastTimer = setTimeout(() => {
+        removeStatusToast();
+      }, 8000);
+    } else if (state === 'error') {
+      toast.style.borderLeftColor = '#d32f2f';
+      messageEl.textContent = errorMessage
+        ? `mast: AI notes failed (${errorMessage}).`
+        : 'mast: Transcript downloaded, but AI notes failed.';
+      toast.appendChild(messageEl);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
+
+      const retryBtn = document.createElement('button');
+      retryBtn.textContent = 'Retry';
+      retryBtn.style.cssText =
+        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
+      retryBtn.addEventListener('click', () => {
+        chrome.runtime.sendMessage({ action: 'generate_notes' });
+      });
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.style.cssText =
+        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer;';
+      dismissBtn.addEventListener('click', () => {
+        shouldGuardUnload = false;
+        removeStatusToast();
+      });
+
+      actionsRow.appendChild(retryBtn);
+      actionsRow.appendChild(dismissBtn);
+      toast.appendChild(actionsRow);
+    } else if (state === 'captions_off') {
+      toast.style.borderLeftColor = '#d9534f';
+      messageEl.textContent = 'mast: Live captions are off. Enable captions to continue capturing.';
+      toast.appendChild(messageEl);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
+
+      const enableBtn = document.createElement('button');
+      enableBtn.textContent = 'Enable Captions';
+      enableBtn.style.cssText =
+        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
+      enableBtn.addEventListener('click', () => {
+        ensureCaptionsEnabled();
+      });
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.style.cssText =
+        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer;';
+      dismissBtn.addEventListener('click', () => {
+        captionsOffDismissed = true;
+        removeStatusToast();
+      });
+
+      actionsRow.appendChild(enableBtn);
+      actionsRow.appendChild(dismissBtn);
+      toast.appendChild(actionsRow);
+    }
   }
 
-  let isFinalizing = false;
-
-  function finalizeTranscriptionAndDownload(reason = "user_stop") {
-    if (isFinalizing) return;
-    isFinalizing = true;
-
-    if (pillAutoHideTimeout) clearTimeout(pillAutoHideTimeout);
-    if (pillMouseMoveHandler) {
-      window.removeEventListener('mousemove', pillMouseMoveHandler);
-      pillMouseMoveHandler = null;
+  function flushCaptionsToStorage() {
+    const transcriptLines = [];
+    for (let data of captionsMap.values()) {
+      if (data.text) {
+        transcriptLines.push(`[${data.speaker}]: ${data.text}`);
+      }
     }
-    if (pillDragCleanup) {
-      pillDragCleanup();
-      pillDragCleanup = null;
+    if (transcriptLines.length > 0) {
+      chrome.storage.local.set({ savedTranscript: transcriptLines });
+      syncTranscriptToRecentMeetings(transcriptLines, true);
     }
+  }
 
+  function stopLocalObservation() {
     isTranscribing = false;
+    flushCaptionsToStorage();
     captionsMap.clear();
-    if (issueTimer) clearTimeout(issueTimer);
+    if (issueTimer) {
+      clearTimeout(issueTimer);
+      issueTimer = null;
+    }
+    if (callCheckInterval) {
+      clearInterval(callCheckInterval);
+      callCheckInterval = null;
+    }
     if (observer) {
       observer.disconnect();
       observer = null;
     }
-
-    let card = document.getElementById('mast-meeting-reminder');
-    if (!card) {
-      card = document.createElement('div');
-      card.id = 'mast-meeting-reminder';
-      card.style.position = 'fixed';
-      card.style.bottom = '24px';
-      card.style.left = '24px';
-      card.style.zIndex = '2147483647';
-      document.body.appendChild(card);
-      reminderCard = card;
+    if (currentToastState === 'captions_off' || currentToastState === 'capturing_started') {
+      removeStatusToast();
     }
+    sawActiveMeeting = false;
+    missingCallChecks = 0;
+    sawCaptionsActive = false;
+    captionsOffDismissed = false;
+    transcriptionStartedAt = 0;
+  }
 
-    card.className = '';
-    card.style.cursor = 'default';
-    card.style.opacity = '1';
-    card.style.pointerEvents = 'auto';
-    card.style.transform = 'scale(1)';
-    card.style.background = 'rgba(255, 255, 255, 0.98)';
-    card.style.border = '1px solid #d1d5db';
-    card.style.borderRadius = '20px';
-    card.style.padding = '8px 16px';
-    card.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.12)';
-    card.style.display = 'flex';
-    card.style.alignItems = 'center';
-    card.style.gap = '10px';
-    card.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+  function startCallEndPolling() {
+    if (callCheckInterval) clearInterval(callCheckInterval);
+    sawActiveMeeting = isTeamsMeetingActive();
+    missingCallChecks = 0;
+    syncMeetingTitleToStorage();
 
-    card.innerHTML = `
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <span style="display: inline-block; width: 12px; height: 12px; border: 2px solid #5B5FC7; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;"></span>
-        <span style="font-size: 12px; color: #111827; font-weight: 500;">Generating AI summary & saving files...</span>
-      </div>
-    `;
-
-    chrome.runtime.sendMessage({ action: "auto_finalize_session", reason: reason }, (response) => {
-      isFinalizing = false;
-      const cardEl = document.getElementById('mast-meeting-reminder');
-      if (!cardEl) return;
-
-      if (chrome.runtime.lastError || !response) {
-        cardEl.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="color: #10b981; font-weight: bold; font-size: 13px;">✓</span>
-            <span style="font-size: 12px; color: #111827;">Notes saved to storage.</span>
-            <button id="mast-pill-close" style="background: none; border: none; font-size: 15px; color: #9ca3af; cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
-          </div>
-        `;
-      } else if (response.status === "no_transcript") {
-        cardEl.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 12px; color: #6b7280;">No speech detected to summarize.</span>
-            <button id="mast-pill-close" style="background: none; border: none; font-size: 15px; color: #9ca3af; cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
-          </div>
-        `;
-      } else {
-        let msg = "Transcript downloaded!";
-        if (response.summaryDownloaded && response.transcriptDownloaded) {
-          msg = response.retriedWithSecondary
-            ? `✓ AI Summary (${response.usedModel}) & Transcript downloaded!`
-            : "✓ AI Summary & Transcript downloaded!";
-        } else if (response.summaryDownloaded) {
-          msg = "✓ AI Summary downloaded!";
-        } else if (response.summaryError) {
-          msg = `✓ Transcript saved! (${response.summaryError})`;
-        }
-
-        cardEl.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="color: #10b981; font-weight: bold; font-size: 13px;">✓</span>
-            <span style="font-size: 12px; color: #111827; font-weight: 500;">${msg}</span>
-            <button id="mast-pill-close" style="background: none; border: none; font-size: 15px; color: #9ca3af; cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
-          </div>
-        `;
+    callCheckInterval = setInterval(() => {
+      if (!isTranscribing) {
+        clearInterval(callCheckInterval);
+        callCheckInterval = null;
+        return;
       }
 
-      const closePill = () => {
-        if (!cardEl) return;
-        cardEl.style.opacity = '0';
-        cardEl.style.pointerEvents = 'none';
-        cardEl.style.transform = 'scale(0.96)';
-        setTimeout(() => {
-          removeRecordingPill();
-        }, 300);
-      };
+      const active = isTeamsMeetingActive();
+      if (active) {
+        sawActiveMeeting = true;
+        missingCallChecks = 0;
+        syncMeetingTitleToStorage();
 
-      cardEl.querySelector('#mast-pill-close')?.addEventListener('click', closePill);
-      setTimeout(closePill, 6000);
+        const captionsVisible = areCaptionsVisible();
+        if (captionsVisible) {
+          sawCaptionsActive = true;
+          captionsOffDismissed = false;
+          if (currentToastState === 'captions_off') {
+            removeStatusToast();
+          }
+        } else if (sawCaptionsActive || (transcriptionStartedAt && Date.now() - transcriptionStartedAt >= 6000)) {
+          if (!captionsOffDismissed && currentToastState !== 'captions_off') {
+            renderStatusToast('captions_off');
+          }
+        }
+        return;
+      }
+
+      // Only auto-stop if this frame previously saw an active meeting
+      if (sawActiveMeeting) {
+        missingCallChecks += 1;
+        if (missingCallChecks >= 3) {
+          console.log("mast: Call end detected. Finalizing session and auto-generating AI notes.");
+          stopLocalObservation();
+          chrome.storage.local.set({ callEnded: true }, () => {
+            chrome.runtime.sendMessage({ action: "session_ended" });
+          });
+        }
+      }
+    }, 2000);
+  }
+
+  async function startObserving() {
+    if (observer) return;
+    await fetchRemoteConfig();
+    console.log("mast: startObserving() called. Looking for captions...");
+    syncMeetingTitleToStorage();
+
+    chrome.storage.local.set({ issueDetected: false });
+    if (issueTimer) clearTimeout(issueTimer);
+    issueTimer = setTimeout(() => {
+      if (captionsMap.size === 0) {
+        chrome.storage.local.set({ issueDetected: true });
+      }
+    }, 5 * 60 * 1000); // 5 minutes
+
+    const targetNode = document.querySelector('body');
+    if (!targetNode) return;
+
+    observer = new MutationObserver((mutations) => {
+      if (!isTranscribing) return;
+
+      let domChanged = false;
+
+      // 1. Check for newly added caption or speaker elements
+      mutations.forEach((mutation) => {
+        for (let node of mutation.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            const speakerEl = node.matches(SPEAKER_SELECTOR) ? node : node.querySelector(SPEAKER_SELECTOR);
+            if (speakerEl && speakerEl.innerText && speakerEl.innerText.trim()) {
+              currentSpeaker = speakerEl.innerText.trim();
+              console.log("mast: Found speaker:", currentSpeaker);
+            }
+
+            const textEls = node.matches(TEXT_SELECTOR) ? [node] : node.querySelectorAll(TEXT_SELECTOR);
+            for (let textEl of textEls) {
+              if (!captionsMap.has(textEl)) {
+                captionsMap.set(textEl, { speaker: currentSpeaker, text: textEl.innerText ? textEl.innerText.trim() : "" });
+                domChanged = true;
+              }
+            }
+          }
+        }
+      });
+
+      // 2. On EVERY mutation, sync the text for ALL tracked caption elements still on screen
+      for (let [textEl, data] of captionsMap.entries()) {
+        if (document.body.contains(textEl)) {
+          const newText = textEl.innerText ? textEl.innerText.trim() : "";
+          if (newText && newText !== data.text) {
+            data.text = newText;
+            domChanged = true;
+          }
+        }
+      }
+
+      // 3. If anything changed, save the entire consolidated map to storage
+      if (domChanged) {
+        const transcriptLines = [];
+        for (let data of captionsMap.values()) {
+          if (data.text) {
+            transcriptLines.push(`[${data.speaker}]: ${data.text}`);
+          }
+        }
+        if (transcriptLines.length > 0) {
+          chrome.storage.local.set({ savedTranscript: transcriptLines });
+          syncTranscriptToRecentMeetings(transcriptLines, false);
+        }
+      }
+    });
+
+    observer.observe(targetNode, { childList: true, subtree: true, characterData: true });
+    startCallEndPolling();
+  }
+
+  function areCaptionsVisibleLocal() {
+    const captionSelectors = [
+      CAPTION_CONTAINER_SELECTOR,
+      TEXT_SELECTOR,
+      SPEAKER_SELECTOR,
+      '[data-tid="closed-captions-container"]',
+      '[data-tid="closed-caption-renderer-wrapper"]',
+      '[data-tid="closed-caption-text"]',
+      '.ui-captions-container'
+    ];
+    return captionSelectors.some((sel) => {
+      try {
+        return !!document.querySelector(sel);
+      } catch (_) {
+        return false;
+      }
     });
   }
 
-  // --- TEAMS MEETING DETECTION & IN-PAGE REMINDER ---
-  function isTeamsMeetingActive() {
-    const meetingSelectors = [
-      '[data-tid="call-duration"]',
-      '#hangup-button',
-      'button[data-tid="hangup-button"]',
-      'button[data-tid="call-hangup"]',
-      'button[aria-label="Leave call" i]',
-      'button[aria-label="Leave meeting" i]',
-      'button[aria-label="Hang up" i]',
-      '[data-tid="calling-top-bar"]',
-      '[data-tid="calling-screen"]',
-      '[data-tid="meeting-stage"]',
-      '[data-tid="calling-stage"]',
-      '[data-tid="closed-captions-container"]',
-      '[data-tid="closed-caption-renderer-wrapper"]'
-    ];
-    return meetingSelectors.some(sel => !!document.querySelector(sel));
+  function areCaptionsVisible() {
+    if (areCaptionsVisibleLocal()) return true;
+    if (window === window.top && Date.now() - lastChildFrameCaptionsAt < 4500) {
+      return true;
+    }
+    return false;
   }
 
-  function createInMeetingReminder() {
-    if (document.getElementById('mast-meeting-reminder')) return;
+  function ensureCaptionsEnabled() {
+    if (areCaptionsVisibleLocal()) {
+      console.log("mast: Captions already active.");
+      return;
+    }
+    console.log("mast: Attempting to enable captions via Alt+Shift+C");
+    const event = new KeyboardEvent('keydown', {
+      key: 'c',
+      code: 'KeyC',
+      keyCode: 67,
+      which: 67,
+      altKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true
+    });
+    document.dispatchEvent(event);
+  }
 
-    const card = document.createElement('div');
-    card.id = 'mast-meeting-reminder';
+  function startMeetingDetectionLoop() {
+    if (meetingDetectInterval) clearInterval(meetingDetectInterval);
 
-    const savedPos = getSavedPillPosition();
-    const defaultLeft = 24;
-    const defaultTop = Math.max(12, window.innerHeight - 175);
-    const startLeft = savedPos ? savedPos.left : defaultLeft;
-    const startTop = savedPos ? Math.min(window.innerHeight - 175, savedPos.top) : defaultTop;
+    const checkMeetingPresence = () => {
+      try {
+        const localActive = isTeamsMeetingActiveLocal();
+        if (window !== window.top) {
+          if (localActive) {
+            window.top.postMessage(
+              {
+                type: 'MAST_FRAME_MEETING_STATUS',
+                active: true,
+                captionsVisible: areCaptionsVisibleLocal(),
+                title: extractTeamsMeetingTitle()
+              },
+              '*'
+            );
+          }
+          return;
+        }
 
-    card.style.cssText = `
-      position: fixed;
-      left: ${startLeft}px;
-      top: ${startTop}px;
-      z-index: 2147483647;
-      background: #ffffff;
-      border: 1px solid #d1d5db;
-      border-radius: 12px;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-      padding: 16px 18px;
-      width: 320px;
-      max-width: calc(100vw - 48px);
-      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-      color: #1f2937;
-      opacity: 1;
-      pointer-events: auto;
-      transform: translateY(0);
-      transition: all 0.25s ease-in-out;
-    `;
+        const meetingActive = isTeamsMeetingActive();
+        if (!meetingActive) {
+          meetingDetectedToastDismissed = false;
+          if (currentToastState === 'meeting_detected') {
+            removeStatusToast();
+          }
+          return;
+        }
 
-    card.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <div style="display: flex; align-items: center; gap: 6px;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5B5FC7" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block; vertical-align: middle;">
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-            <line x1="12" y1="19" x2="12" y2="23"></line>
-            <line x1="8" y1="23" x2="16" y2="23"></line>
-          </svg>
-          <span style="font-weight: 700; font-size: 13px; color: #5B5FC7; letter-spacing: -0.2px;">mast</span>
-          <span style="font-size: 11px; color: #6b7280;">· Meeting Assistant</span>
-        </div>
-        <button id="mast-dismiss-x" style="background: none; border: none; font-size: 16px; color: #9ca3af; cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
-      </div>
-      
-      <div style="font-size: 13px; font-weight: 600; color: #111827; margin-bottom: 4px;">
-        Meeting in Progress
-      </div>
-      <div style="font-size: 12px; color: #4b5563; line-height: 1.4; margin-bottom: 14px;">
-        Would you like to transcribe and generate AI meeting notes for this call?
-      </div>
+        syncMeetingTitleToStorage();
 
-      <div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
-        <button id="mast-btn-dismiss" style="background: transparent; border: none; color: #6b7280; font-size: 12px; padding: 6px 10px; cursor: pointer; border-radius: 4px;">
-          Not Now
-        </button>
-        <button id="mast-btn-start" style="background: #5B5FC7; border: none; color: #ffffff; font-weight: 600; font-size: 12px; padding: 7px 14px; border-radius: 6px; cursor: pointer; box-shadow: 0 1px 3px rgba(91, 95, 199, 0.4); display: flex; align-items: center; gap: 5px;">
-          Start AI Notes
-        </button>
-      </div>
-    `;
+        if (isTranscribing) {
+          if (currentToastState === 'meeting_detected') {
+            removeStatusToast();
+          }
+          return;
+        }
 
-    document.body.appendChild(card);
-    reminderCard = card;
-
-    const dismissBtn = card.querySelector('#mast-btn-dismiss');
-    const dismissX = card.querySelector('#mast-dismiss-x');
-    const startBtn = card.querySelector('#mast-btn-start');
-
-    const closeCard = () => {
-      card.style.opacity = '0';
-      card.style.pointerEvents = 'none';
-      card.style.transform = 'translateY(10px)';
-      setTimeout(() => {
-        removeRecordingPill();
-      }, 250);
+        chrome.storage.local.get(['isTranscribing', 'notesStatus'], (res) => {
+          if (chrome.runtime.lastError) return;
+          if (res.isTranscribing) {
+            if (currentToastState === 'meeting_detected') {
+              removeStatusToast();
+            }
+            return;
+          }
+          if (res.notesStatus === 'generating') return;
+          if (meetingDetectedToastDismissed) return;
+          if (
+            currentToastState !== 'meeting_detected' &&
+            currentToastState !== 'capturing_started' &&
+            currentToastState !== 'generating' &&
+            currentToastState !== 'done' &&
+            currentToastState !== 'error'
+          ) {
+            renderStatusToast('meeting_detected');
+          }
+        });
+      } catch (_) {}
     };
 
-    dismissBtn?.addEventListener('click', closeCard);
-    dismissX?.addEventListener('click', closeCard);
-
-    startBtn?.addEventListener('click', () => {
-      startBtn.innerText = "Starting...";
-      startBtn.disabled = true;
-
-      // 1. Enable live captions (safe DOM automation, no camera/hand side effects)
-      attemptEnableCaptions();
-
-      // 2. Start transcription in storage
-      const startTime = Date.now();
-      chrome.storage.local.set({
-        savedTranscript: [],
-        isTranscribing: true,
-        startTime: startTime,
-        issueDetected: false,
-        activeTabId: null
-      }, () => {
-        isTranscribing = true;
-        startObserving();
-        showRecordingPill();
-      });
-    });
+    checkMeetingPresence();
+    meetingDetectInterval = setInterval(checkMeetingPresence, 2000);
   }
 
-  function checkAndShowMeetingReminder() {
-    const active = isTeamsMeetingActive();
+  // React to background generation and transcription status updates
+  function onStorageChanged(changes, area) {
+    if (area !== 'local') return;
 
-    // If meeting is not active, check if we need to finalize a session that just ended
-    if (!active) {
-      if (isTranscribing) {
-        finalizeTranscriptionAndDownload("meeting_ended");
-      } else {
-        removeRecordingPill();
+    if (changes.isTranscribing) {
+      if (changes.isTranscribing.newValue === true && currentToastState === 'meeting_detected') {
+        removeStatusToast();
+      } else if (changes.isTranscribing.newValue === false) {
+        meetingDetectedToastDismissed = true;
       }
-      meetingPromptShown = false;
-      return;
     }
 
-    // If meeting is active, but we already prompted or already transcribing, skip
-    if (isTranscribing || meetingPromptShown || document.getElementById('mast-meeting-reminder')) {
-      return;
-    }
-
-    meetingPromptShown = true;
-
-    // Attempt to notify background service worker to open the extension toolbar popup
-    try {
-      chrome.runtime.sendMessage({ action: "meeting_started" }, () => {
-        if (chrome.runtime.lastError) {
-          // Service worker may be asleep or blocked
+    if (changes.notesStatus) {
+      const status = changes.notesStatus.newValue;
+      if (status === 'generating') {
+        shouldGuardUnload = true;
+        renderStatusToast('generating');
+      } else if (status === 'done') {
+        shouldGuardUnload = false;
+        renderStatusToast('done');
+      } else if (status === 'error') {
+        shouldGuardUnload = true;
+        chrome.storage.local.get(['notesError'], (res) => {
+          renderStatusToast('error', res.notesError);
+        });
+      } else if (status === 'idle') {
+        shouldGuardUnload = false;
+        if (currentToastState !== 'meeting_detected') {
+          removeStatusToast();
         }
-      });
-    } catch (e) {
-      // Ignore background message failure
-    }
-
-    // Also display the in-meeting prompt card
-    createInMeetingReminder();
-  }
-
-  // Poll for meeting start every 2 seconds
-  meetingCheckInterval = setInterval(checkAndShowMeetingReminder, 2000);
-
-  // Sync state when popup toggles transcription
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.isTranscribing) {
-      isTranscribing = changes.isTranscribing.newValue;
-      if (isTranscribing) {
-        showRecordingPill();
-      } else {
-        removeRecordingPill();
       }
     }
-  });
+  }
+  chrome.storage.onChanged.addListener(onStorageChanged);
 
-  // Message listener from popup
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  function onRuntimeMessage(request, sender, sendResponse) {
     if (request.action === "start") {
+      shouldGuardUnload = false;
+      if (currentToastState !== 'capturing_started') {
+        removeStatusToast();
+      }
       isTranscribing = true;
+      transcriptionStartedAt = Date.now();
+      sawCaptionsActive = areCaptionsVisible();
+      captionsOffDismissed = false;
+      ensureCaptionsEnabled();
       startObserving();
-      showRecordingPill();
       sendResponse({ status: "started" });
     } else if (request.action === "stop") {
-      finalizeTranscriptionAndDownload("popup_stop");
+      meetingDetectedToastDismissed = true;
+      stopLocalObservation();
       sendResponse({ status: "stopped" });
     } else if (request.action === "force_captions") {
-      attemptEnableCaptions();
+      ensureCaptionsEnabled();
       sendResponse({ status: "force_captions_sent" });
     }
-  });
+  }
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
 
-  // Safely trigger finalization if tab is closed while transcribing
-  window.addEventListener('beforeunload', () => {
-    if (isTranscribing) {
-      try {
-        chrome.runtime.sendMessage({ action: "auto_finalize_session", reason: "page_unload" });
-      } catch (e) {}
-    }
-  });
+  window.__mastContentScriptCleanup = function () {
+    if (meetingDetectInterval) clearInterval(meetingDetectInterval);
+    if (callCheckInterval) clearInterval(callCheckInterval);
+    if (issueTimer) clearTimeout(issueTimer);
+    if (statusToastTimer) clearTimeout(statusToastTimer);
+    if (observer) observer.disconnect();
+    window.removeEventListener('beforeunload', onBeforeUnload);
+    window.removeEventListener('message', onWindowMessage);
+    try {
+      chrome.storage.onChanged.removeListener(onStorageChanged);
+      chrome.runtime.onMessage.removeListener(onRuntimeMessage);
+    } catch (_) {}
+  };
 
+  startMeetingDetectionLoop();
 })();
