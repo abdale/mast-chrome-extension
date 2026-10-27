@@ -170,7 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const modelId = m.name.replace('models/', '');
         const option = document.createElement('option');
         option.value = modelId;
-        const baseLabel = m.displayName ? `${modelId} (${m.displayName})` : modelId;
+        const baseLabel = m.displayName || modelId;
         option.textContent = modelId === defaultModelId ? `${baseLabel} (Default)` : baseLabel;
         modelSelect.appendChild(option);
       });
