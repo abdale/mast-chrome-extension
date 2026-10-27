@@ -9,6 +9,7 @@ const apiError = document.getElementById('apiError');
 
 const startBtn = document.getElementById('startBtn');
 const captionHelperText = document.getElementById('captionHelperText');
+const enableCaptionsBtn = document.getElementById('enableCaptionsBtn');
 const issueBanner = document.getElementById('issueBanner');
 const stopLink = document.getElementById('stopLink');
 const statusEl = document.getElementById('status');
@@ -290,6 +291,7 @@ function updateUI() {
     let currentTabId = tab ? tab.id : null;
     const switchedToNewTab = !!(result.activeTabId && result.activeTabId !== currentTabId);
     const startedNewCallInSameTab = !!(result.callEnded && pageStatus.inActiveCall && !result.isTranscribing);
+    const inNewActiveMeeting = !!(pageStatus.inActiveCall && (switchedToNewTab || result.callEnded) && !result.isTranscribing);
     const reopenedAfterCompletion = !!(result.notesStatus === 'done' && !sawSessionTransitionInPopup && !result.isTranscribing);
     const isGeneratingStale =
       result.notesStatus === 'generating' &&
@@ -300,7 +302,7 @@ function updateUI() {
       result.savedTranscript.length > 0 &&
       (switchedToNewTab || startedNewCallInSameTab || reopenedAfterCompletion) &&
       (result.notesStatus !== 'generating' || isGeneratingStale) &&
-      (result.notesStatus !== 'error' || startedNewCallInSameTab)
+      (result.notesStatus !== 'error' || inNewActiveMeeting)
     ) {
       const nextMeetingTitle =
         pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting"
@@ -357,11 +359,15 @@ function updateUI() {
       startTimer(startTime);
 
       if (captionHelperText) {
-        if (!pageStatus.captionsOn && !hasTranscript && Date.now() - startTime >= 5000) {
+        if (!pageStatus.captionsOn && Date.now() - startTime >= 4000) {
           captionHelperText.style.display = "block";
-          captionHelperText.innerText = "Did captions turn on? Press Alt + Shift + C to toggle manually.";
+          captionHelperText.style.color = "#d32f2f";
+          captionHelperText.innerText = "Live captions are off. Enable captions to continue capturing.";
+          if (enableCaptionsBtn) enableCaptionsBtn.style.display = "block";
         } else {
           captionHelperText.style.display = "none";
+          captionHelperText.style.color = "#5f6368";
+          if (enableCaptionsBtn) enableCaptionsBtn.style.display = "none";
         }
       }
       return;
@@ -425,8 +431,10 @@ function updateUI() {
     stopTimer();
 
     startBtn.disabled = false;
+    if (enableCaptionsBtn) enableCaptionsBtn.style.display = "none";
     if (captionHelperText) {
       captionHelperText.style.display = "block";
+      captionHelperText.style.color = "#5f6368";
       captionHelperText.innerText = pageStatus.captionsOn
         ? "Captions enabled and ready. Do not disable live captions during the call."
         : "Live captions will be automatically enabled upon capture. Do not disable live captions during the call.";
@@ -505,6 +513,14 @@ stopLink.addEventListener('click', async (e) => {
     }
   );
 });
+
+if (enableCaptionsBtn) {
+  enableCaptionsBtn.addEventListener('click', () => {
+    executeInActiveTab("force_captions", () => {
+      updateUI();
+    });
+  });
+}
 
 if (retryBtn) {
   retryBtn.addEventListener('click', () => {

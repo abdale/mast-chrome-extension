@@ -20,6 +20,10 @@
   let missingCallChecks = 0;
   let shouldGuardUnload = false;
   let statusToastTimer = null;
+  let currentToastState = null;
+  let sawCaptionsActive = false;
+  let captionsOffDismissed = false;
+  let transcriptionStartedAt = 0;
 
   // Beforeunload guard: prompts user if they try to close the tab before AI notes finish downloading
   window.addEventListener('beforeunload', (e) => {
@@ -149,6 +153,7 @@
       clearTimeout(statusToastTimer);
       statusToastTimer = null;
     }
+    currentToastState = null;
     const existing = document.getElementById('mast-status-toast');
     if (existing) {
       existing.remove();
@@ -162,6 +167,7 @@
       clearTimeout(statusToastTimer);
       statusToastTimer = null;
     }
+    currentToastState = state;
 
     let toast = document.getElementById('mast-status-toast');
     if (!toast) {
@@ -234,6 +240,32 @@
       actionsRow.appendChild(retryBtn);
       actionsRow.appendChild(dismissBtn);
       toast.appendChild(actionsRow);
+    } else if (state === 'captions_off') {
+      toast.style.borderLeftColor = '#d9534f';
+      messageEl.textContent = 'mast: Live captions are off. Enable captions to continue capturing.';
+      toast.appendChild(messageEl);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
+
+      const enableBtn = document.createElement('button');
+      enableBtn.textContent = 'Enable Captions';
+      enableBtn.style.cssText = 'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
+      enableBtn.addEventListener('click', () => {
+        ensureCaptionsEnabled();
+      });
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.style.cssText = 'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer;';
+      dismissBtn.addEventListener('click', () => {
+        captionsOffDismissed = true;
+        removeStatusToast();
+      });
+
+      actionsRow.appendChild(enableBtn);
+      actionsRow.appendChild(dismissBtn);
+      toast.appendChild(actionsRow);
     }
   }
 
@@ -265,8 +297,14 @@
       observer.disconnect();
       observer = null;
     }
+    if (currentToastState === 'captions_off') {
+      removeStatusToast();
+    }
     sawActiveMeeting = false;
     missingCallChecks = 0;
+    sawCaptionsActive = false;
+    captionsOffDismissed = false;
+    transcriptionStartedAt = 0;
   }
 
   function startCallEndPolling() {
@@ -287,6 +325,19 @@
         sawActiveMeeting = true;
         missingCallChecks = 0;
         syncMeetingTitleToStorage();
+
+        const captionsVisible = areCaptionsVisible();
+        if (captionsVisible) {
+          sawCaptionsActive = true;
+          captionsOffDismissed = false;
+          if (currentToastState === 'captions_off') {
+            removeStatusToast();
+          }
+        } else if (sawCaptionsActive || (transcriptionStartedAt && Date.now() - transcriptionStartedAt >= 6000)) {
+          if (!captionsOffDismissed && currentToastState !== 'captions_off') {
+            renderStatusToast('captions_off');
+          }
+        }
         return;
       }
 
@@ -444,6 +495,9 @@
       shouldGuardUnload = false;
       removeStatusToast();
       isTranscribing = true;
+      transcriptionStartedAt = Date.now();
+      sawCaptionsActive = areCaptionsVisible();
+      captionsOffDismissed = false;
       ensureCaptionsEnabled();
       startObserving();
       sendResponse({ status: "started" });
