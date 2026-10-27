@@ -162,7 +162,7 @@
     <div class="form-group">
       <label for="apiKey">Google AI Studio API Key</label>
       <input type="password" id="apiKey" placeholder="AIzaSy...">
-      <div class="help-text">Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>.</div>
+      <div class="help-text">Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. For detailed instructions, see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>.</div>
     </div>
 
     <div class="form-group">
@@ -178,14 +178,39 @@
       <input type="text" id="customModel" placeholder="e.g., gemini-3.5-flash">
       <div class="help-text">Specify any valid model ID supported by the Gemini Developer API.</div>
     </div>
+
+    <div class="form-group">
+      <label for="titleSource">NOTES FILE NAMING</label>
+      <select id="titleSource">
+        <option value="ai">AI-Generated Title (Default)</option>
+        <option value="teams">Teams Meeting Name</option>
+      </select>
+      <div class="help-text">Choose whether the AI notes file is named by AI or matches the Teams meeting name.</div>
+    </div>
     
     <button id="saveBtn">Save Settings</button>
     <div id="status"></div>
 
-    <div style="text-align: center; margin-top: 25px; padding-top: 15px; border-top: 1px solid var(--border); font-size: 12px;">
-      <a href="http://go/mast-feedback" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;">
-        Feedback & Suggestions
-      </a>
+    <div style="margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border);">
+      <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 10px;">RECENT MEETINGS</div>
+      <div id="recentMeetingsList" style="display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--text-muted);">
+        No recent meetings recorded yet.
+      </div>
+    </div>
+
+    <div style="margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border);">
+      <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 6px;">ABOUT MAST</div>
+      <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
+        <strong style="color: var(--text);">mast</strong> is a lightweight, privacy-focused Chrome extension built for Googlers to securely transcribe and generate AI meeting notes for Microsoft Teams calls. All captions are processed locally in your browser using your own Google AI Studio API key, with no external servers or third-party data storage.
+      </div>
+    </div>
+
+    <div style="text-align: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); display: flex; justify-content: center; align-items: center; gap: 8px;">
+      <span>2.7</span>
+      <span>&middot;</span>
+      <a href="release-notes.html" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 500;">Release Notes</a>
+      <span>&middot;</span>
+      <a href="http://go/mast-feedback" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 500;">Report Bug</a>
     </div>
   </div>
   

@@ -23,10 +23,13 @@
 </head>
 <body>
   <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-    <h3 style="margin: 0;">mast</h3>
+    <h3 style="margin: 0; display: flex; align-items: center; gap: 6px;">
+      <img src="data:image/png;base64,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" width="11" height="21" alt="mast" style="display: block; flex-shrink: 0;">
+      <span style="display: inline-flex; align-items: baseline; gap: 5px;"><span style="font-size: 18px; font-weight: 700; color: #202124;">mast</span><span style="font-size: 12px; font-weight: 400; color: #5f6368;">for Teams</span></span>
+    </h3>
     <div style="text-align: right;">
-      <a href="#" id="settingsLink" style="font-size: 12px; font-weight: bold;">Settings</a>
-      <div style="font-size: 10px; color: #888; margin-top: 3px;">Version 2.6</div>
+      <a href="#" id="settingsLink" style="font-size: 11px; font-weight: 400; color: #5f6368 !important;">Settings</a>
+      <div style="font-size: 10px; color: #888; margin-top: 3px;">2.7</div>
     </div>
   </div>
   
@@ -35,8 +38,17 @@
     <input type="password" id="apiKeyInput" placeholder="AIzaSy..." style="width: 100%; padding: 6px; box-sizing: border-box;">
     <button id="validateBtn">Save & Validate</button>
     <div id="apiError" style="color: red; font-size: 11px; margin-top: 5px; display: none;"></div>
-    <div style="font-size: 11px; margin-top: 10px; color: #666;">
-      Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>.
+    <div style="font-size: 11px; margin-top: 10px; color: #666; line-height: 1.4;">
+      Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. For detailed instructions, see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>.
+    </div>
+  </div>
+
+  <div id="view-no-call" class="view-section">
+    <div style="background: #f8f9fa; border: 1px solid #dadce0; padding: 15px; border-radius: 6px; margin-top: 15px; text-align: center;">
+      <h4 style="margin-top: 0; margin-bottom: 6px; color: #202124;">No active Teams call</h4>
+      <p style="font-size: 12px; color: #5f6368; margin: 0; line-height: 1.4;">
+        Join a Microsoft Teams call in this tab to capture meeting notes.
+      </p>
     </div>
   </div>
 
@@ -49,6 +61,7 @@
       <a href="#" id="stopLink" style="display: none; font-size: 14px; font-weight: bold; color: #d9534f !important;">Stop</a>
     </div>
     <div id="captionHelperText">Live captions will be automatically enabled upon capture. Do not disable live captions during the call.</div>
+    <button id="enableCaptionsBtn" style="display: none; margin-top: 8px; background-color: #5B5FC7; color: white;">Enable Captions</button>
     <div id="timer">00:00</div>
     <div id="status"></div>
   </div>
@@ -59,7 +72,10 @@
       <p id="resultsStatus" style="font-size: 12px; color: #5f6368; margin: 0; line-height: 1.4; word-wrap: break-word;">
         Your AI meeting notes and transcript have been saved to your Downloads folder.
       </p>
-      <button id="retryBtn" style="display: none; margin-top: 10px; background-color: #5B5FC7; color: white;">Retry</button>
+      <div style="display: flex; gap: 8px; justify-content: center;">
+        <button id="retryBtn" style="display: none; margin-top: 10px; background-color: #5B5FC7; color: white;">Retry</button>
+        <button id="dismissBtn" style="display: none; margin-top: 10px; background-color: transparent; color: #5f6368; border: 1px solid #dadce0;">Dismiss</button>
+      </div>
     </div>
   </div>
 

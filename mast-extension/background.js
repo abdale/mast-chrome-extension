@@ -1,6 +1,47 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
+const WORKER_BUILD_VERSION = '2.7.6';
 let isGeneratingInMemory = false;
+
+const TEAMS_URL_PATTERNS = [
+  "https://teams.microsoft.com/*",
+  "https://*.teams.microsoft.com/*",
+  "https://teams.live.com/*",
+  "https://*.teams.live.com/*",
+  "https://teams.cloud.microsoft/*",
+  "https://*.teams.cloud.microsoft/*"
+];
+
+async function injectContentScriptIntoOpenTeamsTabs() {
+  try {
+    const tabs = await chrome.tabs.query({ url: TEAMS_URL_PATTERNS });
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          files: ['content.js']
+        }, () => {
+          void chrome.runtime.lastError;
+        });
+      }
+    }
+  } catch (_) {}
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 45000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error('Request timed out. Please click Retry.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function getTopStableFlashModels(models) {
   const validModels = (models || []).filter(
@@ -35,28 +76,42 @@ function getTopStableFlashModels(models) {
   return sorted.slice(0, 2).map(entry => entry.model);
 }
 
+function getDefaultFlashModelId(topFlashModels) {
+  if (!topFlashModels || topFlashModels.length === 0) return 'gemini-2.5-flash';
+  const preferred = topFlashModels.length >= 2 ? topFlashModels[1] : topFlashModels[0];
+  return preferred.name.replace('models/', '');
+}
+
 async function resolveActiveModel(apiKey, storedState) {
   if (storedState.modelSelectVal === 'custom' && storedState.customModelVal) {
     return storedState.customModelVal.trim().replace(/^models\//, '');
   }
 
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    const response = await fetchWithTimeout(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+      {},
+      8000
+    );
     if (response.ok) {
       const data = await response.json();
       const topFlash = getTopStableFlashModels(data.models);
       const validIds = topFlash.map(m => m.name.replace('models/', ''));
 
       if (validIds.length > 0) {
-        if (storedState.selectedModel && validIds.includes(storedState.selectedModel)) {
+        if (
+          storedState.userSelectedModel &&
+          storedState.selectedModel &&
+          validIds.includes(storedState.selectedModel)
+        ) {
           return storedState.selectedModel;
         }
-        const latestFlashId = validIds[0];
+        const defaultFlashId = getDefaultFlashModelId(topFlash);
         await chrome.storage.local.set({
-          selectedModel: latestFlashId,
-          modelSelectVal: latestFlashId
+          selectedModel: defaultFlashId,
+          modelSelectVal: defaultFlashId
         });
-        return latestFlashId;
+        return defaultFlashId;
       }
     }
   } catch (e) {
@@ -69,10 +124,25 @@ async function resolveActiveModel(apiKey, storedState) {
   return 'gemini-2.5-flash';
 }
 
-function getDateAndTimeStrings(dateObj = new Date()) {
-  const dateStr = dateObj.toISOString().split('T')[0];
-  const timeStr = dateObj.toTimeString().split(' ')[0].replace(/:/g, '-');
-  return { dateStr, timeStr };
+function formatShortDate(dateObj = new Date()) {
+  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const mon = months[dateObj.getMonth()];
+  const day = dateObj.getDate();
+  const year = dateObj.getFullYear();
+  return `${mon}${day}-${year}`;
+}
+
+function sanitizeFilenameTitle(rawTitle, fallback = 'meeting') {
+  if (!rawTitle || typeof rawTitle !== 'string') return fallback;
+  const sanitized = rawTitle
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .trim()
+    .replace(/[\s_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .substring(0, 60);
+  if (!sanitized || sanitized === 'title') return fallback;
+  return sanitized;
 }
 
 function downloadTextViaDataUrl(content, mimeType, filename) {
@@ -88,26 +158,98 @@ function downloadTextViaDataUrl(content, mimeType, filename) {
   });
 }
 
+async function saveToRecentMeetings(lines, meetingTitle, startTime) {
+  if (!lines || lines.length === 0) return null;
+  const stored = await chrome.storage.local.get(['recentMeetings', 'startTime']);
+  const recent = Array.isArray(stored.recentMeetings) ? stored.recentMeetings : [];
+
+  const sessionTimestamp = startTime || stored.startTime || Date.now();
+  const sessionId = String(sessionTimestamp);
+  const dateObj = new Date(sessionTimestamp);
+  const shortDate = formatShortDate(dateObj);
+  const displayDate = dateObj.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  });
+  const cleanTitle =
+    meetingTitle && typeof meetingTitle === 'string' && meetingTitle.trim()
+      ? meetingTitle.trim()
+      : 'Meeting';
+
+  const existingIdx = recent.findIndex((m) => m.id === sessionId);
+  const existingEntry = existingIdx >= 0 ? recent[existingIdx] : null;
+
+  const entry = {
+    id: sessionId,
+    title: existingEntry && cleanTitle === 'Meeting' ? existingEntry.title : cleanTitle,
+    teamsTitle: cleanTitle !== 'Meeting' ? cleanTitle : (existingEntry?.teamsTitle || 'Meeting'),
+    shortDate,
+    displayDate,
+    timestamp: sessionTimestamp,
+    lines
+  };
+
+  if (existingIdx >= 0) {
+    recent.splice(existingIdx, 1);
+  }
+  recent.unshift(entry);
+
+  const trimmed = recent.slice(0, 5);
+  await chrome.storage.local.set({
+    recentMeetings: trimmed,
+    startTime: sessionTimestamp
+  });
+  return entry;
+}
+
+async function updateRecentMeetingTitle(sessionId, newTitle) {
+  if (!newTitle || newTitle === 'Meeting') return;
+  const stored = await chrome.storage.local.get(['recentMeetings']);
+  const recent = Array.isArray(stored.recentMeetings) ? stored.recentMeetings : [];
+  if (recent.length === 0) return;
+
+  let idx = sessionId ? recent.findIndex((m) => m.id === String(sessionId)) : 0;
+  if (idx < 0) idx = 0;
+
+  if (!recent[idx].title || recent[idx].title === 'Meeting' || recent[idx].title === 'meeting') {
+    recent[idx].title = newTitle;
+    await chrome.storage.local.set({ recentMeetings: recent });
+  }
+}
+
 async function downloadTranscriptIfNeeded(forceDownload = false) {
-  const result = await chrome.storage.local.get(['savedTranscript', 'transcriptDownloaded']);
+  const result = await chrome.storage.local.get(['savedTranscript', 'transcriptDownloaded', 'meetingTitle', 'startTime']);
   const lines = result.savedTranscript || [];
   if (lines.length === 0) return false;
+
+  await saveToRecentMeetings(lines, result.meetingTitle, result.startTime);
+
   if (!forceDownload && result.transcriptDownloaded) return false;
 
   const fullTranscript = lines.join('\n');
-  const { dateStr, timeStr } = getDateAndTimeStrings();
-  const filename = `transcript_${dateStr}_${timeStr}.txt`;
+  const meetingName = sanitizeFilenameTitle(result.meetingTitle, 'meeting');
+  const shortDate = formatShortDate();
+  const filename = `transcript_${meetingName}_${shortDate}.txt`;
 
   await downloadTextViaDataUrl(fullTranscript, 'text/plain', filename);
   await chrome.storage.local.set({ transcriptDownloaded: true });
   return true;
 }
 
-async function generateAndDownloadNotes() {
-  if (isGeneratingInMemory) {
+async function generateAndDownloadNotes(overrideMeeting = null) {
+  const isHistoryRegen = !!overrideMeeting;
+  if (!isHistoryRegen && isGeneratingInMemory) {
     return { status: "already_generating" };
   }
-  isGeneratingInMemory = true;
+  if (!isHistoryRegen) {
+    isGeneratingInMemory = true;
+  }
+
+  // Keep MV3 service worker alive while waiting on network generation
+  const keepAliveInterval = setInterval(() => {
+    chrome.storage.local.get(['notesStatus'], () => {});
+  }, 15000);
 
   try {
     const result = await chrome.storage.local.get([
@@ -116,36 +258,48 @@ async function generateAndDownloadNotes() {
       'selectedModel',
       'modelSelectVal',
       'customModelVal',
-      'meetingTitle'
+      'userSelectedModel',
+      'meetingTitle',
+      'titleSource',
+      'startTime'
     ]);
 
-    const lines = result.savedTranscript || [];
+    const lines = isHistoryRegen ? (overrideMeeting.lines || []) : (result.savedTranscript || []);
     if (lines.length === 0) {
-      await chrome.storage.local.set({
-        notesStatus: 'error',
-        notesError: 'No captions captured.'
-      });
+      if (!isHistoryRegen) {
+        await chrome.storage.local.set({
+          notesStatus: 'error',
+          notesError: 'No captions captured.'
+        });
+      }
       return { status: "error", error: "No captions captured." };
     }
 
     const apiKey = result.apiKey ? result.apiKey.trim() : '';
     if (!apiKey) {
-      await chrome.storage.local.set({
-        notesStatus: 'error',
-        notesError: 'API Key missing.'
-      });
+      if (!isHistoryRegen) {
+        await chrome.storage.local.set({
+          notesStatus: 'error',
+          notesError: 'API Key missing.'
+        });
+      }
       return { status: "error", error: "API Key missing." };
     }
 
-    await chrome.storage.local.set({
-      notesStatus: 'generating',
-      notesError: ''
-    });
+    let savedEntry = null;
+    if (!isHistoryRegen) {
+      savedEntry = await saveToRecentMeetings(lines, result.meetingTitle, result.startTime);
+      await chrome.storage.local.set({
+        notesStatus: 'generating',
+        notesError: '',
+        generationStartedAt: Date.now()
+      });
+    }
 
     const model = await resolveActiveModel(apiKey, result);
     const fullTranscript = lines.join('\n');
 
-    const dateObj = new Date();
+    const dateObj = isHistoryRegen && overrideMeeting.timestamp ? new Date(overrideMeeting.timestamp) : new Date();
     const dateFormatted =
       dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) +
       ' at ' +
@@ -185,11 +339,15 @@ ${fullTranscript}`;
       generationConfig: { temperature: 0.2 }
     };
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const response = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      },
+      60000
+    );
 
     if (!response.ok) {
       let errMsg = "Google AI Studio Error";
@@ -218,36 +376,59 @@ ${fullTranscript}`;
       }
     }
 
-    let sanitizedTitle = aiTitle
-      .toLowerCase()
-      .replace(/[^a-z0-9\s_-]/g, '')
-      .trim()
-      .replace(/[\s-]+/g, '_')
-      .substring(0, 50);
+    const useTeamsTitle = result.titleSource === 'teams';
+    const rawTeamsTitle = isHistoryRegen
+      ? (overrideMeeting.teamsTitle || overrideMeeting.title)
+      : result.meetingTitle;
+    const hasTeamsTitle =
+      rawTeamsTitle &&
+      typeof rawTeamsTitle === 'string' &&
+      rawTeamsTitle.trim() &&
+      rawTeamsTitle.trim().toLowerCase() !== 'meeting';
 
-    if (!sanitizedTitle || sanitizedTitle === 'title') sanitizedTitle = "meeting";
-
-    const { dateStr, timeStr } = getDateAndTimeStrings();
-    const filename = `ai_summary_${sanitizedTitle}_${dateStr}_${timeStr}.md`;
+    const chosenTitle = useTeamsTitle && hasTeamsTitle ? rawTeamsTitle.trim() : aiTitle;
+    const sanitizedTitle = sanitizeFilenameTitle(chosenTitle, 'meeting');
+    const shortDate = isHistoryRegen && overrideMeeting.shortDate ? overrideMeeting.shortDate : formatShortDate(dateObj);
+    const filename = `${sanitizedTitle}_${shortDate}.md`;
 
     await downloadTextViaDataUrl(minutesText, 'text/markdown', filename);
 
-    await chrome.storage.local.set({
-      notesStatus: 'done',
-      notesError: ''
-    });
+    if (isHistoryRegen) {
+      await updateRecentMeetingTitle(overrideMeeting.id, chosenTitle);
+    } else {
+      await updateRecentMeetingTitle(savedEntry ? savedEntry.id : result.startTime, chosenTitle);
+      await chrome.storage.local.set({
+        notesStatus: 'done',
+        notesError: ''
+      });
+    }
 
     return { status: "done", filename };
   } catch (error) {
     console.error("mast: Generation failed:", error);
-    await chrome.storage.local.set({
-      notesStatus: 'error',
-      notesError: error.message || "Failed to generate AI summary."
-    });
+    if (!isHistoryRegen) {
+      await chrome.storage.local.set({
+        notesStatus: 'error',
+        notesError: error.message || "Failed to generate AI summary."
+      });
+    }
     return { status: "error", error: error.message };
   } finally {
-    isGeneratingInMemory = false;
+    clearInterval(keepAliveInterval);
+    if (!isHistoryRegen) {
+      isGeneratingInMemory = false;
+    }
   }
+}
+
+async function regenerateMeetingFromHistory(meetingId) {
+  const stored = await chrome.storage.local.get(['recentMeetings']);
+  const recent = Array.isArray(stored.recentMeetings) ? stored.recentMeetings : [];
+  const target = recent.find((m) => m.id === String(meetingId));
+  if (!target || !target.lines || target.lines.length === 0) {
+    return { status: "error", error: "Meeting transcript not found in storage." };
+  }
+  return await generateAndDownloadNotes(target);
 }
 
 async function handleSessionEnded() {
@@ -275,11 +456,148 @@ async function handleSessionEnded() {
   return await generateAndDownloadNotes();
 }
 
-// Auto-migrate model selection when extension is installed or updated
+async function stopTabAndFinalize(tabId) {
+  const stored = await chrome.storage.local.get(['activeTabId']);
+  const targetTabId = tabId || stored.activeTabId;
+  if (targetTabId) {
+    try {
+      await new Promise((resolve) => {
+        chrome.tabs.sendMessage(targetTabId, { action: "stop" }, () => {
+          void chrome.runtime.lastError;
+          resolve();
+        });
+      });
+      await new Promise((r) => setTimeout(r, 150));
+    } catch (_) {}
+  }
+  return await handleSessionEnded();
+}
+
+async function startFromToast(sender, meetingTitle) {
+  const stored = await chrome.storage.local.get(['apiKey']);
+  if (!stored.apiKey || !stored.apiKey.trim()) {
+    chrome.runtime.openOptionsPage();
+    return { status: "no_api_key" };
+  }
+
+  const startTime = Date.now();
+  const tabId = sender && sender.tab ? sender.tab.id : null;
+  const initialTitle =
+    meetingTitle && typeof meetingTitle === 'string' && meetingTitle.trim() && meetingTitle.trim() !== 'Meeting'
+      ? meetingTitle.trim()
+      : 'Meeting';
+
+  await chrome.storage.local.set({
+    savedTranscript: [],
+    isTranscribing: true,
+    startTime: startTime,
+    issueDetected: false,
+    activeTabId: tabId,
+    notesStatus: 'idle',
+    notesError: '',
+    transcriptDownloaded: false,
+    callEnded: false,
+    meetingTitle: initialTitle
+  });
+
+  if (tabId) {
+    chrome.scripting.executeScript({
+      target: { tabId: tabId, allFrames: true },
+      files: ['content.js']
+    }, () => {
+      void chrome.runtime.lastError;
+      chrome.tabs.sendMessage(tabId, { action: "start" }, () => {
+        void chrome.runtime.lastError;
+      });
+    });
+  }
+
+  return { status: "started", startTime };
+}
+
+async function recoverStuckGenerationIfNeeded() {
+  if (isGeneratingInMemory) {
+    return { status: "generating_in_memory" };
+  }
+  const result = await chrome.storage.local.get([
+    'notesStatus',
+    'savedTranscript',
+    'isTranscribing',
+    'generationStartedAt'
+  ]);
+  if (result.notesStatus !== 'generating') {
+    return { status: result.notesStatus || "idle" };
+  }
+
+  const ageMs = result.generationStartedAt ? Date.now() - result.generationStartedAt : Infinity;
+  if (ageMs < 2000) {
+    return { status: "starting" };
+  }
+
+  const lines = result.savedTranscript || [];
+  if (lines.length === 0) {
+    await chrome.storage.local.set({
+      isTranscribing: false,
+      notesStatus: 'idle',
+      notesError: ''
+    });
+    return { status: "idle" };
+  }
+
+  console.log("mast: Recovering interrupted AI notes generation...");
+  return await handleSessionEnded();
+}
+
+async function backfillRecentMeetingsIfNeeded() {
+  const result = await chrome.storage.local.get(['savedTranscript', 'meetingTitle', 'startTime']);
+  if (result.savedTranscript && result.savedTranscript.length > 0) {
+    await saveToRecentMeetings(result.savedTranscript, result.meetingTitle, result.startTime);
+  }
+}
+
+// Auto-migrate model selection, inject content script, and recover any interrupted generation on install/reload
 chrome.runtime.onInstalled.addListener(async () => {
-  const result = await chrome.storage.local.get(['apiKey', 'selectedModel', 'modelSelectVal', 'customModelVal']);
+  const result = await chrome.storage.local.get([
+    'apiKey',
+    'selectedModel',
+    'modelSelectVal',
+    'customModelVal',
+    'userSelectedModel',
+    'reopenOptionsAfterReload'
+  ]);
+  if (result.reopenOptionsAfterReload) {
+    await chrome.storage.local.set({ reopenOptionsAfterReload: false });
+    chrome.runtime.openOptionsPage();
+  }
   if (result.apiKey) {
     await resolveActiveModel(result.apiKey, result);
+  }
+  await backfillRecentMeetingsIfNeeded();
+  await injectContentScriptIntoOpenTeamsTabs();
+  await recoverStuckGenerationIfNeeded();
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  await backfillRecentMeetingsIfNeeded();
+  await injectContentScriptIntoOpenTeamsTabs();
+  await recoverStuckGenerationIfNeeded();
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab && tab.url) {
+    const url = tab.url.toLowerCase();
+    if (
+      url.includes('teams.microsoft.com') ||
+      url.includes('teams.live.com') ||
+      url.includes('teams.cloud.microsoft')
+    ) {
+      chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        files: ['content.js']
+      }, () => {
+        void chrome.runtime.lastError;
+      });
+    }
   }
 });
 
@@ -287,30 +605,51 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const result = await chrome.storage.local.get(['isTranscribing', 'activeTabId', 'savedTranscript', 'notesStatus']);
   if (result.activeTabId === tabId) {
-    if (result.isTranscribing) {
-      await chrome.storage.local.set({ isTranscribing: false });
+    if (result.isTranscribing || (result.notesStatus === 'generating' && !isGeneratingInMemory)) {
+      await chrome.storage.local.set({ isTranscribing: false, callEnded: true });
       if (result.savedTranscript && result.savedTranscript.length > 0) {
         await handleSessionEnded();
       }
     }
-    if (!isGeneratingInMemory) {
+    const afterState = await chrome.storage.local.get(['notesStatus']);
+    if (!isGeneratingInMemory && afterState.notesStatus !== 'error') {
       await chrome.storage.local.set({
         savedTranscript: [],
         activeTabId: null,
         notesStatus: 'idle',
         notesError: '',
-        transcriptDownloaded: false
+        transcriptDownloaded: false,
+        meetingTitle: 'Meeting'
       });
     }
   }
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === "session_ended") {
+  if (request.action === "get_worker_version") {
+    sendResponse({ version: WORKER_BUILD_VERSION });
+    return false;
+  } else if (request.action === "start_from_toast") {
+    startFromToast(sender, request.meetingTitle).then(sendResponse);
+    return true;
+  } else if (request.action === "open_options") {
+    chrome.runtime.openOptionsPage();
+    sendResponse({ status: "opened" });
+    return false;
+  } else if (request.action === "session_ended") {
     handleSessionEnded().then(sendResponse);
+    return true;
+  } else if (request.action === "stop_and_finalize") {
+    stopTabAndFinalize(request.tabId).then(sendResponse);
+    return true;
+  } else if (request.action === "check_generation_status") {
+    recoverStuckGenerationIfNeeded().then(sendResponse);
     return true;
   } else if (request.action === "generate_notes") {
     generateAndDownloadNotes().then(sendResponse);
+    return true;
+  } else if (request.action === "regenerate_meeting_notes") {
+    regenerateMeetingFromHistory(request.meetingId).then(sendResponse);
     return true;
   } else if (request.action === "download_transcript") {
     downloadTranscriptIfNeeded(true)
