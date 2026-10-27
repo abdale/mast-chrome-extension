@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>mast for Teams - Release Notes</title>
+  <style>
+    :root {
+      --primary: #5B5FC7;
+      --primary-hover: #464eb8;
+      --bg-gradient: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      --card-bg: #ffffff;
+      --text: #202124;
+      --text-muted: #5f6368;
+      --border: #dadce0;
+    }
+
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+      background: var(--bg-gradient);
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      margin: 0;
+      padding: 40px 20px;
+      box-sizing: border-box;
+    }
+
+    .container {
+      background: var(--card-bg);
+      border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+      width: 100%;
+      max-width: 560px;
+      padding: 30px;
+      box-sizing: border-box;
+      border: 1px solid rgba(255, 255, 255, 0.8);
+    }
+
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+
+    h2 {
+      color: var(--text);
+      font-size: 22px;
+      margin: 0;
+      font-weight: 700;
+    }
+
+    h2 span {
+      font-weight: 400;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+
+    .version-block {
+      border-top: 1px solid var(--border);
+      padding-top: 18px;
+      margin-top: 18px;
+    }
+
+    .version-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+      margin: 0 0 10px 0;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    li {
+      margin-bottom: 6px;
+    }
+
+    li strong {
+      color: var(--text);
+    }
+
+    code {
+      background: #f1f3f4;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 13px;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-row">
+      <h2>mast <span>for Teams</span></h2>
+      <a href="options.html">Back to Settings</a>
+    </div>
+    <div class="subtitle">Release Notes</div>
+
+    <div class="version-block">
+      <div class="version-title">2.7</div>
+      <ul>
+        <li><strong>Active Call Detection:</strong> Displays a clean empty state when no active Microsoft Teams call is detected in the current tab.</li>
+        <li><strong>Notes File Naming Setting:</strong> Added an option in Settings to name AI summary files using either an <strong>AI-Generated Title</strong> (default) or the <strong>Teams Meeting Name</strong>.</li>
+        <li><strong>Improved Teams Meeting Title Extraction:</strong> Reliably detects the Teams meeting title from the call header and tab title while ignoring unread notification counts and chat/navigation labels.</li>
+        <li><strong>Streamlined File Naming Format:</strong> Standardized downloaded filenames to <code>transcript_&lt;meeting_name&gt;_&lt;monDD-YYYY&gt;.txt</code> and <code>ai_summary_&lt;title&gt;_&lt;monDD-YYYY&gt;.md</code>.</li>
+        <li><strong>Reliability &amp; Recovery Improvements:</strong> Added background service worker keepalive, request timeouts, and automatic recovery so note generation never gets stuck on completion.</li>
+        <li><strong>UI Refinements:</strong> Updated header branding to <strong>mast</strong> for Teams, added an About section and Release Notes in Settings, and linked <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a> for API key setup instructions.</li>
+      </ul>
+    </div>
+
+    <div class="version-block">
+      <div class="version-title">2.6</div>
+      <ul>
+        <li><strong>One-Click Capture:</strong> Unified caption enabling and transcription into a single <strong>Capture Meeting Notes</strong> button.</li>
+        <li><strong>Automatic Dual Download:</strong> Automatically generates and downloads both the AI meeting summary (<code>.md</code>) and raw transcript (<code>.txt</code>) when a call ends or when clicking <strong>Stop</strong>.</li>
+        <li><strong>Curated Gemini Flash Models:</strong> Automatically selects from the latest two stable Gemini Flash models, with support for specifying a custom model ID.</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
