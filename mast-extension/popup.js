@@ -17,6 +17,7 @@ const settingsLink = document.getElementById('settingsLink');
 
 const resultsStatus = document.getElementById('resultsStatus');
 const retryBtn = document.getElementById('retryBtn');
+const dismissBtn = document.getElementById('dismissBtn');
 
 let timerInterval = null;
 let pollInterval = null;
@@ -275,7 +276,8 @@ function updateUI() {
     'selectedModel',
     'notesStatus',
     'notesError',
-    'callEnded'
+    'callEnded',
+    'generationStartedAt'
   ], async (result) => {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const pageStatus = await checkPageStatus();
@@ -288,12 +290,15 @@ function updateUI() {
     const switchedToNewTab = !!(result.activeTabId && result.activeTabId !== currentTabId);
     const startedNewCallInSameTab = !!(result.callEnded && pageStatus.inActiveCall && !result.isTranscribing);
     const reopenedAfterCompletion = !!(result.notesStatus === 'done' && !sawSessionTransitionInPopup && !result.isTranscribing);
+    const isGeneratingStale =
+      result.notesStatus === 'generating' &&
+      (!result.generationStartedAt || Date.now() - result.generationStartedAt > 75000);
 
     if (
       result.savedTranscript &&
       result.savedTranscript.length > 0 &&
       (switchedToNewTab || startedNewCallInSameTab || reopenedAfterCompletion) &&
-      result.notesStatus !== 'generating'
+      (result.notesStatus !== 'generating' || isGeneratingStale)
     ) {
       const nextMeetingTitle =
         pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting"
@@ -373,6 +378,10 @@ function updateUI() {
         resultsStatus.style.color = "#5f6368";
         resultsStatus.innerText = "Generating AI meeting notes and saving transcript...";
         if (retryBtn) retryBtn.style.display = "none";
+        if (dismissBtn) dismissBtn.style.display = "none";
+        chrome.runtime.sendMessage({ action: "check_generation_status" }, () => {
+          void chrome.runtime.lastError;
+        });
       } else if (result.notesStatus === 'error') {
         resultsStatus.style.color = "#d32f2f";
         resultsStatus.innerText = "Transcript saved, but AI notes failed to generate." + (result.notesError ? " (" + result.notesError + ")" : "");
@@ -381,10 +390,14 @@ function updateUI() {
           retryBtn.disabled = false;
           retryBtn.innerText = "Retry";
         }
+        if (dismissBtn) {
+          dismissBtn.style.display = "block";
+        }
       } else {
         resultsStatus.style.color = "#5f6368";
         resultsStatus.innerText = "Your AI meeting notes and transcript have been saved to your Downloads folder.";
         if (retryBtn) retryBtn.style.display = "none";
+        if (dismissBtn) dismissBtn.style.display = "none";
       }
       return;
     }
@@ -468,27 +481,57 @@ startBtn.addEventListener('click', async () => {
   });
 });
 
-stopLink.addEventListener('click', (e) => {
+stopLink.addEventListener('click', async (e) => {
   e.preventDefault();
   sawSessionTransitionInPopup = true;
-  executeInActiveTab("stop", () => {
-    chrome.storage.local.set({ isTranscribing: false, notesStatus: 'generating' }, () => {
-      chrome.runtime.sendMessage({ action: "session_ended" }, () => {
+  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  chrome.storage.local.set(
+    {
+      isTranscribing: false,
+      notesStatus: 'generating',
+      generationStartedAt: Date.now()
+    },
+    () => {
+      chrome.runtime.sendMessage({ action: "stop_and_finalize", tabId: tab ? tab.id : null }, () => {
+        void chrome.runtime.lastError;
+        updateUI();
+      });
+      executeInActiveTab("stop", () => {
         updateUI();
       });
       updateUI();
-    });
-  });
+    }
+  );
 });
 
 if (retryBtn) {
   retryBtn.addEventListener('click', () => {
     retryBtn.disabled = true;
     retryBtn.innerText = "Retrying...";
+    if (dismissBtn) dismissBtn.style.display = "none";
     resultsStatus.style.color = "#5f6368";
     resultsStatus.innerText = "Generating AI meeting notes and saving transcript...";
     chrome.runtime.sendMessage({ action: "generate_notes" }, () => {
+      void chrome.runtime.lastError;
       updateUI();
     });
+  });
+}
+
+if (dismissBtn) {
+  dismissBtn.addEventListener('click', () => {
+    chrome.storage.local.set(
+      {
+        savedTranscript: [],
+        isTranscribing: false,
+        notesStatus: 'idle',
+        notesError: '',
+        transcriptDownloaded: false,
+        callEnded: false
+      },
+      () => {
+        updateUI();
+      }
+    );
   });
 }

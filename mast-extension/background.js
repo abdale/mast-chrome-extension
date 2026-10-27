@@ -2,6 +2,21 @@
 
 let isGeneratingInMemory = false;
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 45000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error('Request timed out. Please click Retry.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function getTopStableFlashModels(models) {
   const validModels = (models || []).filter(
     m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent")
@@ -41,7 +56,11 @@ async function resolveActiveModel(apiKey, storedState) {
   }
 
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    const response = await fetchWithTimeout(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+      {},
+      8000
+    );
     if (response.ok) {
       const data = await response.json();
       const topFlash = getTopStableFlashModels(data.models);
@@ -125,6 +144,11 @@ async function generateAndDownloadNotes() {
   }
   isGeneratingInMemory = true;
 
+  // Keep MV3 service worker alive while waiting on network generation
+  const keepAliveInterval = setInterval(() => {
+    chrome.storage.local.get(['notesStatus'], () => {});
+  }, 15000);
+
   try {
     const result = await chrome.storage.local.get([
       'savedTranscript',
@@ -156,7 +180,8 @@ async function generateAndDownloadNotes() {
 
     await chrome.storage.local.set({
       notesStatus: 'generating',
-      notesError: ''
+      notesError: '',
+      generationStartedAt: Date.now()
     });
 
     const model = await resolveActiveModel(apiKey, result);
@@ -202,11 +227,15 @@ ${fullTranscript}`;
       generationConfig: { temperature: 0.2 }
     };
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const response = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      },
+      60000
+    );
 
     if (!response.ok) {
       let errMsg = "Google AI Studio Error";
@@ -263,6 +292,7 @@ ${fullTranscript}`;
     });
     return { status: "error", error: error.message };
   } finally {
+    clearInterval(keepAliveInterval);
     isGeneratingInMemory = false;
   }
 }
@@ -292,19 +322,76 @@ async function handleSessionEnded() {
   return await generateAndDownloadNotes();
 }
 
-// Auto-migrate model selection when extension is installed or updated
+async function stopTabAndFinalize(tabId) {
+  const stored = await chrome.storage.local.get(['activeTabId']);
+  const targetTabId = tabId || stored.activeTabId;
+  if (targetTabId) {
+    try {
+      await new Promise((resolve) => {
+        chrome.tabs.sendMessage(targetTabId, { action: "stop" }, () => {
+          void chrome.runtime.lastError;
+          resolve();
+        });
+      });
+      await new Promise((r) => setTimeout(r, 150));
+    } catch (_) {}
+  }
+  return await handleSessionEnded();
+}
+
+async function recoverStuckGenerationIfNeeded() {
+  if (isGeneratingInMemory) {
+    return { status: "generating_in_memory" };
+  }
+  const result = await chrome.storage.local.get([
+    'notesStatus',
+    'savedTranscript',
+    'isTranscribing',
+    'generationStartedAt'
+  ]);
+  if (result.notesStatus !== 'generating') {
+    return { status: result.notesStatus || "idle" };
+  }
+
+  // If notesStatus is 'generating' in storage but the worker is NOT running a generation in memory,
+  // wait a brief grace window if it was just set, otherwise resume or recover immediately.
+  const ageMs = result.generationStartedAt ? Date.now() - result.generationStartedAt : Infinity;
+  if (ageMs < 2000) {
+    return { status: "starting" };
+  }
+
+  const lines = result.savedTranscript || [];
+  if (lines.length === 0) {
+    await chrome.storage.local.set({
+      isTranscribing: false,
+      notesStatus: 'idle',
+      notesError: ''
+    });
+    return { status: "idle" };
+  }
+
+  console.log("mast: Recovering interrupted AI notes generation...");
+  return await handleSessionEnded();
+}
+
+// Auto-migrate model selection and recover any interrupted generation when extension is installed or updated
 chrome.runtime.onInstalled.addListener(async () => {
   const result = await chrome.storage.local.get(['apiKey', 'selectedModel', 'modelSelectVal', 'customModelVal']);
   if (result.apiKey) {
     await resolveActiveModel(result.apiKey, result);
   }
+  await recoverStuckGenerationIfNeeded();
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  await recoverStuckGenerationIfNeeded();
 });
 
 // Safety net: if the user closes the Teams tab, finalize any active session & clean up state
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const result = await chrome.storage.local.get(['isTranscribing', 'activeTabId', 'savedTranscript', 'notesStatus']);
   if (result.activeTabId === tabId) {
-    if (result.isTranscribing) {
+    if (result.isTranscribing || (result.notesStatus === 'generating' && !isGeneratingInMemory)) {
       await chrome.storage.local.set({ isTranscribing: false });
       if (result.savedTranscript && result.savedTranscript.length > 0) {
         await handleSessionEnded();
@@ -326,6 +413,12 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "session_ended") {
     handleSessionEnded().then(sendResponse);
+    return true;
+  } else if (request.action === "stop_and_finalize") {
+    stopTabAndFinalize(request.tabId).then(sendResponse);
+    return true;
+  } else if (request.action === "check_generation_status") {
+    recoverStuckGenerationIfNeeded().then(sendResponse);
     return true;
   } else if (request.action === "generate_notes") {
     generateAndDownloadNotes().then(sendResponse);
