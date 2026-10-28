@@ -24,7 +24,7 @@ let timerInterval = null;
 let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 
-const WORKER_BUILD_VERSION = '2.7.6';
+const WORKER_BUILD_VERSION = '2.8.0';
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
     chrome.runtime.reload();
@@ -145,23 +145,51 @@ function stopTimer() {
   timerEl.innerText = "00:00";
 }
 
-async function checkPageStatus() {
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+async function checkPageStatus(preferredTabId = null) {
+  let [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let tab = activeTab;
+
+  if (preferredTabId && (!activeTab || activeTab.id !== preferredTabId)) {
+    try {
+      const preferredTab = await chrome.tabs.get(preferredTabId);
+      if (preferredTab) tab = preferredTab;
+    } catch (_) {}
+  }
+
   if (!tab) return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
+
+  let msgStatus = null;
+  try {
+    msgStatus = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(tab.id, { action: "get_status" }, (res) => {
+        if (chrome.runtime.lastError) {
+          resolve(null);
+        } else {
+          resolve(res || null);
+        }
+      });
+    });
+  } catch (_) {}
+
   const tabUrl = (tab.url || '').toLowerCase();
   const isTeamsTab =
     tabUrl.includes('teams.microsoft.com') ||
     tabUrl.includes('teams.live.com') ||
     tabUrl.includes('teams.cloud.microsoft');
-  if (!isTeamsTab) {
+  if (!isTeamsTab && !msgStatus) {
     return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
   }
+
+  let captionsOn = !!(msgStatus && msgStatus.captionsOn);
+  let inActiveCall = !!(msgStatus && msgStatus.inActiveCall);
+  let meetingTitle = msgStatus && msgStatus.meetingTitle ? msgStatus.meetingTitle : "Meeting";
+
   try {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => {
         const captionsOn = !!document.querySelector(
-          '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], [data-tid="author"], .ui-captions-container'
+          '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], [data-tid="author"], .ui-captions-container, [data-tid*="closed-caption" i], [data-tid*="captions-container" i], [data-tid*="caption-renderer" i], [aria-label*="Live captions" i], [aria-label*="Closed captions" i]'
         );
         const isPreJoin =
           !!document.querySelector(
@@ -234,49 +262,43 @@ async function checkPageStatus() {
         return { captionsOn: captionsOn, inActiveCall: inActiveCall, meetingTitle: meetingTitle };
       }
     });
-    if (!results) return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
-
-    let captionsOn = false;
-    let inActiveCall = false;
-    let meetingTitle = "Meeting";
-
-    for (let r of results) {
-      if (r.result) {
-        if (r.result.captionsOn) captionsOn = true;
-        if (r.result.inActiveCall) inActiveCall = true;
-        if (r.result.meetingTitle && r.result.meetingTitle !== "Meeting") meetingTitle = r.result.meetingTitle;
-      }
-    }
-
-    if (inActiveCall && meetingTitle === "Meeting" && tab.title) {
-      const genericNames = new Set([
-        'microsoft teams',
-        'teams',
-        'chat',
-        'calendar',
-        'activity',
-        'calls',
-        'files',
-        'onedrive',
-        'approvals',
-        'meeting',
-        'general',
-        'unknown'
-      ]);
-      const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
-      const parts = cleanSegment(tab.title).split('|').map(cleanSegment).filter(Boolean);
-      for (const part of parts) {
-        if (part.length >= 2 && !/^\d{1,2}:\d{2}(:\d{2})?$/.test(part) && !genericNames.has(part.toLowerCase())) {
-          meetingTitle = part;
-          break;
+    if (results) {
+      for (let r of results) {
+        if (r.result) {
+          if (r.result.captionsOn) captionsOn = true;
+          if (r.result.inActiveCall) inActiveCall = true;
+          if (r.result.meetingTitle && r.result.meetingTitle !== "Meeting") meetingTitle = r.result.meetingTitle;
         }
       }
     }
+  } catch (_) {}
 
-    return { captionsOn, inActiveCall, meetingTitle };
-  } catch (e) {
-    return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
+  if (inActiveCall && meetingTitle === "Meeting" && tab.title) {
+    const genericNames = new Set([
+      'microsoft teams',
+      'teams',
+      'chat',
+      'calendar',
+      'activity',
+      'calls',
+      'files',
+      'onedrive',
+      'approvals',
+      'meeting',
+      'general',
+      'unknown'
+    ]);
+    const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
+    const parts = cleanSegment(tab.title).split('|').map(cleanSegment).filter(Boolean);
+    for (const part of parts) {
+      if (part.length >= 2 && !/^\d{1,2}:\d{2}(:\d{2})?$/.test(part) && !genericNames.has(part.toLowerCase())) {
+        meetingTitle = part;
+        break;
+      }
+    }
   }
+
+  return { captionsOn, inActiveCall, meetingTitle };
 }
 
 function updateUI() {
@@ -291,17 +313,19 @@ function updateUI() {
     'notesStatus',
     'notesError',
     'callEnded',
-    'generationStartedAt'
+    'generationStartedAt',
+    'liveCaptionsOn'
   ], async (result) => {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const pageStatus = await checkPageStatus();
+    const targetTabId = result.isTranscribing && result.activeTabId ? result.activeTabId : (tab ? tab.id : null);
+    const pageStatus = await checkPageStatus(targetTabId);
 
     if (pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting") {
       chrome.storage.local.set({ meetingTitle: pageStatus.meetingTitle });
     }
 
     let currentTabId = tab ? tab.id : null;
-    const switchedToNewTab = !!(result.activeTabId && result.activeTabId !== currentTabId);
+    const switchedToNewTab = !!(result.activeTabId && result.activeTabId !== currentTabId && !result.isTranscribing);
     const startedNewCallInSameTab = !!(result.callEnded && pageStatus.inActiveCall && !result.isTranscribing);
     const inNewActiveMeeting = !!(pageStatus.inActiveCall && (switchedToNewTab || result.callEnded) && !result.isTranscribing);
     const reopenedAfterCompletion = !!(
@@ -313,7 +337,9 @@ function updateUI() {
       result.notesStatus === 'generating' &&
       (!result.generationStartedAt || Date.now() - result.generationStartedAt > 75000);
 
+    // Never reset state while actively transcribing
     if (
+      !result.isTranscribing &&
       result.savedTranscript &&
       result.savedTranscript.length > 0 &&
       (switchedToNewTab || startedNewCallInSameTab || reopenedAfterCompletion) &&
@@ -353,7 +379,7 @@ function updateUI() {
 
     const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
 
-    // 2. Transcribing in progress always shows Main View
+    // 2. Transcribing in progress always shows Main View (even when viewing another tab)
     if (result.isTranscribing) {
       sawSessionTransitionInPopup = true;
       viewApiKey.style.display = "none";
@@ -374,8 +400,9 @@ function updateUI() {
       const startTime = result.startTime || Date.now();
       startTimer(startTime);
 
+      const captionsCurrentlyOn = pageStatus.captionsOn || result.liveCaptionsOn === true;
       if (captionHelperText) {
-        if (!pageStatus.captionsOn && Date.now() - startTime >= 4000) {
+        if (!captionsCurrentlyOn && Date.now() - startTime >= 4000) {
           captionHelperText.style.display = "block";
           captionHelperText.style.color = "#d32f2f";
           captionHelperText.innerText = "Live captions are off. Enable captions to continue capturing.";
@@ -462,20 +489,21 @@ function updateUI() {
 updateUI();
 pollInterval = setInterval(updateUI, 2000);
 
-async function executeInActiveTab(action, callback) {
+async function executeInActiveTab(action, callback, preferredTabId = null) {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) {
+  const stored = await chrome.storage.local.get(['activeTabId']);
+  const targetTabId = preferredTabId || stored.activeTabId || (tab ? tab.id : null);
+  if (!targetTabId) {
     if (callback) callback();
     return;
   }
   chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true },
+    target: { tabId: targetTabId, allFrames: true },
     files: ['content.js']
   }, () => {
-    chrome.tabs.sendMessage(tab.id, { action: action }, () => {
-      if (chrome.runtime.lastError) {
-        // Ignore if frame has no listener
-      }
+    void chrome.runtime.lastError;
+    chrome.tabs.sendMessage(targetTabId, { action: action }, () => {
+      void chrome.runtime.lastError;
       if (callback) callback();
     });
   });
@@ -485,7 +513,7 @@ startBtn.addEventListener('click', async () => {
   sawSessionTransitionInPopup = true;
   const startTime = Date.now();
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const pageStatus = await checkPageStatus();
+  const pageStatus = await checkPageStatus(tab ? tab.id : null);
   const initialMeetingTitle =
     pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting"
       ? pageStatus.meetingTitle
@@ -500,9 +528,10 @@ startBtn.addEventListener('click', async () => {
     notesError: '',
     transcriptDownloaded: false,
     callEnded: false,
+    liveCaptionsOn: true,
     meetingTitle: initialMeetingTitle
   }, () => {
-    executeInActiveTab("start");
+    executeInActiveTab("start", null, tab ? tab.id : null);
     updateUI();
   });
 });
@@ -511,6 +540,8 @@ stopLink.addEventListener('click', async (e) => {
   e.preventDefault();
   sawSessionTransitionInPopup = true;
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const stored = await chrome.storage.local.get(['activeTabId']);
+  const targetTabId = stored.activeTabId || (tab ? tab.id : null);
   chrome.storage.local.set(
     {
       isTranscribing: false,
@@ -518,23 +549,24 @@ stopLink.addEventListener('click', async (e) => {
       generationStartedAt: Date.now()
     },
     () => {
-      chrome.runtime.sendMessage({ action: "stop_and_finalize", tabId: tab ? tab.id : null }, () => {
+      chrome.runtime.sendMessage({ action: "stop_and_finalize", tabId: targetTabId }, () => {
         void chrome.runtime.lastError;
         updateUI();
       });
       executeInActiveTab("stop", () => {
         updateUI();
-      });
+      }, targetTabId);
       updateUI();
     }
   );
 });
 
 if (enableCaptionsBtn) {
-  enableCaptionsBtn.addEventListener('click', () => {
+  enableCaptionsBtn.addEventListener('click', async () => {
+    const stored = await chrome.storage.local.get(['activeTabId']);
     executeInActiveTab("force_captions", () => {
       updateUI();
-    });
+    }, stored.activeTabId || null);
   });
 }
 

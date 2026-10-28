@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.7.6';
+  const WORKER_BUILD_VERSION = '2.8.0';
   chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
     if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
       chrome.storage.local.set({ reopenOptionsAfterReload: true }, () => {
@@ -79,11 +79,14 @@ document.addEventListener('DOMContentLoaded', () => {
       infoCol.appendChild(titleEl);
       infoCol.appendChild(dateEl);
 
+      const actionsCol = document.createElement('div');
+      actionsCol.style.cssText = 'display: flex; align-items: center; gap: 8px; flex-shrink: 0;';
+
       const genLink = document.createElement('a');
       genLink.href = '#';
-      genLink.textContent = 'Generate';
+      genLink.textContent = 'Generate Notes';
       genLink.style.cssText =
-        'color: var(--primary); text-decoration: none; font-weight: 600; font-size: 12px; white-space: nowrap; flex-shrink: 0;';
+        'color: var(--primary); text-decoration: none; font-weight: 600; font-size: 11.5px; white-space: nowrap;';
 
       genLink.addEventListener('click', (e) => {
         e.preventDefault();
@@ -102,7 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
               genLink.textContent = 'Downloaded';
               genLink.style.color = '#2e7d32';
               setTimeout(() => {
-                genLink.textContent = 'Generate';
+                genLink.textContent = 'Generate Notes';
                 genLink.style.color = 'var(--primary)';
               }, 3000);
             } else {
@@ -117,8 +120,81 @@ document.addEventListener('DOMContentLoaded', () => {
         );
       });
 
+      const sepEl = document.createElement('span');
+      sepEl.textContent = '·';
+      sepEl.style.cssText = 'color: var(--text-muted); font-size: 12px; user-select: none;';
+
+      const dlLink = document.createElement('a');
+      dlLink.href = '#';
+      dlLink.textContent = 'Download Transcript';
+      dlLink.style.cssText =
+        'color: var(--primary); text-decoration: none; font-weight: 600; font-size: 11.5px; white-space: nowrap;';
+
+      dlLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (dlLink.dataset.busy === 'true') return;
+        dlLink.dataset.busy = 'true';
+        dlLink.textContent = 'Downloading...';
+        dlLink.style.color = 'var(--text-muted)';
+        dlLink.style.pointerEvents = 'none';
+
+        chrome.runtime.sendMessage(
+          { action: 'download_history_transcript', meetingId: item.id },
+          (res) => {
+            dlLink.dataset.busy = 'false';
+            dlLink.style.pointerEvents = 'auto';
+            if (res && res.status === 'downloaded') {
+              dlLink.textContent = 'Downloaded';
+              dlLink.style.color = '#2e7d32';
+              setTimeout(() => {
+                dlLink.textContent = 'Download Transcript';
+                dlLink.style.color = 'var(--primary)';
+              }, 2500);
+            } else {
+              dlLink.textContent = 'Download Transcript';
+              dlLink.style.color = '#d32f2f';
+              if (res && res.error) {
+                statusEl.innerText = `Error: ${res.error}`;
+                statusEl.style.color = '#d32f2f';
+              }
+            }
+          }
+        );
+      });
+
+      const delLink = document.createElement('a');
+      delLink.href = '#';
+      delLink.title = 'Delete meeting';
+      delLink.innerHTML = '&times;';
+      delLink.style.cssText =
+        'color: var(--text-muted); text-decoration: none; font-size: 16px; font-weight: 600; line-height: 1; padding: 2px 5px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;';
+      delLink.addEventListener('mouseenter', () => {
+        delLink.style.color = '#d32f2f';
+        delLink.style.background = 'rgba(211, 47, 47, 0.08)';
+      });
+      delLink.addEventListener('mouseleave', () => {
+        delLink.style.color = 'var(--text-muted)';
+        delLink.style.background = 'transparent';
+      });
+      delLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        chrome.runtime.sendMessage(
+          { action: 'delete_recent_meeting', meetingId: item.id },
+          (res) => {
+            if (res && Array.isArray(res.recentMeetings)) {
+              renderRecentMeetings(res.recentMeetings);
+            }
+          }
+        );
+      });
+
+      actionsCol.appendChild(genLink);
+      actionsCol.appendChild(sepEl);
+      actionsCol.appendChild(dlLink);
+      actionsCol.appendChild(delLink);
+
       row.appendChild(infoCol);
-      row.appendChild(genLink);
+      row.appendChild(actionsCol);
       recentMeetingsList.appendChild(row);
     });
   }

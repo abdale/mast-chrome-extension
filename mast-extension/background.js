@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.7.6';
+const WORKER_BUILD_VERSION = '2.8.0';
 let isGeneratingInMemory = false;
 
 const TEAMS_URL_PATTERNS = [
@@ -431,6 +431,39 @@ async function regenerateMeetingFromHistory(meetingId) {
   return await generateAndDownloadNotes(target);
 }
 
+async function downloadHistoryTranscript(meetingId) {
+  const stored = await chrome.storage.local.get(['recentMeetings']);
+  const recent = Array.isArray(stored.recentMeetings) ? stored.recentMeetings : [];
+  const target = recent.find((m) => m.id === String(meetingId));
+  if (!target || !target.lines || target.lines.length === 0) {
+    return { status: "error", error: "Meeting transcript not found in storage." };
+  }
+  const fullTranscript = target.lines.join('\n');
+  const meetingName = sanitizeFilenameTitle(target.teamsTitle || target.title, 'meeting');
+  const shortDate = target.shortDate || formatShortDate(new Date(target.timestamp || Date.now()));
+  const filename = `transcript_${meetingName}_${shortDate}.txt`;
+  try {
+    await downloadTextViaDataUrl(fullTranscript, 'text/plain', filename);
+    return { status: "downloaded", filename };
+  } catch (err) {
+    return { status: "error", error: err.message || "Failed to download transcript." };
+  }
+}
+
+async function deleteRecentMeeting(meetingId) {
+  const stored = await chrome.storage.local.get(['recentMeetings', 'startTime', 'isTranscribing']);
+  const recent = Array.isArray(stored.recentMeetings) ? stored.recentMeetings : [];
+  const updated = recent.filter((m) => m.id !== String(meetingId));
+  const updates = { recentMeetings: updated };
+  if (!stored.isTranscribing && String(stored.startTime) === String(meetingId)) {
+    updates.savedTranscript = [];
+    updates.notesStatus = 'idle';
+    updates.notesError = '';
+  }
+  await chrome.storage.local.set(updates);
+  return { status: "deleted", recentMeetings: updated };
+}
+
 async function handleSessionEnded() {
   const result = await chrome.storage.local.get(['savedTranscript', 'isTranscribing', 'notesStatus']);
   if (result.isTranscribing) {
@@ -650,6 +683,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   } else if (request.action === "regenerate_meeting_notes") {
     regenerateMeetingFromHistory(request.meetingId).then(sendResponse);
+    return true;
+  } else if (request.action === "download_history_transcript") {
+    downloadHistoryTranscript(request.meetingId).then(sendResponse);
+    return true;
+  } else if (request.action === "delete_recent_meeting") {
+    deleteRecentMeeting(request.meetingId).then(sendResponse);
     return true;
   } else if (request.action === "download_transcript") {
     downloadTranscriptIfNeeded(true)
