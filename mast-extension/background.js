@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.8.0';
+const WORKER_BUILD_VERSION = '2.8.1';
 let isGeneratingInMemory = false;
 
 const TEAMS_URL_PATTERNS = [
@@ -399,7 +399,8 @@ ${fullTranscript}`;
       await updateRecentMeetingTitle(savedEntry ? savedEntry.id : result.startTime, chosenTitle);
       await chrome.storage.local.set({
         notesStatus: 'done',
-        notesError: ''
+        notesError: '',
+        completionUnseen: true
       });
     }
 
@@ -528,6 +529,7 @@ async function startFromToast(sender, meetingTitle) {
     activeTabId: tabId,
     notesStatus: 'idle',
     notesError: '',
+    completionUnseen: false,
     transcriptDownloaded: false,
     callEnded: false,
     meetingTitle: initialTitle
@@ -638,22 +640,32 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const result = await chrome.storage.local.get(['isTranscribing', 'activeTabId', 'savedTranscript', 'notesStatus']);
   if (result.activeTabId === tabId) {
+    const hasLines = result.savedTranscript && result.savedTranscript.length > 0;
     if (result.isTranscribing || (result.notesStatus === 'generating' && !isGeneratingInMemory)) {
-      await chrome.storage.local.set({ isTranscribing: false, callEnded: true });
-      if (result.savedTranscript && result.savedTranscript.length > 0) {
+      await chrome.storage.local.set({ isTranscribing: false, callEnded: true, activeTabId: null });
+      if (hasLines) {
         await handleSessionEnded();
+        return;
       }
     }
-    const afterState = await chrome.storage.local.get(['notesStatus']);
-    if (!isGeneratingInMemory && afterState.notesStatus !== 'error') {
+    const afterState = await chrome.storage.local.get(['notesStatus', 'savedTranscript']);
+    const afterHasLines = afterState.savedTranscript && afterState.savedTranscript.length > 0;
+    if (
+      !isGeneratingInMemory &&
+      afterState.notesStatus !== 'error' &&
+      !(afterState.notesStatus === 'done' && afterHasLines)
+    ) {
       await chrome.storage.local.set({
         savedTranscript: [],
         activeTabId: null,
         notesStatus: 'idle',
         notesError: '',
+        completionUnseen: false,
         transcriptDownloaded: false,
         meetingTitle: 'Meeting'
       });
+    } else {
+      await chrome.storage.local.set({ activeTabId: null });
     }
   }
 });

@@ -24,7 +24,7 @@ let timerInterval = null;
 let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 
-const WORKER_BUILD_VERSION = '2.8.0';
+const WORKER_BUILD_VERSION = '2.8.1';
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
     chrome.runtime.reload();
@@ -312,6 +312,7 @@ function updateUI() {
     'selectedModel',
     'notesStatus',
     'notesError',
+    'completionUnseen',
     'callEnded',
     'generationStartedAt',
     'liveCaptionsOn'
@@ -325,12 +326,20 @@ function updateUI() {
     }
 
     let currentTabId = tab ? tab.id : null;
-    const switchedToNewTab = !!(result.activeTabId && result.activeTabId !== currentTabId && !result.isTranscribing);
+    const hasUnseenCompletion = !!(result.notesStatus === 'done' && result.completionUnseen);
+    const switchedToNewTab = !!(
+      result.activeTabId &&
+      result.activeTabId !== currentTabId &&
+      !result.isTranscribing &&
+      !sawSessionTransitionInPopup &&
+      !hasUnseenCompletion
+    );
     const startedNewCallInSameTab = !!(result.callEnded && pageStatus.inActiveCall && !result.isTranscribing);
     const inNewActiveMeeting = !!(pageStatus.inActiveCall && (switchedToNewTab || result.callEnded) && !result.isTranscribing);
     const reopenedAfterCompletion = !!(
       (result.notesStatus === 'done' || !result.notesStatus || result.notesStatus === 'idle') &&
       !sawSessionTransitionInPopup &&
+      !hasUnseenCompletion &&
       !result.isTranscribing
     );
     const isGeneratingStale =
@@ -355,6 +364,7 @@ function updateUI() {
         isTranscribing: false,
         notesStatus: 'idle',
         notesError: '',
+        completionUnseen: false,
         transcriptDownloaded: false,
         callEnded: false,
         meetingTitle: nextMeetingTitle
@@ -363,6 +373,7 @@ function updateUI() {
       result.isTranscribing = false;
       result.notesStatus = 'idle';
       result.notesError = '';
+      result.completionUnseen = false;
       result.callEnded = false;
     }
 
@@ -393,25 +404,35 @@ function updateUI() {
         issueBanner.style.display = "none";
       }
 
-      startBtn.disabled = true;
+      if (captionHelperText) {
+        captionHelperText.style.display = "none";
+      }
+
       stopLink.style.display = "block";
-      statusEl.innerText = "Transcribing in progress...";
 
       const startTime = result.startTime || Date.now();
       startTimer(startTime);
 
       const captionsCurrentlyOn = pageStatus.captionsOn || result.liveCaptionsOn === true;
-      if (captionHelperText) {
-        if (!captionsCurrentlyOn && Date.now() - startTime >= 4000) {
-          captionHelperText.style.display = "block";
-          captionHelperText.style.color = "#d32f2f";
-          captionHelperText.innerText = "Live captions are off. Enable captions to continue capturing.";
-          if (enableCaptionsBtn) enableCaptionsBtn.style.display = "block";
-        } else {
-          captionHelperText.style.display = "none";
-          captionHelperText.style.color = "#5f6368";
-          if (enableCaptionsBtn) enableCaptionsBtn.style.display = "none";
+      const captionsOffWarning = !captionsCurrentlyOn && Date.now() - startTime >= 4000;
+
+      if (captionsOffWarning) {
+        startBtn.style.display = "none";
+        if (enableCaptionsBtn) {
+          enableCaptionsBtn.style.display = "block";
         }
+        statusEl.style.color = "#d32f2f";
+        statusEl.innerText = "Live captions are off. Enable captions to continue capturing.";
+      } else {
+        startBtn.style.display = "block";
+        startBtn.disabled = true;
+        if (enableCaptionsBtn) {
+          enableCaptionsBtn.style.display = "none";
+          enableCaptionsBtn.disabled = false;
+          enableCaptionsBtn.innerText = "Enable Captions";
+        }
+        statusEl.style.color = "#333";
+        statusEl.innerText = "Transcribing in progress...";
       }
       return;
     }
@@ -445,6 +466,9 @@ function updateUI() {
           dismissBtn.style.display = "block";
         }
       } else {
+        if (result.completionUnseen) {
+          chrome.storage.local.set({ completionUnseen: false });
+        }
         resultsStatus.style.color = "#5f6368";
         resultsStatus.innerText = "Your AI meeting notes and transcript have been saved to your Downloads folder.";
         if (retryBtn) retryBtn.style.display = "none";
@@ -473,8 +497,13 @@ function updateUI() {
     stopLink.style.display = "none";
     stopTimer();
 
+    startBtn.style.display = "block";
     startBtn.disabled = false;
-    if (enableCaptionsBtn) enableCaptionsBtn.style.display = "none";
+    if (enableCaptionsBtn) {
+      enableCaptionsBtn.style.display = "none";
+      enableCaptionsBtn.disabled = false;
+      enableCaptionsBtn.innerText = "Enable Captions";
+    }
     if (captionHelperText) {
       captionHelperText.style.display = "block";
       captionHelperText.style.color = "#5f6368";
@@ -482,6 +511,7 @@ function updateUI() {
         ? "Captions enabled and ready. Do not disable live captions during the call."
         : "Live captions will be automatically enabled upon capture. Do not disable live captions during the call.";
     }
+    statusEl.style.color = "#333";
     statusEl.innerText = "";
   });
 }
@@ -526,6 +556,7 @@ startBtn.addEventListener('click', async () => {
     activeTabId: tab ? tab.id : null,
     notesStatus: 'idle',
     notesError: '',
+    completionUnseen: false,
     transcriptDownloaded: false,
     callEnded: false,
     liveCaptionsOn: true,
@@ -563,9 +594,15 @@ stopLink.addEventListener('click', async (e) => {
 
 if (enableCaptionsBtn) {
   enableCaptionsBtn.addEventListener('click', async () => {
+    enableCaptionsBtn.disabled = true;
+    enableCaptionsBtn.innerText = "Enabling...";
     const stored = await chrome.storage.local.get(['activeTabId']);
     executeInActiveTab("force_captions", () => {
-      updateUI();
+      setTimeout(() => {
+        enableCaptionsBtn.disabled = false;
+        enableCaptionsBtn.innerText = "Enable Captions";
+        updateUI();
+      }, 1000);
     }, stored.activeTabId || null);
   });
 }
@@ -592,6 +629,7 @@ if (dismissBtn) {
         isTranscribing: false,
         notesStatus: 'idle',
         notesError: '',
+        completionUnseen: false,
         transcriptDownloaded: false,
         callEnded: false
       },

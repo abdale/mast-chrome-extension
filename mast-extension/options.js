@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.8.0';
+  const WORKER_BUILD_VERSION = '2.8.1';
   chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
     if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
       chrome.storage.local.set({ reopenOptionsAfterReload: true }, () => {
@@ -62,31 +62,47 @@ document.addEventListener('DOMContentLoaded', () => {
     meetings.slice(0, 5).forEach((item) => {
       const row = document.createElement('div');
       row.style.cssText =
-        'display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; background: #f8f9fa; border: 1px solid var(--border); border-radius: 6px;';
+        'display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 12px 14px; background: #f8f9fa; border: 1px solid var(--border); border-radius: 8px;';
 
       const infoCol = document.createElement('div');
       infoCol.style.cssText = 'min-width: 0; flex: 1;';
 
       const titleEl = document.createElement('div');
       titleEl.style.cssText =
-        'font-weight: 500; color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+        'font-weight: 600; color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
       titleEl.textContent = item.title || 'Meeting';
+      titleEl.title = item.title || 'Meeting';
 
       const dateEl = document.createElement('div');
-      dateEl.style.cssText = 'font-size: 11px; color: var(--text-muted); margin-top: 2px;';
+      dateEl.style.cssText = 'font-size: 11.5px; color: var(--text-muted); margin-top: 3px;';
       dateEl.textContent = item.displayDate || item.shortDate || '';
 
       infoCol.appendChild(titleEl);
       infoCol.appendChild(dateEl);
 
       const actionsCol = document.createElement('div');
-      actionsCol.style.cssText = 'display: flex; align-items: center; gap: 8px; flex-shrink: 0;';
+      actionsCol.style.cssText = 'display: flex; align-items: center; gap: 6px; flex-shrink: 0;';
+
+      const pillBaseStyle =
+        'color: var(--primary); background: #ffffff; border: 1px solid rgba(91, 95, 199, 0.35); padding: 5px 10px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 11.5px; white-space: nowrap; transition: all 0.15s ease;';
 
       const genLink = document.createElement('a');
       genLink.href = '#';
       genLink.textContent = 'Generate Notes';
-      genLink.style.cssText =
-        'color: var(--primary); text-decoration: none; font-weight: 600; font-size: 11.5px; white-space: nowrap;';
+      genLink.style.cssText = pillBaseStyle;
+
+      genLink.addEventListener('mouseenter', () => {
+        if (genLink.dataset.busy !== 'true') {
+          genLink.style.background = 'rgba(91, 95, 199, 0.08)';
+          genLink.style.borderColor = 'var(--primary)';
+        }
+      });
+      genLink.addEventListener('mouseleave', () => {
+        if (genLink.dataset.busy !== 'true') {
+          genLink.style.background = '#ffffff';
+          genLink.style.borderColor = 'rgba(91, 95, 199, 0.35)';
+        }
+      });
 
       genLink.addEventListener('click', (e) => {
         e.preventDefault();
@@ -94,6 +110,8 @@ document.addEventListener('DOMContentLoaded', () => {
         genLink.dataset.busy = 'true';
         genLink.textContent = 'Generating...';
         genLink.style.color = 'var(--text-muted)';
+        genLink.style.background = '#ffffff';
+        genLink.style.borderColor = 'var(--border)';
         genLink.style.pointerEvents = 'none';
 
         chrome.runtime.sendMessage(
@@ -104,13 +122,16 @@ document.addEventListener('DOMContentLoaded', () => {
             if (res && res.status === 'done') {
               genLink.textContent = 'Downloaded';
               genLink.style.color = '#2e7d32';
+              genLink.style.borderColor = 'rgba(46, 125, 50, 0.35)';
               setTimeout(() => {
                 genLink.textContent = 'Generate Notes';
                 genLink.style.color = 'var(--primary)';
+                genLink.style.borderColor = 'rgba(91, 95, 199, 0.35)';
               }, 3000);
             } else {
               genLink.textContent = 'Retry';
               genLink.style.color = '#d32f2f';
+              genLink.style.borderColor = 'rgba(211, 47, 47, 0.35)';
               if (res && res.error) {
                 statusEl.innerText = `Error: ${res.error}`;
                 statusEl.style.color = '#d32f2f';
@@ -120,22 +141,33 @@ document.addEventListener('DOMContentLoaded', () => {
         );
       });
 
-      const sepEl = document.createElement('span');
-      sepEl.textContent = '·';
-      sepEl.style.cssText = 'color: var(--text-muted); font-size: 12px; user-select: none;';
-
       const dlLink = document.createElement('a');
       dlLink.href = '#';
-      dlLink.textContent = 'Download Transcript';
-      dlLink.style.cssText =
-        'color: var(--primary); text-decoration: none; font-weight: 600; font-size: 11.5px; white-space: nowrap;';
+      dlLink.textContent = 'Transcript';
+      dlLink.title = 'Download Transcript';
+      dlLink.style.cssText = pillBaseStyle;
+
+      dlLink.addEventListener('mouseenter', () => {
+        if (dlLink.dataset.busy !== 'true') {
+          dlLink.style.background = 'rgba(91, 95, 199, 0.08)';
+          dlLink.style.borderColor = 'var(--primary)';
+        }
+      });
+      dlLink.addEventListener('mouseleave', () => {
+        if (dlLink.dataset.busy !== 'true') {
+          dlLink.style.background = '#ffffff';
+          dlLink.style.borderColor = 'rgba(91, 95, 199, 0.35)';
+        }
+      });
 
       dlLink.addEventListener('click', (e) => {
         e.preventDefault();
         if (dlLink.dataset.busy === 'true') return;
         dlLink.dataset.busy = 'true';
-        dlLink.textContent = 'Downloading...';
+        dlLink.textContent = 'Saving...';
         dlLink.style.color = 'var(--text-muted)';
+        dlLink.style.background = '#ffffff';
+        dlLink.style.borderColor = 'var(--border)';
         dlLink.style.pointerEvents = 'none';
 
         chrome.runtime.sendMessage(
@@ -144,15 +176,18 @@ document.addEventListener('DOMContentLoaded', () => {
             dlLink.dataset.busy = 'false';
             dlLink.style.pointerEvents = 'auto';
             if (res && res.status === 'downloaded') {
-              dlLink.textContent = 'Downloaded';
+              dlLink.textContent = 'Saved';
               dlLink.style.color = '#2e7d32';
+              dlLink.style.borderColor = 'rgba(46, 125, 50, 0.35)';
               setTimeout(() => {
-                dlLink.textContent = 'Download Transcript';
+                dlLink.textContent = 'Transcript';
                 dlLink.style.color = 'var(--primary)';
+                dlLink.style.borderColor = 'rgba(91, 95, 199, 0.35)';
               }, 2500);
             } else {
-              dlLink.textContent = 'Download Transcript';
+              dlLink.textContent = 'Transcript';
               dlLink.style.color = '#d32f2f';
+              dlLink.style.borderColor = 'rgba(211, 47, 47, 0.35)';
               if (res && res.error) {
                 statusEl.innerText = `Error: ${res.error}`;
                 statusEl.style.color = '#d32f2f';
@@ -165,9 +200,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const delLink = document.createElement('a');
       delLink.href = '#';
       delLink.title = 'Delete meeting';
-      delLink.innerHTML = '&times;';
+      delLink.textContent = '\u00D7';
       delLink.style.cssText =
-        'color: var(--text-muted); text-decoration: none; font-size: 16px; font-weight: 600; line-height: 1; padding: 2px 5px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;';
+        'color: var(--text-muted); text-decoration: none; font-size: 16px; font-weight: 600; line-height: 1; padding: 4px 6px; margin-left: 2px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; transition: all 0.15s ease;';
       delLink.addEventListener('mouseenter', () => {
         delLink.style.color = '#d32f2f';
         delLink.style.background = 'rgba(211, 47, 47, 0.08)';
@@ -189,7 +224,6 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       actionsCol.appendChild(genLink);
-      actionsCol.appendChild(sepEl);
       actionsCol.appendChild(dlLink);
       actionsCol.appendChild(delLink);
 
