@@ -358,29 +358,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   modelSelect.addEventListener('change', toggleCustomModelVisibility);
 
-  // Refresh button click handler
-  if (refreshModelsBtn) {
-    refreshModelsBtn.addEventListener('click', () => {
-      const key = apiKeyInput.value.trim();
-      if (!key) {
-        if (modelHelpText) {
-          modelHelpText.innerText = "Please enter an API Key first before refreshing.";
-        }
-        return;
-      }
-      fetchAndPopulateModels(key, true, modelSelect.value);
-    });
-  }
-
-  // Automatically fetch if user modifies API key and blurs/changes
-  apiKeyInput.addEventListener('change', () => {
-    const key = apiKeyInput.value.trim();
-    if (key) {
-      fetchAndPopulateModels(key, true, modelSelect.value);
-    }
-  });
-
-  // Save settings handler
   saveBtn.addEventListener('click', () => {
     const apiKey = apiKeyInput.value.trim();
     const modelSelectVal = modelSelect.value;
@@ -388,7 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const titleSource = titleSourceSelect ? titleSourceSelect.value : 'ai';
     
     let selectedModel = modelSelectVal;
-
+    
     if (modelSelectVal === 'custom') {
       if (!customModelVal) {
         statusEl.innerText = "Error: Please enter a Custom Model ID.";
@@ -411,12 +388,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }, () => {
       statusEl.innerText = "Settings saved successfully!";
       statusEl.style.color = "#2e7d32";
-
-      // If user provided a key, ensure models are cached
-      if (apiKey) {
-        fetchAndPopulateModels(apiKey, false, modelSelectVal);
-      }
-
       setTimeout(() => {
         statusEl.innerText = "";
       }, 3000);

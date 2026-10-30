@@ -198,69 +198,8 @@
         if (isValidTitle(part)) {
           return part;
         }
-
-        // Direct caption item in More menu
-        const captionMenuItem = menuItems.find(el => {
-          const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
-          return text.includes('turn on live captions') || text.includes('show live captions') || text.includes('turn on captions');
-        });
-        if (captionMenuItem) {
-          console.log("mast: Found captions item in More menu. Clicking...");
-          captionMenuItem.click();
-          return;
-        }
-
-        // Modern Teams: Language and speech submenu
-        const langSpeechItem = menuItems.find(el => {
-          const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
-          return text.includes('language and speech') || text.includes('language & speech');
-        });
-        if (langSpeechItem) {
-          console.log("mast: Opening Language & speech submenu...");
-          langSpeechItem.click();
-          setTimeout(() => {
-            const subItems = Array.from(document.querySelectorAll('button, [role="menuitem"], [role="menuitemcheckbox"]'));
-            const subCaptionItem = subItems.find(el => {
-              const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
-              return text.includes('live captions') || text.includes('turn on') || text.includes('captions');
-            });
-            if (subCaptionItem) {
-              console.log("mast: Found live captions in submenu. Clicking...");
-              subCaptionItem.click();
-            } else {
-              moreBtn.click();
-            }
-          }, 200);
-        } else {
-          // Fallback: search for any item containing caption
-          const genericCaptionItem = menuItems.find(el => {
-            const text = (el.getAttribute('aria-label') || el.innerText || '').toLowerCase();
-            return text.includes('caption') || text.includes('sous-titres') || text.includes('subtítulo');
-          });
-          if (genericCaptionItem) {
-            genericCaptionItem.click();
-          } else {
-            moreBtn.click();
-          }
-        }
-      }, 200);
-    }
-
-    // 4. Safe platform-specific keyboard shortcuts
-    // IMPORTANT: NEVER dispatch KeyO (which toggles Camera in Teams) or KeyK (which raises Hand in Teams)!
-    const platform = (navigator.platform || '').toUpperCase();
-    const userAgent = navigator.userAgent || '';
-    const isMac = platform.includes('MAC') || userAgent.includes('Macintosh') || userAgent.includes('Mac OS');
-
-    if (!isMac) {
-      // Windows & Chromebook: Alt+Shift+C is the documented Teams live captions shortcut
-      console.log("mast: Dispatching Windows/Chromebook live captions shortcut (Alt+Shift+C)...");
-      const targets = [document.activeElement, document.body, document, window].filter(Boolean);
-      for (const target of targets) {
-        dispatchKeyEvents(target, { key: 'c', code: 'KeyC', keyCode: 67, altKey: true, shiftKey: true });
       }
     }
-  }
 
     return "Meeting";
   }

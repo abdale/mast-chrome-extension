@@ -5,7 +5,6 @@
   "description": "Meeting AI Summarizer & Transcriber for MS Teams.",
   "permissions": [
     "activeTab",
-    "tabs",
     "scripting",
     "downloads",
     "storage"
