@@ -6,7 +6,6 @@ const viewResults = document.getElementById('view-results');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const validateBtn = document.getElementById('validateBtn');
 const apiError = document.getElementById('apiError');
-const activeModelDisplay = document.getElementById('activeModelDisplay');
 
 const startBtn = document.getElementById('startBtn');
 const captionHelperText = document.getElementById('captionHelperText');
@@ -25,7 +24,7 @@ let timerInterval = null;
 let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 
-const WORKER_BUILD_VERSION = '2.7.6';
+const WORKER_BUILD_VERSION = '2.8.1';
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
     chrome.runtime.reload();
@@ -89,7 +88,7 @@ async function validateApiKey(key) {
 validateBtn.addEventListener('click', async () => {
   const key = apiKeyInput.value.trim();
   if (!key) {
-    apiError.innerText = "Please enter an API Key.";
+    apiError.innerText = "Key cannot be empty.";
     apiError.style.display = "block";
     return;
   }
@@ -120,44 +119,77 @@ validateBtn.addEventListener('click', async () => {
   });
 });
 
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const s = (seconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+function updateTimerDisplay(startTime) {
+  const elapsed = Math.floor((Date.now() - startTime) / 1000);
+  timerEl.innerText = formatTime(elapsed);
+}
+
 function startTimer(startTime) {
-  if (timerInterval) clearInterval(timerInterval);
   timerEl.style.display = "block";
-  
-  function update() {
-    const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
-    const s = (elapsed % 60).toString().padStart(2, '0');
-    timerEl.innerText = `${m}:${s}`;
-  }
-  update();
-  timerInterval = setInterval(update, 1000);
+  updateTimerDisplay(startTime);
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    updateTimerDisplay(startTime);
+  }, 1000);
 }
 
 function stopTimer() {
   if (timerInterval) clearInterval(timerInterval);
-  timerInterval = null;
   timerEl.style.display = "none";
   timerEl.innerText = "00:00";
 }
 
-async function checkActiveMeeting() {
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+async function checkPageStatus(preferredTabId = null) {
+  let [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let tab = activeTab;
+
+  if (preferredTabId && (!activeTab || activeTab.id !== preferredTabId)) {
+    try {
+      const preferredTab = await chrome.tabs.get(preferredTabId);
+      if (preferredTab) tab = preferredTab;
+    } catch (_) {}
+  }
+
   if (!tab) return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
+
+  let msgStatus = null;
+  try {
+    msgStatus = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(tab.id, { action: "get_status" }, (res) => {
+        if (chrome.runtime.lastError) {
+          resolve(null);
+        } else {
+          resolve(res || null);
+        }
+      });
+    });
+  } catch (_) {}
+
   const tabUrl = (tab.url || '').toLowerCase();
   const isTeamsTab =
     tabUrl.includes('teams.microsoft.com') ||
     tabUrl.includes('teams.live.com') ||
     tabUrl.includes('teams.cloud.microsoft');
-  if (!isTeamsTab) {
+  if (!isTeamsTab && !msgStatus) {
     return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
   }
+
+  let captionsOn = !!(msgStatus && msgStatus.captionsOn);
+  let inActiveCall = !!(msgStatus && msgStatus.inActiveCall);
+  let meetingTitle = msgStatus && msgStatus.meetingTitle ? msgStatus.meetingTitle : "Meeting";
+
   try {
     let results = await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       func: () => {
         const captionsOn = !!document.querySelector(
-          '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], [data-tid="author"], .ui-captions-container'
+          '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], [data-tid="author"], .ui-captions-container, [data-tid*="closed-caption" i], [data-tid*="captions-container" i], [data-tid*="caption-renderer" i], [aria-label*="Live captions" i], [aria-label*="Closed captions" i]'
         );
         const isPreJoin =
           !!document.querySelector(
@@ -230,49 +262,43 @@ async function checkActiveMeeting() {
         return { captionsOn: captionsOn, inActiveCall: inActiveCall, meetingTitle: meetingTitle };
       }
     });
-    if (!results) return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
-
-    let captionsOn = false;
-    let inActiveCall = false;
-    let meetingTitle = "Meeting";
-
-    for (let r of results) {
-      if (r.result) {
-        if (r.result.captionsOn) captionsOn = true;
-        if (r.result.inActiveCall) inActiveCall = true;
-        if (r.result.meetingTitle && r.result.meetingTitle !== "Meeting") meetingTitle = r.result.meetingTitle;
-      }
-    }
-
-    if (inActiveCall && meetingTitle === "Meeting" && tab.title) {
-      const genericNames = new Set([
-        'microsoft teams',
-        'teams',
-        'chat',
-        'calendar',
-        'activity',
-        'calls',
-        'files',
-        'onedrive',
-        'approvals',
-        'meeting',
-        'general',
-        'unknown'
-      ]);
-      const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
-      const parts = cleanSegment(tab.title).split('|').map(cleanSegment).filter(Boolean);
-      for (const part of parts) {
-        if (part.length >= 2 && !/^\d{1,2}:\d{2}(:\d{2})?$/.test(part) && !genericNames.has(part.toLowerCase())) {
-          meetingTitle = part;
-          break;
+    if (results) {
+      for (let r of results) {
+        if (r.result) {
+          if (r.result.captionsOn) captionsOn = true;
+          if (r.result.inActiveCall) inActiveCall = true;
+          if (r.result.meetingTitle && r.result.meetingTitle !== "Meeting") meetingTitle = r.result.meetingTitle;
         }
       }
     }
+  } catch (_) {}
 
-    return { captionsOn, inActiveCall, meetingTitle };
-  } catch (e) {
-    return { captionsOn: false, inActiveCall: false, meetingTitle: "Meeting" };
+  if (inActiveCall && meetingTitle === "Meeting" && tab.title) {
+    const genericNames = new Set([
+      'microsoft teams',
+      'teams',
+      'chat',
+      'calendar',
+      'activity',
+      'calls',
+      'files',
+      'onedrive',
+      'approvals',
+      'meeting',
+      'general',
+      'unknown'
+    ]);
+    const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
+    const parts = cleanSegment(tab.title).split('|').map(cleanSegment).filter(Boolean);
+    for (const part of parts) {
+      if (part.length >= 2 && !/^\d{1,2}:\d{2}(:\d{2})?$/.test(part) && !genericNames.has(part.toLowerCase())) {
+        meetingTitle = part;
+        break;
+      }
+    }
   }
+
+  return { captionsOn, inActiveCall, meetingTitle };
 }
 
 function updateUI() {
@@ -286,30 +312,43 @@ function updateUI() {
     'selectedModel',
     'notesStatus',
     'notesError',
+    'completionUnseen',
     'callEnded',
-    'generationStartedAt'
+    'generationStartedAt',
+    'liveCaptionsOn'
   ], async (result) => {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const pageStatus = await checkPageStatus();
+    const targetTabId = result.isTranscribing && result.activeTabId ? result.activeTabId : (tab ? tab.id : null);
+    const pageStatus = await checkPageStatus(targetTabId);
 
     if (pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting") {
       chrome.storage.local.set({ meetingTitle: pageStatus.meetingTitle });
     }
 
     let currentTabId = tab ? tab.id : null;
-    const switchedToNewTab = !!(result.activeTabId && result.activeTabId !== currentTabId);
+    const hasUnseenCompletion = !!(result.notesStatus === 'done' && result.completionUnseen);
+    const switchedToNewTab = !!(
+      result.activeTabId &&
+      result.activeTabId !== currentTabId &&
+      !result.isTranscribing &&
+      !sawSessionTransitionInPopup &&
+      !hasUnseenCompletion
+    );
     const startedNewCallInSameTab = !!(result.callEnded && pageStatus.inActiveCall && !result.isTranscribing);
     const inNewActiveMeeting = !!(pageStatus.inActiveCall && (switchedToNewTab || result.callEnded) && !result.isTranscribing);
     const reopenedAfterCompletion = !!(
       (result.notesStatus === 'done' || !result.notesStatus || result.notesStatus === 'idle') &&
       !sawSessionTransitionInPopup &&
+      !hasUnseenCompletion &&
       !result.isTranscribing
     );
     const isGeneratingStale =
       result.notesStatus === 'generating' &&
       (!result.generationStartedAt || Date.now() - result.generationStartedAt > 75000);
 
+    // Never reset state while actively transcribing
     if (
+      !result.isTranscribing &&
       result.savedTranscript &&
       result.savedTranscript.length > 0 &&
       (switchedToNewTab || startedNewCallInSameTab || reopenedAfterCompletion) &&
@@ -325,6 +364,7 @@ function updateUI() {
         isTranscribing: false,
         notesStatus: 'idle',
         notesError: '',
+        completionUnseen: false,
         transcriptDownloaded: false,
         callEnded: false,
         meetingTitle: nextMeetingTitle
@@ -333,6 +373,7 @@ function updateUI() {
       result.isTranscribing = false;
       result.notesStatus = 'idle';
       result.notesError = '';
+      result.completionUnseen = false;
       result.callEnded = false;
     }
 
@@ -342,24 +383,14 @@ function updateUI() {
       if (viewNoCall) viewNoCall.style.display = "none";
       viewMain.style.display = "none";
       viewResults.style.display = "none";
-      const viewUpload = document.getElementById('view-upload');
-      if (viewUpload) viewUpload.style.display = "none";
-      stopTimer();
+      validateBtn.innerText = "Save & Validate";
+      validateBtn.disabled = false;
       return;
     }
 
     const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
 
-    const viewUpload = document.getElementById('view-upload');
-    if (viewUpload) {
-      if (result.apiKey && !result.isTranscribing && !hasTranscript) {
-        viewUpload.style.display = "block";
-      } else {
-        viewUpload.style.display = "none";
-      }
-    }
-
-    // 2. Transcribing in progress always shows Main View
+    // 2. Transcribing in progress always shows Main View (even when viewing another tab)
     if (result.isTranscribing) {
       sawSessionTransitionInPopup = true;
       viewApiKey.style.display = "none";
@@ -373,27 +404,35 @@ function updateUI() {
         issueBanner.style.display = "none";
       }
 
-      const promptEl = document.getElementById('mainMeetingPrompt');
-      if (promptEl) promptEl.style.display = "none";
+      if (captionHelperText) {
+        captionHelperText.style.display = "none";
+      }
 
-      startBtn.disabled = true;
       stopLink.style.display = "block";
-      statusEl.innerText = "Transcribing in progress...";
 
       const startTime = result.startTime || Date.now();
       startTimer(startTime);
 
-      if (captionHelperText) {
-        if (!pageStatus.captionsOn && Date.now() - startTime >= 4000) {
-          captionHelperText.style.display = "block";
-          captionHelperText.style.color = "#d32f2f";
-          captionHelperText.innerText = "Live captions are off. Enable captions to continue capturing.";
-          if (enableCaptionsBtn) enableCaptionsBtn.style.display = "block";
-        } else {
-          captionHelperText.style.display = "none";
-          captionHelperText.style.color = "#5f6368";
-          if (enableCaptionsBtn) enableCaptionsBtn.style.display = "none";
+      const captionsCurrentlyOn = pageStatus.captionsOn || result.liveCaptionsOn === true;
+      const captionsOffWarning = !captionsCurrentlyOn && Date.now() - startTime >= 4000;
+
+      if (captionsOffWarning) {
+        startBtn.style.display = "none";
+        if (enableCaptionsBtn) {
+          enableCaptionsBtn.style.display = "block";
         }
+        statusEl.style.color = "#d32f2f";
+        statusEl.innerText = "Live captions are off. Enable captions to continue capturing.";
+      } else {
+        startBtn.style.display = "block";
+        startBtn.disabled = true;
+        if (enableCaptionsBtn) {
+          enableCaptionsBtn.style.display = "none";
+          enableCaptionsBtn.disabled = false;
+          enableCaptionsBtn.innerText = "Enable Captions";
+        }
+        statusEl.style.color = "#333";
+        statusEl.innerText = "Transcribing in progress...";
       }
       return;
     }
@@ -427,6 +466,9 @@ function updateUI() {
           dismissBtn.style.display = "block";
         }
       } else {
+        if (result.completionUnseen) {
+          chrome.storage.local.set({ completionUnseen: false });
+        }
         resultsStatus.style.color = "#5f6368";
         resultsStatus.innerText = "Your AI meeting notes and transcript have been saved to your Downloads folder.";
         if (retryBtn) retryBtn.style.display = "none";
@@ -455,8 +497,13 @@ function updateUI() {
     stopLink.style.display = "none";
     stopTimer();
 
+    startBtn.style.display = "block";
     startBtn.disabled = false;
-    if (enableCaptionsBtn) enableCaptionsBtn.style.display = "none";
+    if (enableCaptionsBtn) {
+      enableCaptionsBtn.style.display = "none";
+      enableCaptionsBtn.disabled = false;
+      enableCaptionsBtn.innerText = "Enable Captions";
+    }
     if (captionHelperText) {
       captionHelperText.style.display = "block";
       captionHelperText.style.color = "#5f6368";
@@ -464,6 +511,7 @@ function updateUI() {
         ? "Captions enabled and ready. Do not disable live captions during the call."
         : "Live captions will be automatically enabled upon capture. Do not disable live captions during the call.";
     }
+    statusEl.style.color = "#333";
     statusEl.innerText = "";
   });
 }
@@ -471,20 +519,21 @@ function updateUI() {
 updateUI();
 pollInterval = setInterval(updateUI, 2000);
 
-async function executeInActiveTab(action, callback) {
+async function executeInActiveTab(action, callback, preferredTabId = null) {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) {
+  const stored = await chrome.storage.local.get(['activeTabId']);
+  const targetTabId = preferredTabId || stored.activeTabId || (tab ? tab.id : null);
+  if (!targetTabId) {
     if (callback) callback();
     return;
   }
   chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true },
+    target: { tabId: targetTabId, allFrames: true },
     files: ['content.js']
   }, () => {
-    chrome.tabs.sendMessage(tab.id, { action: action }, () => {
-      if (chrome.runtime.lastError) {
-        // Ignore if frame has no listener
-      }
+    void chrome.runtime.lastError;
+    chrome.tabs.sendMessage(targetTabId, { action: action }, () => {
+      void chrome.runtime.lastError;
       if (callback) callback();
     });
   });
@@ -494,7 +543,7 @@ startBtn.addEventListener('click', async () => {
   sawSessionTransitionInPopup = true;
   const startTime = Date.now();
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const pageStatus = await checkPageStatus();
+  const pageStatus = await checkPageStatus(tab ? tab.id : null);
   const initialMeetingTitle =
     pageStatus.meetingTitle && pageStatus.meetingTitle !== "Meeting"
       ? pageStatus.meetingTitle
@@ -507,11 +556,13 @@ startBtn.addEventListener('click', async () => {
     activeTabId: tab ? tab.id : null,
     notesStatus: 'idle',
     notesError: '',
+    completionUnseen: false,
     transcriptDownloaded: false,
     callEnded: false,
+    liveCaptionsOn: true,
     meetingTitle: initialMeetingTitle
   }, () => {
-    executeInActiveTab("start");
+    executeInActiveTab("start", null, tab ? tab.id : null);
     updateUI();
   });
 });
@@ -520,6 +571,8 @@ stopLink.addEventListener('click', async (e) => {
   e.preventDefault();
   sawSessionTransitionInPopup = true;
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const stored = await chrome.storage.local.get(['activeTabId']);
+  const targetTabId = stored.activeTabId || (tab ? tab.id : null);
   chrome.storage.local.set(
     {
       isTranscribing: false,
@@ -527,23 +580,30 @@ stopLink.addEventListener('click', async (e) => {
       generationStartedAt: Date.now()
     },
     () => {
-      chrome.runtime.sendMessage({ action: "stop_and_finalize", tabId: tab ? tab.id : null }, () => {
+      chrome.runtime.sendMessage({ action: "stop_and_finalize", tabId: targetTabId }, () => {
         void chrome.runtime.lastError;
         updateUI();
       });
       executeInActiveTab("stop", () => {
         updateUI();
-      });
+      }, targetTabId);
       updateUI();
     }
   );
 });
 
 if (enableCaptionsBtn) {
-  enableCaptionsBtn.addEventListener('click', () => {
+  enableCaptionsBtn.addEventListener('click', async () => {
+    enableCaptionsBtn.disabled = true;
+    enableCaptionsBtn.innerText = "Enabling...";
+    const stored = await chrome.storage.local.get(['activeTabId']);
     executeInActiveTab("force_captions", () => {
-      updateUI();
-    });
+      setTimeout(() => {
+        enableCaptionsBtn.disabled = false;
+        enableCaptionsBtn.innerText = "Enable Captions";
+        updateUI();
+      }, 1000);
+    }, stored.activeTabId || null);
   });
 }
 
@@ -569,6 +629,7 @@ if (dismissBtn) {
         isTranscribing: false,
         notesStatus: 'idle',
         notesError: '',
+        completionUnseen: false,
         transcriptDownloaded: false,
         callEnded: false
       },

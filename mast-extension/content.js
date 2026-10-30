@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.7.6';
+  const CONTENT_SCRIPT_VERSION = '2.8.0';
   if (window.__mastContentScriptVersion === CONTENT_SCRIPT_VERSION) {
     return;
   }
@@ -581,6 +581,10 @@
         syncMeetingTitleToStorage();
 
         const captionsVisible = areCaptionsVisible();
+        try {
+          chrome.storage.local.set({ liveCaptionsOn: captionsVisible });
+        } catch (_) {}
+
         if (captionsVisible) {
           sawCaptionsActive = true;
           captionsOffDismissed = false;
@@ -672,7 +676,7 @@
           }
         }
         if (transcriptLines.length > 0) {
-          chrome.storage.local.set({ savedTranscript: transcriptLines });
+          chrome.storage.local.set({ savedTranscript: transcriptLines, liveCaptionsOn: true });
           syncTranscriptToRecentMeetings(transcriptLines, false);
         }
       }
@@ -683,6 +687,11 @@
   }
 
   function areCaptionsVisibleLocal() {
+    for (let [textEl] of captionsMap.entries()) {
+      if (document.body && document.body.contains(textEl)) {
+        return true;
+      }
+    }
     const captionSelectors = [
       CAPTION_CONTAINER_SELECTOR,
       TEXT_SELECTOR,
@@ -690,7 +699,12 @@
       '[data-tid="closed-captions-container"]',
       '[data-tid="closed-caption-renderer-wrapper"]',
       '[data-tid="closed-caption-text"]',
-      '.ui-captions-container'
+      '.ui-captions-container',
+      '[data-tid*="closed-caption" i]',
+      '[data-tid*="captions-container" i]',
+      '[data-tid*="caption-renderer" i]',
+      '[aria-label*="Live captions" i]',
+      '[aria-label*="Closed captions" i]'
     ];
     return captionSelectors.some((sel) => {
       try {
@@ -830,7 +844,16 @@
   chrome.storage.onChanged.addListener(onStorageChanged);
 
   function onRuntimeMessage(request, sender, sendResponse) {
-    if (request.action === "start") {
+    if (request.action === "get_status") {
+      if (window === window.top || isTeamsMeetingActiveLocal()) {
+        sendResponse({
+          captionsOn: areCaptionsVisible(),
+          inActiveCall: isTeamsMeetingActive(),
+          meetingTitle: extractTeamsMeetingTitle()
+        });
+      }
+      return false;
+    } else if (request.action === "start") {
       shouldGuardUnload = false;
       if (currentToastState !== 'capturing_started') {
         removeStatusToast();
