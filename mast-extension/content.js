@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9.0';
+  const CONTENT_SCRIPT_VERSION = '2.9.1';
   if (window.__mastContentScriptVersion === CONTENT_SCRIPT_VERSION) {
     return;
   }
@@ -362,6 +362,10 @@
         const title = extractTeamsMeetingTitle();
         chrome.runtime.sendMessage({ action: 'start_from_toast', meetingTitle: title }, (res) => {
           void chrome.runtime.lastError;
+          if (res && res.status === 'choose_mode') {
+            renderStatusToast('choose_mode');
+            return;
+          }
           if (res && res.status === 'no_api_key') {
             renderStatusToast('api_key_needed');
             return;
@@ -392,6 +396,75 @@
       actionsRow.appendChild(captureBtn);
       actionsRow.appendChild(dismissBtn);
       toast.appendChild(actionsRow);
+    } else if (state === 'choose_mode') {
+      toast.style.borderLeftColor = '#5B5FC7';
+      messageEl.textContent = 'mast: Choose how to generate meeting notes:';
+      toast.appendChild(messageEl);
+
+      const subEl = document.createElement('div');
+      subEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
+      subEl.textContent =
+        'Select Gemini Nano (On-Device) with no API key required, or use a Google AI Studio API key.';
+      toast.appendChild(subEl);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.style.cssText = 'display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;';
+
+      const nanoBtn = document.createElement('button');
+      nanoBtn.textContent = 'Gemini Nano (On-Device)';
+      nanoBtn.style.cssText =
+        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 6px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
+      nanoBtn.addEventListener('click', () => {
+        nanoBtn.disabled = true;
+        nanoBtn.textContent = 'Starting...';
+        const title = extractTeamsMeetingTitle();
+        chrome.runtime.sendMessage(
+          { action: 'start_from_toast', meetingTitle: title, chosenMode: 'nano' },
+          (res) => {
+            void chrome.runtime.lastError;
+            if (res && res.status === 'nano_unavailable') {
+              renderStatusToast('nano_unavailable');
+              return;
+            }
+            isTranscribing = true;
+            transcriptionStartedAt = (res && res.startTime) || Date.now();
+            sawCaptionsActive = areCaptionsVisible();
+            captionsOffDismissed = false;
+            ensureCaptionsEnabled();
+            startObserving();
+            renderStatusToast('capturing_started');
+          }
+        );
+      });
+
+      const cloudBtn = document.createElement('button');
+      cloudBtn.textContent = 'Gemini Flash (API Key)';
+      cloudBtn.style.cssText =
+        'background: #ffffff; color: #5B5FC7; border: 1px solid #5B5FC7; border-radius: 4px; padding: 6px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
+      cloudBtn.addEventListener('click', () => {
+        const title = extractTeamsMeetingTitle();
+        chrome.runtime.sendMessage(
+          { action: 'start_from_toast', meetingTitle: title, chosenMode: 'cloud' },
+          (res) => {
+            void chrome.runtime.lastError;
+            if (res && res.status === 'no_api_key') {
+              renderStatusToast('api_key_needed');
+              return;
+            }
+            isTranscribing = true;
+            transcriptionStartedAt = (res && res.startTime) || Date.now();
+            sawCaptionsActive = areCaptionsVisible();
+            captionsOffDismissed = false;
+            ensureCaptionsEnabled();
+            startObserving();
+            renderStatusToast('capturing_started');
+          }
+        );
+      });
+
+      actionsRow.appendChild(nanoBtn);
+      actionsRow.appendChild(cloudBtn);
+      toast.appendChild(actionsRow);
     } else if (state === 'capturing_started') {
       toast.style.borderLeftColor = '#2e7d32';
       messageEl.textContent = 'mast: Capturing meeting notes...';
@@ -403,13 +476,56 @@
       }, 3500);
     } else if (state === 'api_key_needed') {
       toast.style.borderLeftColor = '#d9534f';
-      messageEl.textContent = 'mast: Please save your Google AI Studio API key in Settings first.';
+      messageEl.textContent = 'mast: Google AI Studio API key needed.';
       toast.appendChild(messageEl);
-      statusToastTimer = setTimeout(() => {
-        if (currentToastState === 'api_key_needed') {
-          removeStatusToast();
-        }
-      }, 6000);
+
+      const hintEl = document.createElement('div');
+      hintEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
+      hintEl.textContent =
+        "Enter your API key in Settings, or if you don't have an API key, go with Gemini Nano (On-Device).";
+      toast.appendChild(hintEl);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.style.cssText = 'display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;';
+
+      const useNanoBtn = document.createElement('button');
+      useNanoBtn.textContent = 'Use Gemini Nano (On-Device)';
+      useNanoBtn.style.cssText =
+        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
+      useNanoBtn.addEventListener('click', () => {
+        useNanoBtn.disabled = true;
+        useNanoBtn.textContent = 'Starting...';
+        const title = extractTeamsMeetingTitle();
+        chrome.runtime.sendMessage(
+          { action: 'start_from_toast', meetingTitle: title, chosenMode: 'nano' },
+          (res) => {
+            void chrome.runtime.lastError;
+            if (res && res.status === 'nano_unavailable') {
+              renderStatusToast('nano_unavailable');
+              return;
+            }
+            isTranscribing = true;
+            transcriptionStartedAt = (res && res.startTime) || Date.now();
+            sawCaptionsActive = areCaptionsVisible();
+            captionsOffDismissed = false;
+            ensureCaptionsEnabled();
+            startObserving();
+            renderStatusToast('capturing_started');
+          }
+        );
+      });
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.style.cssText =
+        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer;';
+      dismissBtn.addEventListener('click', () => {
+        removeStatusToast();
+      });
+
+      actionsRow.appendChild(useNanoBtn);
+      actionsRow.appendChild(dismissBtn);
+      toast.appendChild(actionsRow);
     } else if (state === 'nano_unavailable') {
       toast.style.borderLeftColor = '#d9534f';
       messageEl.textContent = 'mast: Gemini Nano (On-Device) is unavailable on this device.';
@@ -822,6 +938,7 @@
           if (meetingDetectedToastDismissed) return;
           if (
             currentToastState !== 'meeting_detected' &&
+            currentToastState !== 'choose_mode' &&
             currentToastState !== 'capturing_started' &&
             currentToastState !== 'api_key_needed' &&
             currentToastState !== 'nano_unavailable' &&

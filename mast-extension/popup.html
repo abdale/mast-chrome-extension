@@ -22,6 +22,72 @@
 
     .view-section { display: none; }
 
+    .choice-card {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: #ffffff;
+      color: #202124;
+      border: 1.5px solid #dadce0;
+      border-radius: 7px;
+      padding: 11px 12px;
+      margin-top: 9px;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+      box-sizing: border-box;
+    }
+    .choice-card:hover:not(:disabled) {
+      background: #f6f7fd;
+      border-color: #5B5FC7;
+      box-shadow: 0 2px 8px rgba(91, 95, 199, 0.12);
+    }
+    .choice-card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #202124;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 3px;
+    }
+    .choice-card-badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: #eef0fc;
+      color: #5B5FC7;
+    }
+    .choice-card-desc {
+      font-size: 11.5px;
+      font-weight: 400;
+      color: #5f6368;
+      line-height: 1.35;
+    }
+
+    .alt-choice-box {
+      background: #f3f4fc;
+      border: 1px solid rgba(91, 95, 199, 0.28);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-top: 12px;
+      font-size: 11.5px;
+      color: #3c4043;
+      line-height: 1.4;
+    }
+    .outline-primary-btn {
+      background-color: #ffffff;
+      color: #5B5FC7;
+      border: 1px solid #5B5FC7;
+      padding: 6px 10px;
+      font-size: 11.5px;
+      font-weight: 600;
+      margin-top: 7px;
+    }
+    .outline-primary-btn:hover:not(:disabled) {
+      background-color: rgba(91, 95, 199, 0.08);
+    }
+
     .fix-card {
       background: #fff8f7;
       border: 1px solid #f5c6cb;
@@ -146,13 +212,43 @@
     </div>
   </div>
 
+  <div id="view-onboarding" class="view-section">
+    <p style="font-size: 12px; color: #3c4043; margin: 12px 0 4px 0; font-weight: 600;">Choose how to generate meeting notes</p>
+    <p style="font-size: 11.5px; color: #5f6368; margin: 0 0 8px 0; line-height: 1.35;">Select your preferred AI model to get started:</p>
+
+    <button type="button" id="chooseNanoBtn" class="choice-card">
+      <div class="choice-card-title">
+        <span>Gemini Nano (On-Device)</span>
+        <span class="choice-card-badge">No API Key</span>
+      </div>
+      <div class="choice-card-desc">Summarizes locally on your device with zero setup.</div>
+    </button>
+
+    <button type="button" id="chooseCloudBtn" class="choice-card">
+      <div class="choice-card-title">
+        <span>Gemini Flash (API Key)</span>
+        <span class="choice-card-badge">Cloud</span>
+      </div>
+      <div class="choice-card-desc">Fast cloud summarization using your Google AI Studio API key.</div>
+    </button>
+
+    <div style="font-size: 10.5px; color: #5f6368; text-align: center; margin-top: 10px;">
+      You can switch between models anytime in Settings.
+    </div>
+  </div>
+
   <div id="view-api-key" class="view-section">
-    <p style="font-size: 12px; color: #555;">Please enter your API key to use cloud Gemini models.</p>
-    <input type="password" id="apiKeyInput" placeholder="AIzaSy..." style="width: 100%; padding: 6px; box-sizing: border-box;">
+    <p style="font-size: 12px; color: #202124; font-weight: 600; margin: 12px 0 6px 0;">Enter your Google AI Studio API key</p>
+    <input type="password" id="apiKeyInput" placeholder="AIzaSy..." style="width: 100%; padding: 7px 8px; box-sizing: border-box; border: 1px solid #dadce0; border-radius: 4px;">
     <button id="validateBtn">Save &amp; Validate</button>
-    <div id="apiError" style="color: red; font-size: 11px; margin-top: 5px; display: none;"></div>
-    <div style="font-size: 11px; margin-top: 10px; color: #666; line-height: 1.4;">
-      Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. For detailed instructions, see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>.
+    <div id="apiError" style="color: #d32f2f; font-size: 11px; margin-top: 5px; display: none;"></div>
+    <div style="font-size: 11px; margin-top: 8px; color: #5f6368; line-height: 1.4;">
+      Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. For instructions, see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>.
+    </div>
+
+    <div class="alt-choice-box">
+      <div><strong>Don't have an API key?</strong> If you don't have an API key, you can go with <strong>Gemini Nano (On-Device)</strong> instead.</div>
+      <button type="button" id="useNanoInsteadBtn" class="outline-primary-btn">Use Gemini Nano (On-Device)</button>
     </div>
   </div>
 
@@ -168,19 +264,9 @@
       <button id="recheckNanoBtn" class="secondary-btn">Re-check Availability</button>
     </div>
 
-    <div id="nanoFallbackNoKey" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #dadce0;">
-      <div style="font-size: 11.5px; font-weight: 600; color: #202124; margin-bottom: 6px;">Or use a Google AI Studio API key (no disk space needed):</div>
-      <input type="password" id="nanoFallbackApiKeyInput" placeholder="AIzaSy..." style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid #dadce0; border-radius: 4px;">
-      <button id="nanoFallbackSaveBtn" style="margin-top: 8px;">Save &amp; Use Cloud Model</button>
-      <div id="nanoFallbackError" style="color: #d32f2f; font-size: 11px; margin-top: 5px; display: none;"></div>
-      <div style="font-size: 10.5px; margin-top: 7px; color: #5f6368; line-height: 1.35;">
-        Generate a key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a> (<a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>).
-      </div>
-    </div>
-
-    <div id="nanoFallbackHasKey" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #dadce0;">
-      <div style="font-size: 11.5px; color: #5f6368; margin-bottom: 4px;">You have a saved Google AI Studio API key.</div>
-      <button id="nanoSwitchToCloudBtn" style="margin-top: 4px;">Switch to Cloud Gemini Model</button>
+    <div class="alt-choice-box">
+      <div id="nanoUnavailableSwitchText">Prefer to use a cloud model? You can choose <strong>Gemini Flash (API Key)</strong> instead.</div>
+      <button type="button" id="switchToCloudModeBtn" class="outline-primary-btn">Choose Gemini Flash (API Key)</button>
     </div>
   </div>
 
@@ -229,7 +315,7 @@
         <ol class="fix-steps" style="margin-bottom: 4px;">
           <li>Free up at least <strong>22 GB of disk space</strong> on your drive.</li>
           <li>Open <a href="#" data-chrome-url="chrome://components">chrome://components</a> &rarr; <strong>Optimization Guide On Device Model</strong> &rarr; <strong>Check for update</strong>.</li>
-          <li>Or add a Google AI Studio API key in <a href="#" id="resultsOpenSettingsLink">Settings</a> and click <strong>Retry</strong>.</li>
+          <li>Or choose Gemini Flash (API Key) in <a href="#" id="resultsOpenSettingsLink">Settings</a> and click <strong>Retry</strong>.</li>
         </ol>
       </div>
 
@@ -243,8 +329,8 @@
   <!-- [DEV-ONLY] Simulation Controls -->
   <div id="devSimBar" class="dev-sim-bar">
     <div class="dev-sim-header">
-      <span><strong style="color: #d32f2f;">DEV SIMULATE</strong> &middot; Gemini Nano (On-Device)</span>
-      <span id="devActiveModelHint" style="font-weight: 600; color: #3c4043;"></span>
+      <span><strong style="color: #d32f2f;">DEV SIMULATE</strong> &middot; <span id="devActiveModelHint"></span></span>
+      <a href="#" id="devResetOnboardingLink" style="font-size: 10px; font-weight: 600;">Test Choice UI</a>
     </div>
     <div class="dev-sim-pills">
       <button type="button" class="dev-sim-pill active" data-sim-mode="real">Real Device</button>

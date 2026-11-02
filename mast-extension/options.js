@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9.0';
+  const WORKER_BUILD_VERSION = '2.9.1';
   const GEMINI_NANO_MODEL_ID = 'gemini-nano';
 
   chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
@@ -10,18 +10,48 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  const apiKeyInput = document.getElementById('apiKey');
-  const modelSelect = document.getElementById('modelSelect');
+  const modeCardNano = document.getElementById('modeCardNano');
+  const modeCardCloud = document.getElementById('modeCardCloud');
+  const nanoSection = document.getElementById('nanoSection');
+  const cloudSection = document.getElementById('cloudSection');
   const nanoStatusBox = document.getElementById('nanoStatusBox');
+
+  const apiKeyInput = document.getElementById('apiKey');
+  const noKeyCallout = document.getElementById('noKeyCallout');
+  const switchToNanoInSettingsBtn = document.getElementById('switchToNanoInSettingsBtn');
+  const modelSelect = document.getElementById('modelSelect');
   const customModelContainer = document.getElementById('customModelContainer');
   const customModelInput = document.getElementById('customModel');
   const titleSourceSelect = document.getElementById('titleSource');
   const saveBtn = document.getElementById('saveBtn');
   const statusEl = document.getElementById('status');
   const recentMeetingsList = document.getElementById('recentMeetingsList');
+
   const devSimPills = document.querySelectorAll('.dev-sim-pill[data-sim-mode]');
+  const devResetChoiceSettingsLink = document.getElementById('devResetChoiceSettingsLink');
 
   let currentSimMode = 'real';
+  let currentAiMode = 'unconfigured'; // 'nano' | 'cloud' | 'unconfigured'
+  let lastApiKeyInvalid = false;
+
+  function getEffectiveAiMode(storedState = {}) {
+    if (storedState.aiMode === 'nano') return 'nano';
+    if (storedState.aiMode === 'cloud') return 'cloud';
+    if (
+      storedState.modelSelectVal === GEMINI_NANO_MODEL_ID ||
+      storedState.selectedModel === GEMINI_NANO_MODEL_ID
+    ) {
+      return 'nano';
+    }
+    if (
+      storedState.onboardingCompleted !== false &&
+      storedState.apiKey &&
+      storedState.apiKey.trim()
+    ) {
+      return 'cloud';
+    }
+    return 'unconfigured';
+  }
 
   function bindChromeUrls(root = document) {
     root.querySelectorAll('[data-chrome-url]').forEach((el) => {
@@ -97,6 +127,74 @@ document.addEventListener('DOMContentLoaded', () => {
     return { status: 'unavailable', simulated: false };
   }
 
+  function updateNoKeyCalloutVisibility() {
+    if (!noKeyCallout) return;
+    const hasKeyText = !!(apiKeyInput && apiKeyInput.value.trim());
+    noKeyCallout.style.display = !hasKeyText || lastApiKeyInvalid ? 'block' : 'none';
+  }
+
+  function applyAiModeUI(mode) {
+    currentAiMode = mode;
+    if (modeCardNano) modeCardNano.classList.toggle('selected', mode === 'nano');
+    if (modeCardCloud) modeCardCloud.classList.toggle('selected', mode === 'cloud');
+
+    if (mode === 'nano') {
+      if (nanoSection) nanoSection.style.display = 'block';
+      if (cloudSection) cloudSection.style.display = 'none';
+      refreshNanoStatusBox();
+    } else if (mode === 'cloud') {
+      if (nanoSection) nanoSection.style.display = 'none';
+      if (cloudSection) cloudSection.style.display = 'block';
+      updateNoKeyCalloutVisibility();
+      toggleCustomModelVisibility();
+    } else {
+      if (nanoSection) nanoSection.style.display = 'none';
+      if (cloudSection) cloudSection.style.display = 'none';
+    }
+  }
+
+  if (modeCardNano) {
+    modeCardNano.addEventListener('click', () => {
+      statusEl.innerText = '';
+      applyAiModeUI('nano');
+    });
+  }
+
+  if (modeCardCloud) {
+    modeCardCloud.addEventListener('click', () => {
+      statusEl.innerText = '';
+      applyAiModeUI('cloud');
+      const key = apiKeyInput.value.trim();
+      if (key && modelSelect.options.length <= 1) {
+        loadCloudModels(key, modelSelect.value, true);
+      }
+    });
+  }
+
+  if (switchToNanoInSettingsBtn) {
+    switchToNanoInSettingsBtn.addEventListener('click', () => {
+      applyAiModeUI('nano');
+      chrome.storage.local.set(
+        {
+          aiMode: 'nano',
+          selectedModel: GEMINI_NANO_MODEL_ID,
+          modelSelectVal: GEMINI_NANO_MODEL_ID,
+          userSelectedModel: true,
+          onboardingCompleted: true
+        },
+        () => {
+          statusEl.innerText = 'Switched to Gemini Nano (On-Device)!';
+          statusEl.style.color = '#2e7d32';
+          setTimeout(() => {
+            if (statusEl.innerText === 'Switched to Gemini Nano (On-Device)!') {
+              statusEl.innerText = '';
+            }
+          }, 3000);
+        }
+      );
+    });
+  }
+
   function renderDevSimPills(mode) {
     currentSimMode = mode || 'real';
     devSimPills.forEach((pill) => {
@@ -114,31 +212,48 @@ document.addEventListener('DOMContentLoaded', () => {
       renderDevSimPills(mode);
       const updates = { devNanoSimMode: mode };
       if (mode === 'low_disk' || mode === 'downloadable') {
-        if (modelSelect.querySelector(`option[value="${GEMINI_NANO_MODEL_ID}"]`)) {
-          modelSelect.value = GEMINI_NANO_MODEL_ID;
-        }
+        updates.aiMode = 'nano';
         updates.selectedModel = GEMINI_NANO_MODEL_ID;
         updates.modelSelectVal = GEMINI_NANO_MODEL_ID;
         updates.userSelectedModel = true;
+        updates.onboardingCompleted = true;
+        applyAiModeUI('nano');
       }
       chrome.storage.local.set(updates, () => {
-        toggleModelDetailsVisibility();
+        if (currentAiMode === 'nano') {
+          refreshNanoStatusBox();
+        }
       });
     });
   });
 
+  if (devResetChoiceSettingsLink) {
+    devResetChoiceSettingsLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      apiKeyInput.value = '';
+      lastApiKeyInvalid = false;
+      modelSelect.innerHTML = '<option value="">Enter API Key to load cloud models</option>';
+      chrome.storage.local.set(
+        {
+          aiMode: '',
+          onboardingCompleted: false,
+          selectedModel: '',
+          modelSelectVal: ''
+        },
+        () => {
+          applyAiModeUI('unconfigured');
+          statusEl.innerText = 'Choice reset. Open popup or pick an AI model card above.';
+          statusEl.style.color = '#5B5FC7';
+        }
+      );
+    });
+  }
+
   async function refreshNanoStatusBox() {
-    if (!nanoStatusBox) return;
-    if (modelSelect.value !== GEMINI_NANO_MODEL_ID) {
-      nanoStatusBox.style.display = 'none';
-      return;
-    }
+    if (!nanoStatusBox || currentAiMode !== 'nano') return;
 
     const avail = await checkNanoAvailabilityLocal(currentSimMode);
-    if (modelSelect.value !== GEMINI_NANO_MODEL_ID) {
-      nanoStatusBox.style.display = 'none';
-      return;
-    }
+    if (currentAiMode !== 'nano') return;
 
     nanoStatusBox.className = 'nano-box';
     nanoStatusBox.style.display = 'block';
@@ -233,7 +348,7 @@ document.addEventListener('DOMContentLoaded', () => {
       '  <li><strong>Free up disk space:</strong> Ensure at least <strong>22 GB of free space</strong> on the drive storing your browser profile (10 GB minimum once downloaded).</li>' +
       '  <li><strong>Update model component:</strong> Open <a href="#" data-chrome-url="chrome://components">chrome://components</a>, locate <strong>Optimization Guide On Device Model</strong>, and click <strong>Check for update</strong> (inspect status at <a href="#" data-chrome-url="chrome://on-device-internals">chrome://on-device-internals</a>).</li>' +
       '  <li><strong>Update browser:</strong> Ensure version 138+ at <a href="#" data-chrome-url="chrome://settings/help">chrome://settings/help</a>.</li>' +
-      '  <li><strong>Cloud alternative:</strong> Enter a Google AI Studio API key above to use cloud Gemini Flash models with zero local disk space needed.</li>' +
+      '  <li><strong>Or choose API Key model:</strong> Select <strong>Gemini Flash (API Key)</strong> above if you prefer cloud summarization.</li>' +
       '</ol>' +
       '<button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check Availability</button>';
 
@@ -280,16 +395,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     return sorted.slice(0, 2).map(entry => entry.model);
-  }
-
-  function populateNanoDefaultOnly() {
-    modelSelect.innerHTML = '';
-    const nanoOpt = document.createElement('option');
-    nanoOpt.value = GEMINI_NANO_MODEL_ID;
-    nanoOpt.textContent = 'Gemini Nano (On-Device) (Default)';
-    modelSelect.appendChild(nanoOpt);
-    modelSelect.value = GEMINI_NANO_MODEL_ID;
-    toggleModelDetailsVisibility();
   }
 
   function updateHistoryRegenCardProgress(progressState) {
@@ -427,7 +532,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 statusEl.style.color = '#d32f2f';
               }
               if (res && res.errorCode === 'nano_unavailable') {
-                refreshNanoStatusBox();
+                applyAiModeUI('nano');
               }
             }
           }
@@ -533,6 +638,8 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.storage.local.get(
     [
       'apiKey',
+      'aiMode',
+      'onboardingCompleted',
       'modelSelectVal',
       'customModelVal',
       'userSelectedModel',
@@ -546,11 +653,13 @@ document.addEventListener('DOMContentLoaded', () => {
     (result) => {
       renderDevSimPills(result.devNanoSimMode || 'real');
 
-      if (result.apiKey && result.apiKey.trim()) {
+      const effectiveMode = getEffectiveAiMode(result);
+
+      if (result.apiKey && result.apiKey.trim() && result.onboardingCompleted !== false) {
         apiKeyInput.value = result.apiKey;
-        loadModels(result.apiKey.trim(), result.modelSelectVal, result.userSelectedModel);
+        loadCloudModels(result.apiKey.trim(), result.modelSelectVal, result.userSelectedModel);
       } else {
-        populateNanoDefaultOnly();
+        modelSelect.innerHTML = '<option value="">Enter API Key to load cloud models</option>';
       }
 
       if (result.customModelVal) {
@@ -560,6 +669,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (titleSourceSelect) {
         titleSourceSelect.value = result.titleSource === 'teams' ? 'teams' : 'ai';
       }
+
+      applyAiModeUI(effectiveMode);
 
       let recent = Array.isArray(result.recentMeetings) ? result.recentMeetings : [];
       if (recent.length === 0 && Array.isArray(result.savedTranscript) && result.savedTranscript.length > 0) {
@@ -579,7 +690,6 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({ recentMeetings: recent });
       }
       renderRecentMeetings(recent);
-      toggleModelDetailsVisibility();
     }
   );
 
@@ -593,32 +703,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (changes.devNanoSimMode) {
       renderDevSimPills(changes.devNanoSimMode.newValue || 'real');
-      refreshNanoStatusBox();
+      if (currentAiMode === 'nano') {
+        refreshNanoStatusBox();
+      }
     }
+  });
+
+  apiKeyInput.addEventListener('input', () => {
+    lastApiKeyInvalid = false;
+    updateNoKeyCalloutVisibility();
   });
 
   apiKeyInput.addEventListener('change', () => {
     const key = apiKeyInput.value.trim();
+    updateNoKeyCalloutVisibility();
     if (key) {
-      loadModels(key, modelSelect.value, true);
+      loadCloudModels(key, modelSelect.value, true);
     } else {
       statusEl.innerText = '';
-      populateNanoDefaultOnly();
+      modelSelect.innerHTML = '<option value="">Enter API Key to load cloud models</option>';
+      toggleCustomModelVisibility();
     }
   });
 
-  async function loadModels(apiKey, selectedVal, userSelectedModel) {
-    statusEl.innerText = "Loading available models...";
+  async function loadCloudModels(apiKey, selectedVal, userSelectedModel) {
+    statusEl.innerText = "Loading available cloud models...";
     statusEl.style.color = "#5B5FC7";
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
       if (!response.ok) throw new Error("Invalid API key or network error");
       const data = await response.json();
 
+      lastApiKeyInvalid = false;
+      updateNoKeyCalloutVisibility();
+
       modelSelect.innerHTML = '';
       const finalModels = getTopStableFlashModels(data.models);
       const validIds = finalModels.map(m => m.name.replace('models/', ''));
-      const defaultModelId = validIds.length >= 2 ? validIds[1] : (validIds[0] || GEMINI_NANO_MODEL_ID);
+      const defaultModelId = validIds.length >= 2 ? validIds[1] : (validIds[0] || 'custom');
 
       finalModels.forEach(m => {
         const modelId = m.name.replace('models/', '');
@@ -629,64 +751,90 @@ document.addEventListener('DOMContentLoaded', () => {
         modelSelect.appendChild(option);
       });
 
-      const nanoOpt = document.createElement('option');
-      nanoOpt.value = GEMINI_NANO_MODEL_ID;
-      nanoOpt.textContent = 'Gemini Nano (On-Device)';
-      modelSelect.appendChild(nanoOpt);
-
       const customOpt = document.createElement('option');
       customOpt.value = 'custom';
       customOpt.textContent = 'Custom Model...';
       modelSelect.appendChild(customOpt);
 
-      if (
-        userSelectedModel &&
-        selectedVal &&
-        (validIds.includes(selectedVal) || selectedVal === GEMINI_NANO_MODEL_ID || selectedVal === 'custom')
-      ) {
+      if (userSelectedModel && selectedVal && (validIds.includes(selectedVal) || selectedVal === 'custom')) {
         modelSelect.value = selectedVal;
       } else {
         modelSelect.value = defaultModelId;
-        if (defaultModelId !== 'custom') {
-          chrome.storage.local.set({
-            selectedModel: defaultModelId,
-            modelSelectVal: defaultModelId
-          });
-        }
       }
 
-      toggleModelDetailsVisibility();
+      toggleCustomModelVisibility();
       statusEl.innerText = "";
     } catch (e) {
-      statusEl.innerText = "Invalid API key for cloud models. Using Gemini Nano (On-Device).";
+      lastApiKeyInvalid = true;
+      updateNoKeyCalloutVisibility();
+      statusEl.innerText = "Invalid API key. Check your key or choose Gemini Nano (On-Device) above.";
       statusEl.style.color = "#d32f2f";
-      populateNanoDefaultOnly();
+      modelSelect.innerHTML = '<option value="">Invalid API key</option>';
     }
   }
 
-  function toggleModelDetailsVisibility() {
-    if (modelSelect.value === 'custom') {
+  function toggleCustomModelVisibility() {
+    if (currentAiMode === 'cloud' && modelSelect.value === 'custom') {
       customModelContainer.style.display = 'block';
     } else {
       customModelContainer.style.display = 'none';
     }
-    refreshNanoStatusBox();
   }
 
-  modelSelect.addEventListener('change', toggleModelDetailsVisibility);
+  modelSelect.addEventListener('change', toggleCustomModelVisibility);
 
   saveBtn.addEventListener('click', () => {
-    const apiKey = apiKeyInput.value.trim();
-    let modelSelectVal = modelSelect.value || GEMINI_NANO_MODEL_ID;
-    const customModelVal = customModelInput.value.trim();
     const titleSource = titleSourceSelect ? titleSourceSelect.value : 'ai';
 
-    if (!apiKey && modelSelectVal !== GEMINI_NANO_MODEL_ID) {
-      modelSelectVal = GEMINI_NANO_MODEL_ID;
+    if (currentAiMode === 'unconfigured') {
+      statusEl.innerText = "Please choose Gemini Nano (On-Device) or Gemini Flash (API Key) above.";
+      statusEl.style.color = "#d32f2f";
+      return;
+    }
+
+    if (currentAiMode === 'nano') {
+      statusEl.innerText = "Saving settings...";
+      statusEl.style.color = "#5B5FC7";
+      chrome.storage.local.set(
+        {
+          aiMode: 'nano',
+          selectedModel: GEMINI_NANO_MODEL_ID,
+          modelSelectVal: GEMINI_NANO_MODEL_ID,
+          userSelectedModel: true,
+          onboardingCompleted: true,
+          titleSource: titleSource
+        },
+        () => {
+          statusEl.innerText = "Settings saved! Using Gemini Nano (On-Device).";
+          statusEl.style.color = "#2e7d32";
+          setTimeout(() => {
+            statusEl.innerText = "";
+          }, 3000);
+        }
+      );
+      return;
+    }
+
+    // Cloud mode
+    const apiKey = apiKeyInput.value.trim();
+    const modelSelectVal = modelSelect.value;
+    const customModelVal = customModelInput.value.trim();
+
+    if (!apiKey) {
+      updateNoKeyCalloutVisibility();
+      statusEl.innerText =
+        "Please enter a Google AI Studio API key, or choose Gemini Nano (On-Device) if you don't have one.";
+      statusEl.style.color = "#d32f2f";
+      return;
+    }
+
+    if (!modelSelectVal) {
+      statusEl.innerText = "Please enter a valid API key to select a cloud model, or choose Gemini Nano (On-Device).";
+      statusEl.style.color = "#d32f2f";
+      return;
     }
 
     let selectedModel = modelSelectVal;
-
     if (modelSelectVal === 'custom') {
       if (!customModelVal) {
         statusEl.innerText = "Error: Please enter a Custom Model ID.";
@@ -699,19 +847,24 @@ document.addEventListener('DOMContentLoaded', () => {
     statusEl.innerText = "Saving settings...";
     statusEl.style.color = "#5B5FC7";
 
-    chrome.storage.local.set({
-      apiKey: apiKey,
-      selectedModel: selectedModel,
-      modelSelectVal: modelSelectVal,
-      customModelVal: customModelVal,
-      userSelectedModel: true,
-      titleSource: titleSource
-    }, () => {
-      statusEl.innerText = "Settings saved successfully!";
-      statusEl.style.color = "#2e7d32";
-      setTimeout(() => {
-        statusEl.innerText = "";
-      }, 3000);
-    });
+    chrome.storage.local.set(
+      {
+        apiKey: apiKey,
+        aiMode: 'cloud',
+        selectedModel: selectedModel,
+        modelSelectVal: modelSelectVal,
+        customModelVal: customModelVal,
+        userSelectedModel: true,
+        onboardingCompleted: true,
+        titleSource: titleSource
+      },
+      () => {
+        statusEl.innerText = "Settings saved successfully!";
+        statusEl.style.color = "#2e7d32";
+        setTimeout(() => {
+          statusEl.innerText = "";
+        }, 3000);
+      }
+    );
   });
 });

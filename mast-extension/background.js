@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9.0';
+const WORKER_BUILD_VERSION = '2.9.1';
 const GEMINI_NANO_MODEL_ID = 'gemini-nano';
 let isGeneratingInMemory = false;
 
@@ -153,18 +153,37 @@ async function checkGeminiNanoAvailability(simModeOverride = null) {
   return { status: 'unavailable', simulated: false, reason: 'device_unavailable' };
 }
 
-async function resolveActiveModel(apiKey, storedState = {}) {
-  const cleanKey = apiKey ? apiKey.trim() : '';
-
+function getEffectiveAiMode(storedState = {}) {
+  if (storedState.aiMode === 'nano') return 'nano';
+  if (storedState.aiMode === 'cloud') return 'cloud';
   if (
     storedState.modelSelectVal === GEMINI_NANO_MODEL_ID ||
     storedState.selectedModel === GEMINI_NANO_MODEL_ID
   ) {
+    return 'nano';
+  }
+  if (
+    storedState.onboardingCompleted !== false &&
+    storedState.apiKey &&
+    storedState.apiKey.trim()
+  ) {
+    return 'cloud';
+  }
+  return 'unconfigured';
+}
+
+async function resolveActiveModel(apiKey, storedState = {}) {
+  const mode = getEffectiveAiMode(storedState);
+  if (mode === 'nano') {
     return GEMINI_NANO_MODEL_ID;
   }
+  if (mode === 'unconfigured') {
+    return '';
+  }
 
+  const cleanKey = apiKey ? apiKey.trim() : '';
   if (!cleanKey) {
-    return GEMINI_NANO_MODEL_ID;
+    return '';
   }
 
   if (storedState.modelSelectVal === 'custom' && storedState.customModelVal) {
@@ -730,6 +749,8 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
     const result = await chrome.storage.local.get([
       'savedTranscript',
       'apiKey',
+      'aiMode',
+      'onboardingCompleted',
       'selectedModel',
       'modelSelectVal',
       'customModelVal',
@@ -752,20 +773,35 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
       return { status: "error", error: "No captions captured." };
     }
 
-    const apiKey = result.apiKey ? result.apiKey.trim() : '';
-    const model = await resolveActiveModel(apiKey, result);
-    const isNanoModel = model === GEMINI_NANO_MODEL_ID;
-
-    if (!isNanoModel && !apiKey) {
+    const effectiveMode = getEffectiveAiMode(result);
+    if (effectiveMode === 'unconfigured') {
+      const msg = 'Please choose Gemini Nano (On-Device) or Google AI Studio API Key in Settings first.';
       if (!isHistoryRegen) {
         await chrome.storage.local.set({
           notesStatus: 'error',
-          notesError: 'API Key missing.',
+          notesError: msg,
           notesErrorCode: ''
         });
       }
-      return { status: "error", error: "API Key missing." };
+      return { status: "error", error: msg };
     }
+
+    const apiKey = result.apiKey ? result.apiKey.trim() : '';
+    const isNanoModel = effectiveMode === 'nano';
+
+    if (!isNanoModel && !apiKey) {
+      const msg = 'API key missing. Enter a Google AI Studio API key or choose Gemini Nano (On-Device) in Settings.';
+      if (!isHistoryRegen) {
+        await chrome.storage.local.set({
+          notesStatus: 'error',
+          notesError: msg,
+          notesErrorCode: ''
+        });
+      }
+      return { status: "error", error: msg };
+    }
+
+    const model = isNanoModel ? GEMINI_NANO_MODEL_ID : await resolveActiveModel(apiKey, result);
 
     let savedEntry = null;
     const nowTs = Date.now();
@@ -1018,19 +1054,43 @@ async function stopTabAndFinalize(tabId) {
   return await handleSessionEnded();
 }
 
-async function startFromToast(sender, meetingTitle) {
+async function startFromToast(sender, meetingTitle, chosenMode = null) {
   const stored = await chrome.storage.local.get([
     'apiKey',
+    'aiMode',
+    'onboardingCompleted',
     'selectedModel',
     'modelSelectVal',
     'customModelVal',
     'userSelectedModel',
     'devNanoSimMode'
   ]);
-  const cleanKey = stored.apiKey ? stored.apiKey.trim() : '';
-  const activeModel = await resolveActiveModel(cleanKey, stored);
 
-  if (activeModel === GEMINI_NANO_MODEL_ID) {
+  if (chosenMode === 'nano') {
+    await chrome.storage.local.set({
+      aiMode: 'nano',
+      selectedModel: GEMINI_NANO_MODEL_ID,
+      modelSelectVal: GEMINI_NANO_MODEL_ID,
+      userSelectedModel: true,
+      onboardingCompleted: true
+    });
+    stored.aiMode = 'nano';
+    stored.selectedModel = GEMINI_NANO_MODEL_ID;
+    stored.modelSelectVal = GEMINI_NANO_MODEL_ID;
+    stored.onboardingCompleted = true;
+  } else if (chosenMode === 'cloud') {
+    await chrome.storage.local.set({ aiMode: 'cloud' });
+    stored.aiMode = 'cloud';
+  }
+
+  const cleanKey = stored.apiKey ? stored.apiKey.trim() : '';
+  const effectiveMode = getEffectiveAiMode(stored);
+
+  if (effectiveMode === 'unconfigured') {
+    return { status: "choose_mode" };
+  }
+
+  if (effectiveMode === 'nano') {
     const nanoAvail = await checkGeminiNanoAvailability(stored.devNanoSimMode || null);
     if (nanoAvail.status === 'unavailable') {
       chrome.runtime.openOptionsPage();
@@ -1124,6 +1184,8 @@ async function backfillRecentMeetingsIfNeeded() {
 chrome.runtime.onInstalled.addListener(async () => {
   const result = await chrome.storage.local.get([
     'apiKey',
+    'aiMode',
+    'onboardingCompleted',
     'selectedModel',
     'modelSelectVal',
     'customModelVal',
@@ -1134,13 +1196,8 @@ chrome.runtime.onInstalled.addListener(async () => {
     await chrome.storage.local.set({ reopenOptionsAfterReload: false });
     chrome.runtime.openOptionsPage();
   }
-  if (result.apiKey) {
+  if (getEffectiveAiMode(result) === 'cloud' && result.apiKey) {
     await resolveActiveModel(result.apiKey, result);
-  } else if (!result.selectedModel) {
-    await chrome.storage.local.set({
-      selectedModel: GEMINI_NANO_MODEL_ID,
-      modelSelectVal: GEMINI_NANO_MODEL_ID
-    });
   }
   await backfillRecentMeetingsIfNeeded();
   await injectContentScriptIntoOpenTeamsTabs();
@@ -1221,7 +1278,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ status: "opened" });
     return false;
   } else if (request.action === "start_from_toast") {
-    startFromToast(sender, request.meetingTitle).then(sendResponse);
+    startFromToast(sender, request.meetingTitle, request.chosenMode || null).then(sendResponse);
     return true;
   } else if (request.action === "open_options") {
     chrome.runtime.openOptionsPage();
