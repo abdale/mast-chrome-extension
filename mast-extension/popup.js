@@ -1,4 +1,7 @@
+const GEMINI_NANO_MODEL_ID = 'gemini-nano';
+
 const viewApiKey = document.getElementById('view-api-key');
+const viewNanoUnavailable = document.getElementById('view-nano-unavailable');
 const viewNoCall = document.getElementById('view-no-call');
 const viewMain = document.getElementById('view-main');
 const viewResults = document.getElementById('view-results');
@@ -6,6 +9,14 @@ const viewResults = document.getElementById('view-results');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const validateBtn = document.getElementById('validateBtn');
 const apiError = document.getElementById('apiError');
+
+const recheckNanoBtn = document.getElementById('recheckNanoBtn');
+const nanoFallbackNoKey = document.getElementById('nanoFallbackNoKey');
+const nanoFallbackHasKey = document.getElementById('nanoFallbackHasKey');
+const nanoFallbackApiKeyInput = document.getElementById('nanoFallbackApiKeyInput');
+const nanoFallbackSaveBtn = document.getElementById('nanoFallbackSaveBtn');
+const nanoFallbackError = document.getElementById('nanoFallbackError');
+const nanoSwitchToCloudBtn = document.getElementById('nanoSwitchToCloudBtn');
 
 const startBtn = document.getElementById('startBtn');
 const captionHelperText = document.getElementById('captionHelperText');
@@ -16,15 +27,26 @@ const statusEl = document.getElementById('status');
 const timerEl = document.getElementById('timer');
 const settingsLink = document.getElementById('settingsLink');
 
+const resultsHeading = document.getElementById('resultsHeading');
 const resultsStatus = document.getElementById('resultsStatus');
+const progressContainer = document.getElementById('progressContainer');
+const progressBarFill = document.getElementById('progressBarFill');
+const progressStageText = document.getElementById('progressStageText');
+const progressPercentText = document.getElementById('progressPercentText');
+const resultsNanoFixBox = document.getElementById('resultsNanoFixBox');
+const resultsOpenSettingsLink = document.getElementById('resultsOpenSettingsLink');
 const retryBtn = document.getElementById('retryBtn');
 const dismissBtn = document.getElementById('dismissBtn');
+
+// [DEV-ONLY] Simulation elements
+const devSimPills = document.querySelectorAll('.dev-sim-pill[data-sim-mode]');
+const devActiveModelHint = document.getElementById('devActiveModelHint');
 
 let timerInterval = null;
 let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 
-const WORKER_BUILD_VERSION = '2.8.1';
+const WORKER_BUILD_VERSION = '2.9.0';
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
     chrome.runtime.reload();
@@ -35,6 +57,111 @@ settingsLink.addEventListener('click', (e) => {
   e.preventDefault();
   window.open(chrome.runtime.getURL('options.html'));
 });
+
+if (resultsOpenSettingsLink) {
+  resultsOpenSettingsLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.open(chrome.runtime.getURL('options.html'));
+  });
+}
+
+document.querySelectorAll('[data-chrome-url]').forEach((el) => {
+  el.addEventListener('click', (e) => {
+    e.preventDefault();
+    const targetUrl = el.getAttribute('data-chrome-url');
+    if (targetUrl) {
+      chrome.tabs.create({ url: targetUrl });
+    }
+  });
+});
+
+function hideAllViews() {
+  if (viewApiKey) viewApiKey.style.display = 'none';
+  if (viewNanoUnavailable) viewNanoUnavailable.style.display = 'none';
+  if (viewNoCall) viewNoCall.style.display = 'none';
+  if (viewMain) viewMain.style.display = 'none';
+  if (viewResults) viewResults.style.display = 'none';
+}
+
+function getLanguageModelNamespace() {
+  if (typeof LanguageModel !== 'undefined') return LanguageModel;
+  if (typeof self !== 'undefined' && self.LanguageModel) return self.LanguageModel;
+  if (typeof self !== 'undefined' && self.ai && self.ai.languageModel) return self.ai.languageModel;
+  return null;
+}
+
+async function checkNanoAvailabilityLocal(simMode = 'real') {
+  if (simMode === 'low_disk') {
+    return { status: 'unavailable', simulated: true, reason: 'low_disk' };
+  }
+  if (simMode === 'downloadable') {
+    return { status: 'downloadable', simulated: true, reason: 'simulated_download' };
+  }
+
+  const lm = getLanguageModelNamespace();
+  if (!lm) {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ action: 'get_nano_availability', simMode }, (res) => {
+        if (chrome.runtime.lastError || !res) {
+          resolve({ status: 'unavailable', simulated: false, reason: 'api_missing' });
+        } else {
+          resolve(res);
+        }
+      });
+    });
+  }
+
+  try {
+    if (typeof lm.availability === 'function') {
+      let raw;
+      try {
+        raw = await lm.availability({
+          expectedInputs: [{ type: 'text', languages: ['en'] }],
+          expectedOutputs: [{ type: 'text', languages: ['en'] }]
+        });
+      } catch (_) {
+        raw = await lm.availability();
+      }
+      if (raw === 'available' || raw === 'readily') {
+        return { status: 'available', simulated: false };
+      }
+      if (raw === 'downloadable' || raw === 'after-download') {
+        return { status: 'downloadable', simulated: false };
+      }
+      if (raw === 'downloading') {
+        return { status: 'downloading', simulated: false };
+      }
+      return { status: 'unavailable', simulated: false };
+    }
+    if (typeof lm.capabilities === 'function') {
+      const caps = await lm.capabilities();
+      if (caps && caps.available === 'readily') return { status: 'available', simulated: false };
+      if (caps && caps.available === 'after-download') return { status: 'downloadable', simulated: false };
+    }
+  } catch (_) {}
+
+  return { status: 'unavailable', simulated: false };
+}
+
+function warmUpGeminiNanoIfNeeded(simMode) {
+  if (simMode && simMode !== 'real') return;
+  const lm = getLanguageModelNamespace();
+  if (!lm || typeof lm.create !== 'function') return;
+  (async () => {
+    try {
+      const avail = await checkNanoAvailabilityLocal('real');
+      if (avail.status === 'downloadable') {
+        const s = await lm.create({
+          expectedInputs: [{ type: 'text', languages: ['en'] }],
+          expectedOutputs: [{ type: 'text', languages: ['en'] }]
+        }).catch(() => lm.create());
+        if (s && typeof s.destroy === 'function') {
+          s.destroy();
+        }
+      }
+    } catch (_) {}
+  })();
+}
 
 function getTopStableFlashModels(models) {
   const validModels = (models || []).filter(
@@ -101,13 +228,13 @@ validateBtn.addEventListener('click', async () => {
     const validation = await validateApiKey(key);
 
     if (validation.valid) {
+      const updates = { apiKey: key };
       if (!result.selectedModel || result.modelSelectVal !== 'custom') {
-        chrome.storage.local.set({
-          selectedModel: validation.latestFlashModel,
-          modelSelectVal: validation.latestFlashModel
-        });
+        updates.selectedModel = validation.latestFlashModel;
+        updates.modelSelectVal = validation.latestFlashModel;
+        updates.userSelectedModel = true;
       }
-      chrome.storage.local.set({ apiKey: key }, () => {
+      chrome.storage.local.set(updates, () => {
         updateUI();
       });
     } else {
@@ -118,6 +245,144 @@ validateBtn.addEventListener('click', async () => {
     }
   });
 });
+
+if (recheckNanoBtn) {
+  recheckNanoBtn.addEventListener('click', async () => {
+    recheckNanoBtn.disabled = true;
+    recheckNanoBtn.innerText = "Checking...";
+    await new Promise((r) => setTimeout(r, 250));
+    recheckNanoBtn.disabled = false;
+    recheckNanoBtn.innerText = "Re-check Availability";
+    updateUI();
+  });
+}
+
+if (nanoFallbackSaveBtn) {
+  nanoFallbackSaveBtn.addEventListener('click', async () => {
+    const key = nanoFallbackApiKeyInput.value.trim();
+    if (!key) {
+      nanoFallbackError.innerText = "Please enter an API key.";
+      nanoFallbackError.style.display = "block";
+      return;
+    }
+    nanoFallbackSaveBtn.disabled = true;
+    nanoFallbackSaveBtn.innerText = "Validating...";
+    nanoFallbackError.style.display = "none";
+
+    const validation = await validateApiKey(key);
+    if (validation.valid) {
+      chrome.storage.local.set(
+        {
+          apiKey: key,
+          selectedModel: validation.latestFlashModel,
+          modelSelectVal: validation.latestFlashModel,
+          userSelectedModel: true
+        },
+        () => {
+          nanoFallbackSaveBtn.disabled = false;
+          nanoFallbackSaveBtn.innerText = "Save & Use Cloud Model";
+          updateUI();
+        }
+      );
+    } else {
+      nanoFallbackError.innerText = "Invalid API Key. Please check and try again.";
+      nanoFallbackError.style.display = "block";
+      nanoFallbackSaveBtn.disabled = false;
+      nanoFallbackSaveBtn.innerText = "Save & Use Cloud Model";
+    }
+  });
+}
+
+if (nanoSwitchToCloudBtn) {
+  nanoSwitchToCloudBtn.addEventListener('click', async () => {
+    nanoSwitchToCloudBtn.disabled = true;
+    nanoSwitchToCloudBtn.innerText = "Switching...";
+    const stored = await chrome.storage.local.get(['apiKey']);
+    const key = stored.apiKey ? stored.apiKey.trim() : '';
+    let targetModel = 'gemini-2.5-flash';
+    if (key) {
+      const validation = await validateApiKey(key);
+      if (validation.valid && validation.latestFlashModel) {
+        targetModel = validation.latestFlashModel;
+      }
+    }
+    chrome.storage.local.set(
+      {
+        selectedModel: targetModel,
+        modelSelectVal: targetModel,
+        userSelectedModel: true
+      },
+      () => {
+        nanoSwitchToCloudBtn.disabled = false;
+        nanoSwitchToCloudBtn.innerText = "Switch to Cloud Gemini Model";
+        updateUI();
+      }
+    );
+  });
+}
+
+// [DEV-ONLY] Simulation toggle handlers
+function renderDevSimControls(simMode, isUsingNano) {
+  const mode = simMode || 'real';
+  devSimPills.forEach((pill) => {
+    const pillMode = pill.getAttribute('data-sim-mode');
+    pill.classList.remove('active', 'active-warn');
+    if (pillMode === mode) {
+      pill.classList.add(mode === 'low_disk' ? 'active-warn' : 'active');
+    }
+  });
+
+  if (devActiveModelHint) {
+    if (isUsingNano) {
+      devActiveModelHint.textContent = 'Active: On-Device';
+    } else {
+      devActiveModelHint.innerHTML =
+        'Cloud &middot; <a href="#" id="devSwitchNanoInline">Use Nano</a>';
+      const switchLink = document.getElementById('devSwitchNanoInline');
+      if (switchLink) {
+        switchLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          chrome.storage.local.set(
+            {
+              selectedModel: GEMINI_NANO_MODEL_ID,
+              modelSelectVal: GEMINI_NANO_MODEL_ID,
+              userSelectedModel: true
+            },
+            () => updateUI()
+          );
+        });
+      }
+    }
+  }
+}
+
+devSimPills.forEach((pill) => {
+  pill.addEventListener('click', () => {
+    const mode = pill.getAttribute('data-sim-mode') || 'real';
+    const updates = { devNanoSimMode: mode };
+    if (mode === 'low_disk' || mode === 'downloadable') {
+      updates.selectedModel = GEMINI_NANO_MODEL_ID;
+      updates.modelSelectVal = GEMINI_NANO_MODEL_ID;
+      updates.userSelectedModel = true;
+    }
+    chrome.storage.local.set(updates, () => {
+      updateUI();
+    });
+  });
+});
+
+function applyProgressUI(progress, stage) {
+  const pct = Math.max(0, Math.min(100, Math.round(typeof progress === 'number' ? progress : 0)));
+  if (progressBarFill) {
+    progressBarFill.style.width = `${Math.max(4, pct)}%`;
+  }
+  if (progressStageText) {
+    progressStageText.innerText = stage || 'Generating meeting notes...';
+  }
+  if (progressPercentText) {
+    progressPercentText.innerText = `${pct}%`;
+  }
+}
 
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -310,13 +575,28 @@ function updateUI() {
     'issueDetected',
     'activeTabId',
     'selectedModel',
+    'modelSelectVal',
     'notesStatus',
     'notesError',
+    'notesErrorCode',
+    'notesProgress',
+    'notesStage',
     'completionUnseen',
     'callEnded',
     'generationStartedAt',
-    'liveCaptionsOn'
+    'generationHeartbeatAt',
+    'liveCaptionsOn',
+    'devNanoSimMode'
   ], async (result) => {
+    const hasSavedKey = !!(result.apiKey && result.apiKey.trim());
+    const isUsingNano =
+      !hasSavedKey ||
+      result.modelSelectVal === GEMINI_NANO_MODEL_ID ||
+      result.selectedModel === GEMINI_NANO_MODEL_ID;
+    const simMode = result.devNanoSimMode || 'real';
+
+    renderDevSimControls(simMode, isUsingNano);
+
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const targetTabId = result.isTranscribing && result.activeTabId ? result.activeTabId : (tab ? tab.id : null);
     const pageStatus = await checkPageStatus(targetTabId);
@@ -342,9 +622,10 @@ function updateUI() {
       !hasUnseenCompletion &&
       !result.isTranscribing
     );
+    const lastGenBeat = result.generationHeartbeatAt || result.generationStartedAt;
     const isGeneratingStale =
       result.notesStatus === 'generating' &&
-      (!result.generationStartedAt || Date.now() - result.generationStartedAt > 75000);
+      (!lastGenBeat || Date.now() - lastGenBeat > 120000);
 
     // Never reset state while actively transcribing
     if (
@@ -364,6 +645,9 @@ function updateUI() {
         isTranscribing: false,
         notesStatus: 'idle',
         notesError: '',
+        notesErrorCode: '',
+        notesProgress: 0,
+        notesStage: '',
         completionUnseen: false,
         transcriptDownloaded: false,
         callEnded: false,
@@ -373,30 +657,18 @@ function updateUI() {
       result.isTranscribing = false;
       result.notesStatus = 'idle';
       result.notesError = '';
+      result.notesErrorCode = '';
       result.completionUnseen = false;
       result.callEnded = false;
     }
 
-    // 1. API Key View
-    if (!result.apiKey) {
-      viewApiKey.style.display = "block";
-      if (viewNoCall) viewNoCall.style.display = "none";
-      viewMain.style.display = "none";
-      viewResults.style.display = "none";
-      validateBtn.innerText = "Save & Validate";
-      validateBtn.disabled = false;
-      return;
-    }
-
     const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
 
-    // 2. Transcribing in progress always shows Main View (even when viewing another tab)
+    // 1. Transcribing in progress always shows Main View (even when viewing another tab)
     if (result.isTranscribing) {
       sawSessionTransitionInPopup = true;
-      viewApiKey.style.display = "none";
-      if (viewNoCall) viewNoCall.style.display = "none";
+      hideAllViews();
       viewMain.style.display = "block";
-      viewResults.style.display = "none";
 
       if (result.issueDetected) {
         issueBanner.style.display = "block";
@@ -437,26 +709,37 @@ function updateUI() {
       return;
     }
 
-    // 3. Results View: if not transcribing but we have a transcript
+    // 2. Results View: if not transcribing but we have a transcript
     if (!result.isTranscribing && hasTranscript) {
       sawSessionTransitionInPopup = true;
-      viewApiKey.style.display = "none";
-      if (viewNoCall) viewNoCall.style.display = "none";
-      viewMain.style.display = "none";
+      hideAllViews();
       viewResults.style.display = "block";
       stopTimer();
 
       if (result.notesStatus === 'generating') {
+        if (resultsHeading) resultsHeading.innerText = "Generating Meeting Notes";
         resultsStatus.style.color = "#5f6368";
-        resultsStatus.innerText = "Generating AI meeting notes and saving transcript...";
+        resultsStatus.innerText = isUsingNano
+          ? "Summarizing locally with Gemini Nano (On-Device)..."
+          : "Generating AI meeting notes and saving transcript...";
+        if (progressContainer) progressContainer.style.display = "block";
+        applyProgressUI(result.notesProgress, result.notesStage);
+        if (resultsNanoFixBox) resultsNanoFixBox.style.display = "none";
         if (retryBtn) retryBtn.style.display = "none";
         if (dismissBtn) dismissBtn.style.display = "none";
         chrome.runtime.sendMessage({ action: "check_generation_status" }, () => {
           void chrome.runtime.lastError;
         });
       } else if (result.notesStatus === 'error') {
+        if (resultsHeading) resultsHeading.innerText = "Notes Generation Failed";
+        if (progressContainer) progressContainer.style.display = "none";
         resultsStatus.style.color = "#d32f2f";
-        resultsStatus.innerText = "Transcript saved, but AI notes failed to generate." + (result.notesError ? " (" + result.notesError + ")" : "");
+        resultsStatus.innerText =
+          "Transcript saved, but AI notes failed to generate." +
+          (result.notesError ? " (" + result.notesError + ")" : "");
+        if (resultsNanoFixBox) {
+          resultsNanoFixBox.style.display = result.notesErrorCode === 'nano_unavailable' ? "block" : "none";
+        }
         if (retryBtn) {
           retryBtn.style.display = "block";
           retryBtn.disabled = false;
@@ -469,6 +752,9 @@ function updateUI() {
         if (result.completionUnseen) {
           chrome.storage.local.set({ completionUnseen: false });
         }
+        if (resultsHeading) resultsHeading.innerText = "Session Completed";
+        if (progressContainer) progressContainer.style.display = "none";
+        if (resultsNanoFixBox) resultsNanoFixBox.style.display = "none";
         resultsStatus.style.color = "#5f6368";
         resultsStatus.innerText = "Your AI meeting notes and transcript have been saved to your Downloads folder.";
         if (retryBtn) retryBtn.style.display = "none";
@@ -477,21 +763,39 @@ function updateUI() {
       return;
     }
 
+    // 3. Model Readiness Gate (Gemini Nano On-Device vs Cloud API Key)
+    if (isUsingNano) {
+      const nanoAvail = await checkNanoAvailabilityLocal(simMode);
+      if (nanoAvail.status === 'unavailable') {
+        hideAllViews();
+        stopTimer();
+        if (viewNanoUnavailable) {
+          viewNanoUnavailable.style.display = "block";
+          if (nanoFallbackNoKey) nanoFallbackNoKey.style.display = hasSavedKey ? "none" : "block";
+          if (nanoFallbackHasKey) nanoFallbackHasKey.style.display = hasSavedKey ? "block" : "none";
+        }
+        return;
+      }
+    } else if (!hasSavedKey) {
+      hideAllViews();
+      stopTimer();
+      viewApiKey.style.display = "block";
+      validateBtn.innerText = "Save & Validate";
+      validateBtn.disabled = false;
+      return;
+    }
+
     // 4. No Active Teams Call View
     if (!pageStatus.inActiveCall) {
-      viewApiKey.style.display = "none";
+      hideAllViews();
       if (viewNoCall) viewNoCall.style.display = "block";
-      viewMain.style.display = "none";
-      viewResults.style.display = "none";
       stopTimer();
       return;
     }
 
     // 5. Main View (Action-First Ready to Capture inside an active Teams call)
-    viewApiKey.style.display = "none";
-    if (viewNoCall) viewNoCall.style.display = "none";
+    hideAllViews();
     viewMain.style.display = "block";
-    viewResults.style.display = "none";
 
     issueBanner.style.display = "none";
     stopLink.style.display = "none";
@@ -515,6 +819,26 @@ function updateUI() {
     statusEl.innerText = "";
   });
 }
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.notesProgress || changes.notesStage) {
+    chrome.storage.local.get(['notesProgress', 'notesStage', 'notesStatus'], (s) => {
+      if (s.notesStatus === 'generating') {
+        applyProgressUI(s.notesProgress, s.notesStage);
+      }
+    });
+  }
+  if (
+    changes.notesStatus ||
+    changes.devNanoSimMode ||
+    changes.selectedModel ||
+    changes.modelSelectVal ||
+    changes.apiKey
+  ) {
+    updateUI();
+  }
+});
 
 updateUI();
 pollInterval = setInterval(updateUI, 2000);
@@ -542,6 +866,17 @@ async function executeInActiveTab(action, callback, preferredTabId = null) {
 startBtn.addEventListener('click', async () => {
   sawSessionTransitionInPopup = true;
   const startTime = Date.now();
+
+  const stored = await chrome.storage.local.get(['apiKey', 'selectedModel', 'modelSelectVal', 'devNanoSimMode']);
+  const hasSavedKey = !!(stored.apiKey && stored.apiKey.trim());
+  const isUsingNano =
+    !hasSavedKey ||
+    stored.modelSelectVal === GEMINI_NANO_MODEL_ID ||
+    stored.selectedModel === GEMINI_NANO_MODEL_ID;
+  if (isUsingNano) {
+    warmUpGeminiNanoIfNeeded(stored.devNanoSimMode || 'real');
+  }
+
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const pageStatus = await checkPageStatus(tab ? tab.id : null);
   const initialMeetingTitle =
@@ -556,6 +891,9 @@ startBtn.addEventListener('click', async () => {
     activeTabId: tab ? tab.id : null,
     notesStatus: 'idle',
     notesError: '',
+    notesErrorCode: '',
+    notesProgress: 0,
+    notesStage: '',
     completionUnseen: false,
     transcriptDownloaded: false,
     callEnded: false,
@@ -573,11 +911,15 @@ stopLink.addEventListener('click', async (e) => {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const stored = await chrome.storage.local.get(['activeTabId']);
   const targetTabId = stored.activeTabId || (tab ? tab.id : null);
+  const nowTs = Date.now();
   chrome.storage.local.set(
     {
       isTranscribing: false,
       notesStatus: 'generating',
-      generationStartedAt: Date.now()
+      notesProgress: 5,
+      notesStage: 'Preparing meeting notes...',
+      generationStartedAt: nowTs,
+      generationHeartbeatAt: nowTs
     },
     () => {
       chrome.runtime.sendMessage({ action: "stop_and_finalize", tabId: targetTabId }, () => {
@@ -612,8 +954,12 @@ if (retryBtn) {
     retryBtn.disabled = true;
     retryBtn.innerText = "Retrying...";
     if (dismissBtn) dismissBtn.style.display = "none";
+    if (resultsNanoFixBox) resultsNanoFixBox.style.display = "none";
+    if (resultsHeading) resultsHeading.innerText = "Generating Meeting Notes";
     resultsStatus.style.color = "#5f6368";
     resultsStatus.innerText = "Generating AI meeting notes and saving transcript...";
+    if (progressContainer) progressContainer.style.display = "block";
+    applyProgressUI(5, "Preparing meeting notes...");
     chrome.runtime.sendMessage({ action: "generate_notes" }, () => {
       void chrome.runtime.lastError;
       updateUI();
@@ -629,6 +975,9 @@ if (dismissBtn) {
         isTranscribing: false,
         notesStatus: 'idle',
         notesError: '',
+        notesErrorCode: '',
+        notesProgress: 0,
+        notesStage: '',
         completionUnseen: false,
         transcriptDownloaded: false,
         callEnded: false

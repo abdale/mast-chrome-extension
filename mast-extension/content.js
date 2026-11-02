@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.8.0';
+  const CONTENT_SCRIPT_VERSION = '2.9.0';
   if (window.__mastContentScriptVersion === CONTENT_SCRIPT_VERSION) {
     return;
   }
@@ -281,6 +281,23 @@
     }
   }
 
+  function updateToastProgressUI(progress, stage) {
+    const fill = document.getElementById('mast-toast-progress-fill');
+    const label = document.getElementById('mast-toast-progress-label');
+    if (!fill || !label) return;
+    const pct = Math.max(0, Math.min(100, Math.round(typeof progress === 'number' ? progress : 0)));
+    fill.style.width = `${Math.max(4, pct)}%`;
+    label.innerHTML = '';
+    const stageSpan = document.createElement('span');
+    stageSpan.style.cssText = 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+    stageSpan.textContent = stage || 'Generating meeting notes...';
+    const pctEl = document.createElement('strong');
+    pctEl.style.cssText = 'color: #5B5FC7; flex-shrink: 0;';
+    pctEl.textContent = `${pct}%`;
+    label.appendChild(stageSpan);
+    label.appendChild(pctEl);
+  }
+
   function renderStatusToast(state, errorMessage) {
     if (window !== window.top) return;
 
@@ -349,6 +366,10 @@
             renderStatusToast('api_key_needed');
             return;
           }
+          if (res && res.status === 'nano_unavailable') {
+            renderStatusToast('nano_unavailable');
+            return;
+          }
           isTranscribing = true;
           transcriptionStartedAt = (res && res.startTime) || Date.now();
           sawCaptionsActive = areCaptionsVisible();
@@ -389,10 +410,68 @@
           removeStatusToast();
         }
       }, 6000);
+    } else if (state === 'nano_unavailable') {
+      toast.style.borderLeftColor = '#d9534f';
+      messageEl.textContent = 'mast: Gemini Nano (On-Device) is unavailable on this device.';
+      toast.appendChild(messageEl);
+
+      const fixEl = document.createElement('div');
+      fixEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
+      fixEl.textContent =
+        'Ensure at least 22 GB of free disk space and check chrome://components, or add a Google AI Studio API key in Settings.';
+      toast.appendChild(fixEl);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
+
+      const settingsBtn = document.createElement('button');
+      settingsBtn.textContent = 'View Fix Steps / Settings';
+      settingsBtn.style.cssText =
+        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
+      settingsBtn.addEventListener('click', () => {
+        chrome.runtime.sendMessage({ action: 'open_options' });
+      });
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.style.cssText =
+        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer;';
+      dismissBtn.addEventListener('click', () => {
+        removeStatusToast();
+      });
+
+      actionsRow.appendChild(settingsBtn);
+      actionsRow.appendChild(dismissBtn);
+      toast.appendChild(actionsRow);
     } else if (state === 'generating') {
       toast.style.borderLeftColor = '#5B5FC7';
       messageEl.textContent = 'mast: Transcript saved. Generating AI notes...';
       toast.appendChild(messageEl);
+
+      const barTrack = document.createElement('div');
+      barTrack.style.cssText =
+        'width: 100%; height: 6px; background: #e8eaed; border-radius: 999px; overflow: hidden; margin-top: 2px;';
+
+      const barFill = document.createElement('div');
+      barFill.id = 'mast-toast-progress-fill';
+      barFill.style.cssText =
+        'height: 100%; width: 5%; background: linear-gradient(90deg, #5B5FC7 0%, #7b7fe0 100%); border-radius: 999px; transition: width 0.3s ease;';
+      barTrack.appendChild(barFill);
+      toast.appendChild(barTrack);
+
+      const stageRow = document.createElement('div');
+      stageRow.id = 'mast-toast-progress-label';
+      stageRow.style.cssText =
+        'display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11.5px; color: #5f6368;';
+      stageRow.innerHTML = '<span>Preparing meeting notes...</span><strong style="color: #5B5FC7;">5%</strong>';
+      toast.appendChild(stageRow);
+
+      try {
+        chrome.storage.local.get(['notesProgress', 'notesStage'], (s) => {
+          if (chrome.runtime.lastError || !s) return;
+          updateToastProgressUI(s.notesProgress, s.notesStage);
+        });
+      } catch (_) {}
     } else if (state === 'done') {
       toast.style.borderLeftColor = '#2e7d32';
       messageEl.textContent = 'mast: AI notes and transcript downloaded.';
@@ -408,7 +487,7 @@
       toast.appendChild(messageEl);
 
       const actionsRow = document.createElement('div');
-      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
+      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap;';
 
       const retryBtn = document.createElement('button');
       retryBtn.textContent = 'Retry';
@@ -417,6 +496,18 @@
       retryBtn.addEventListener('click', () => {
         chrome.runtime.sendMessage({ action: 'generate_notes' });
       });
+      actionsRow.appendChild(retryBtn);
+
+      if (errorMessage && errorMessage.includes('Gemini Nano (On-Device)')) {
+        const settingsBtn = document.createElement('button');
+        settingsBtn.textContent = 'Fix / Settings';
+        settingsBtn.style.cssText =
+          'background: #ffffff; color: #5B5FC7; border: 1px solid #5B5FC7; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
+        settingsBtn.addEventListener('click', () => {
+          chrome.runtime.sendMessage({ action: 'open_options' });
+        });
+        actionsRow.appendChild(settingsBtn);
+      }
 
       const dismissBtn = document.createElement('button');
       dismissBtn.textContent = 'Dismiss';
@@ -427,7 +518,6 @@
         removeStatusToast();
       });
 
-      actionsRow.appendChild(retryBtn);
       actionsRow.appendChild(dismissBtn);
       toast.appendChild(actionsRow);
     } else if (state === 'captions_off') {
@@ -733,6 +823,8 @@
           if (
             currentToastState !== 'meeting_detected' &&
             currentToastState !== 'capturing_started' &&
+            currentToastState !== 'api_key_needed' &&
+            currentToastState !== 'nano_unavailable' &&
             currentToastState !== 'generating' &&
             currentToastState !== 'done' &&
             currentToastState !== 'error'
@@ -757,6 +849,14 @@
       } else if (changes.isTranscribing.newValue === false) {
         meetingDetectedToastDismissed = true;
       }
+    }
+
+    if ((changes.notesProgress || changes.notesStage) && currentToastState === 'generating') {
+      chrome.storage.local.get(['notesProgress', 'notesStage'], (s) => {
+        if (!chrome.runtime.lastError && s) {
+          updateToastProgressUI(s.notesProgress, s.notesStage);
+        }
+      });
     }
 
     if (changes.notesStatus) {

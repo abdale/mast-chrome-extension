@@ -1,5 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.8.1';
+  const WORKER_BUILD_VERSION = '2.9.0';
+  const GEMINI_NANO_MODEL_ID = 'gemini-nano';
+
   chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
     if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
       chrome.storage.local.set({ reopenOptionsAfterReload: true }, () => {
@@ -10,12 +12,242 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const apiKeyInput = document.getElementById('apiKey');
   const modelSelect = document.getElementById('modelSelect');
+  const nanoStatusBox = document.getElementById('nanoStatusBox');
   const customModelContainer = document.getElementById('customModelContainer');
   const customModelInput = document.getElementById('customModel');
   const titleSourceSelect = document.getElementById('titleSource');
   const saveBtn = document.getElementById('saveBtn');
   const statusEl = document.getElementById('status');
   const recentMeetingsList = document.getElementById('recentMeetingsList');
+  const devSimPills = document.querySelectorAll('.dev-sim-pill[data-sim-mode]');
+
+  let currentSimMode = 'real';
+
+  function bindChromeUrls(root = document) {
+    root.querySelectorAll('[data-chrome-url]').forEach((el) => {
+      if (el.dataset.boundChromeUrl === 'true') return;
+      el.dataset.boundChromeUrl = 'true';
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        const url = el.getAttribute('data-chrome-url');
+        if (url) {
+          chrome.tabs.create({ url });
+        }
+      });
+    });
+  }
+
+  function getLanguageModelNamespace() {
+    if (typeof LanguageModel !== 'undefined') return LanguageModel;
+    if (typeof self !== 'undefined' && self.LanguageModel) return self.LanguageModel;
+    if (typeof self !== 'undefined' && self.ai && self.ai.languageModel) return self.ai.languageModel;
+    return null;
+  }
+
+  async function checkNanoAvailabilityLocal(simMode = 'real') {
+    if (simMode === 'low_disk') {
+      return { status: 'unavailable', simulated: true, reason: 'low_disk' };
+    }
+    if (simMode === 'downloadable') {
+      return { status: 'downloadable', simulated: true, reason: 'simulated_download' };
+    }
+
+    const lm = getLanguageModelNamespace();
+    if (!lm) {
+      return new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: 'get_nano_availability', simMode }, (res) => {
+          if (chrome.runtime.lastError || !res) {
+            resolve({ status: 'unavailable', simulated: false, reason: 'api_missing' });
+          } else {
+            resolve(res);
+          }
+        });
+      });
+    }
+
+    try {
+      if (typeof lm.availability === 'function') {
+        let raw;
+        try {
+          raw = await lm.availability({
+            expectedInputs: [{ type: 'text', languages: ['en'] }],
+            expectedOutputs: [{ type: 'text', languages: ['en'] }]
+          });
+        } catch (_) {
+          raw = await lm.availability();
+        }
+        if (raw === 'available' || raw === 'readily') {
+          return { status: 'available', simulated: false };
+        }
+        if (raw === 'downloadable' || raw === 'after-download') {
+          return { status: 'downloadable', simulated: false };
+        }
+        if (raw === 'downloading') {
+          return { status: 'downloading', simulated: false };
+        }
+        return { status: 'unavailable', simulated: false };
+      }
+      if (typeof lm.capabilities === 'function') {
+        const caps = await lm.capabilities();
+        if (caps && caps.available === 'readily') return { status: 'available', simulated: false };
+        if (caps && caps.available === 'after-download') return { status: 'downloadable', simulated: false };
+      }
+    } catch (_) {}
+
+    return { status: 'unavailable', simulated: false };
+  }
+
+  function renderDevSimPills(mode) {
+    currentSimMode = mode || 'real';
+    devSimPills.forEach((pill) => {
+      const pillMode = pill.getAttribute('data-sim-mode');
+      pill.classList.remove('active', 'active-warn');
+      if (pillMode === currentSimMode) {
+        pill.classList.add(currentSimMode === 'low_disk' ? 'active-warn' : 'active');
+      }
+    });
+  }
+
+  devSimPills.forEach((pill) => {
+    pill.addEventListener('click', () => {
+      const mode = pill.getAttribute('data-sim-mode') || 'real';
+      renderDevSimPills(mode);
+      const updates = { devNanoSimMode: mode };
+      if (mode === 'low_disk' || mode === 'downloadable') {
+        if (modelSelect.querySelector(`option[value="${GEMINI_NANO_MODEL_ID}"]`)) {
+          modelSelect.value = GEMINI_NANO_MODEL_ID;
+        }
+        updates.selectedModel = GEMINI_NANO_MODEL_ID;
+        updates.modelSelectVal = GEMINI_NANO_MODEL_ID;
+        updates.userSelectedModel = true;
+      }
+      chrome.storage.local.set(updates, () => {
+        toggleModelDetailsVisibility();
+      });
+    });
+  });
+
+  async function refreshNanoStatusBox() {
+    if (!nanoStatusBox) return;
+    if (modelSelect.value !== GEMINI_NANO_MODEL_ID) {
+      nanoStatusBox.style.display = 'none';
+      return;
+    }
+
+    const avail = await checkNanoAvailabilityLocal(currentSimMode);
+    if (modelSelect.value !== GEMINI_NANO_MODEL_ID) {
+      nanoStatusBox.style.display = 'none';
+      return;
+    }
+
+    nanoStatusBox.className = 'nano-box';
+    nanoStatusBox.style.display = 'block';
+
+    if (avail.status === 'available') {
+      nanoStatusBox.classList.add('ready');
+      nanoStatusBox.innerHTML =
+        '<div class="nano-box-title">Gemini Nano (On-Device) is ready</div>' +
+        '<div>Meetings will be summarized locally on your device with no API key required.</div>';
+      return;
+    }
+
+    if (avail.status === 'downloadable' || avail.status === 'downloading') {
+      nanoStatusBox.classList.add('download');
+      nanoStatusBox.innerHTML =
+        '<div class="nano-box-title">One-time model download needed</div>' +
+        '<div>Gemini Nano (On-Device) requires a one-time download (~4 GB; requires 22 GB free disk space). It downloads automatically on your first meeting or when you click below.</div>' +
+        '<button type="button" id="downloadNanoBtn" class="inline-btn">Download On-Device Model</button>' +
+        '<div id="nanoDownloadProgressWrap" style="display: none; margin-top: 8px;">' +
+        '  <div class="progress-track"><div id="nanoDownloadFill" class="progress-fill"></div></div>' +
+        '  <div id="nanoDownloadLabel" style="font-size: 11.5px; color: var(--text-muted); margin-top: 5px;">Starting download...</div>' +
+        '</div>';
+
+      const dlBtn = document.getElementById('downloadNanoBtn');
+      const wrap = document.getElementById('nanoDownloadProgressWrap');
+      const fill = document.getElementById('nanoDownloadFill');
+      const label = document.getElementById('nanoDownloadLabel');
+
+      if (dlBtn) {
+        dlBtn.addEventListener('click', async () => {
+          dlBtn.disabled = true;
+          dlBtn.textContent = 'Downloading...';
+          if (wrap) wrap.style.display = 'block';
+
+          if (currentSimMode === 'downloadable') {
+            for (const pct of [5, 22, 46, 71, 90, 100]) {
+              if (fill) fill.style.width = `${pct}%`;
+              if (label) label.textContent = `Downloading Gemini Nano (On-Device) (${pct}%)...`;
+              await new Promise((r) => setTimeout(r, 420));
+            }
+            dlBtn.textContent = 'Downloaded (Simulated)';
+            if (label) label.textContent = 'Simulated download complete.';
+            return;
+          }
+
+          const lm = getLanguageModelNamespace();
+          if (!lm || typeof lm.create !== 'function') {
+            refreshNanoStatusBox();
+            return;
+          }
+
+          try {
+            const session = await lm.create({
+              expectedInputs: [{ type: 'text', languages: ['en'] }],
+              expectedOutputs: [{ type: 'text', languages: ['en'] }],
+              monitor(m) {
+                m.addEventListener('downloadprogress', (e) => {
+                  const ratio =
+                    typeof e.loaded === 'number'
+                      ? e.total && e.total > 0
+                        ? e.loaded / e.total
+                        : e.loaded
+                      : 0;
+                  const pct = Math.min(100, Math.max(0, Math.round(ratio * 100)));
+                  if (fill) fill.style.width = `${Math.max(4, pct)}%`;
+                  if (label) label.textContent = `Downloading Gemini Nano (On-Device) (${pct}%)...`;
+                });
+              }
+            });
+            if (session && typeof session.destroy === 'function') {
+              session.destroy();
+            }
+            refreshNanoStatusBox();
+          } catch (err) {
+            dlBtn.disabled = false;
+            dlBtn.textContent = 'Retry Download';
+            if (label) {
+              label.style.color = '#d32f2f';
+              label.textContent = `Download failed: ${err.message || 'Check disk space (22 GB required).'}`;
+            }
+          }
+        });
+      }
+      return;
+    }
+
+    nanoStatusBox.classList.add('unavailable');
+    nanoStatusBox.innerHTML =
+      '<div class="nano-box-title">Gemini Nano (On-Device) Unavailable</div>' +
+      '<div>This device cannot load the on-device AI model yet. How to fix:</div>' +
+      '<ol class="nano-steps">' +
+      '  <li><strong>Free up disk space:</strong> Ensure at least <strong>22 GB of free space</strong> on the drive storing your browser profile (10 GB minimum once downloaded).</li>' +
+      '  <li><strong>Update model component:</strong> Open <a href="#" data-chrome-url="chrome://components">chrome://components</a>, locate <strong>Optimization Guide On Device Model</strong>, and click <strong>Check for update</strong> (inspect status at <a href="#" data-chrome-url="chrome://on-device-internals">chrome://on-device-internals</a>).</li>' +
+      '  <li><strong>Update browser:</strong> Ensure version 138+ at <a href="#" data-chrome-url="chrome://settings/help">chrome://settings/help</a>.</li>' +
+      '  <li><strong>Cloud alternative:</strong> Enter a Google AI Studio API key above to use cloud Gemini Flash models with zero local disk space needed.</li>' +
+      '</ol>' +
+      '<button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check Availability</button>';
+
+    bindChromeUrls(nanoStatusBox);
+    const recheckBtn = document.getElementById('recheckNanoSettingsBtn');
+    if (recheckBtn) {
+      recheckBtn.addEventListener('click', async () => {
+        recheckBtn.disabled = true;
+        recheckBtn.textContent = 'Checking...';
+        await new Promise((r) => setTimeout(r, 250));
+        refreshNanoStatusBox();
+      });
+    }
+  }
 
   function getTopStableFlashModels(models) {
     const validModels = (models || []).filter(
@@ -50,6 +282,34 @@ document.addEventListener('DOMContentLoaded', () => {
     return sorted.slice(0, 2).map(entry => entry.model);
   }
 
+  function populateNanoDefaultOnly() {
+    modelSelect.innerHTML = '';
+    const nanoOpt = document.createElement('option');
+    nanoOpt.value = GEMINI_NANO_MODEL_ID;
+    nanoOpt.textContent = 'Gemini Nano (On-Device) (Default)';
+    modelSelect.appendChild(nanoOpt);
+    modelSelect.value = GEMINI_NANO_MODEL_ID;
+    toggleModelDetailsVisibility();
+  }
+
+  function updateHistoryRegenCardProgress(progressState) {
+    if (!progressState || !progressState.meetingId) return;
+    const wrap = document.querySelector(`[data-regen-wrap="${progressState.meetingId}"]`);
+    const fill = document.querySelector(`[data-regen-fill="${progressState.meetingId}"]`);
+    const label = document.querySelector(`[data-regen-label="${progressState.meetingId}"]`);
+    if (!wrap || !fill || !label) return;
+
+    if (!progressState.active) {
+      wrap.style.display = 'none';
+      return;
+    }
+
+    const pct = Math.max(0, Math.min(100, Math.round(progressState.progress || 0)));
+    wrap.style.display = 'block';
+    fill.style.width = `${Math.max(4, pct)}%`;
+    label.textContent = `${progressState.stage || 'Generating notes...'} (${pct}%)`;
+  }
+
   function renderRecentMeetings(meetings) {
     if (!recentMeetingsList) return;
     recentMeetingsList.innerHTML = '';
@@ -60,9 +320,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     meetings.slice(0, 5).forEach((item) => {
+      const card = document.createElement('div');
+      card.style.cssText =
+        'display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: #f8f9fa; border: 1px solid var(--border); border-radius: 8px;';
+
       const row = document.createElement('div');
       row.style.cssText =
-        'display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 12px 14px; background: #f8f9fa; border: 1px solid var(--border); border-radius: 8px;';
+        'display: flex; justify-content: space-between; align-items: center; gap: 14px;';
 
       const infoCol = document.createElement('div');
       infoCol.style.cssText = 'min-width: 0; flex: 1;';
@@ -85,6 +349,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const pillBaseStyle =
         'color: var(--primary); background: #ffffff; border: 1px solid rgba(91, 95, 199, 0.35); padding: 5px 10px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 11.5px; white-space: nowrap; transition: all 0.15s ease;';
+
+      const progressWrap = document.createElement('div');
+      progressWrap.setAttribute('data-regen-wrap', String(item.id));
+      progressWrap.style.cssText = 'display: none;';
+
+      const progressTrack = document.createElement('div');
+      progressTrack.className = 'progress-track';
+      progressTrack.style.marginTop = '2px';
+
+      const progressFill = document.createElement('div');
+      progressFill.className = 'progress-fill';
+      progressFill.setAttribute('data-regen-fill', String(item.id));
+      progressTrack.appendChild(progressFill);
+
+      const progressLabel = document.createElement('div');
+      progressLabel.setAttribute('data-regen-label', String(item.id));
+      progressLabel.style.cssText = 'font-size: 11px; color: var(--text-muted); margin-top: 4px;';
+      progressLabel.textContent = 'Preparing...';
+
+      progressWrap.appendChild(progressTrack);
+      progressWrap.appendChild(progressLabel);
 
       const genLink = document.createElement('a');
       genLink.href = '#';
@@ -113,16 +398,21 @@ document.addEventListener('DOMContentLoaded', () => {
         genLink.style.background = '#ffffff';
         genLink.style.borderColor = 'var(--border)';
         genLink.style.pointerEvents = 'none';
+        progressWrap.style.display = 'block';
+        progressFill.style.width = '5%';
+        progressLabel.textContent = 'Preparing meeting notes... (5%)';
 
         chrome.runtime.sendMessage(
           { action: 'regenerate_meeting_notes', meetingId: item.id },
           (res) => {
             genLink.dataset.busy = 'false';
             genLink.style.pointerEvents = 'auto';
+            progressWrap.style.display = 'none';
             if (res && res.status === 'done') {
               genLink.textContent = 'Downloaded';
               genLink.style.color = '#2e7d32';
               genLink.style.borderColor = 'rgba(46, 125, 50, 0.35)';
+              statusEl.innerText = '';
               setTimeout(() => {
                 genLink.textContent = 'Generate Notes';
                 genLink.style.color = 'var(--primary)';
@@ -135,6 +425,9 @@ document.addEventListener('DOMContentLoaded', () => {
               if (res && res.error) {
                 statusEl.innerText = `Error: ${res.error}`;
                 statusEl.style.color = '#d32f2f';
+              }
+              if (res && res.errorCode === 'nano_unavailable') {
+                refreshNanoStatusBox();
               }
             }
           }
@@ -229,7 +522,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       row.appendChild(infoCol);
       row.appendChild(actionsCol);
-      recentMeetingsList.appendChild(row);
+
+      card.appendChild(row);
+      card.appendChild(progressWrap);
+      recentMeetingsList.appendChild(card);
     });
   }
 
@@ -244,14 +540,17 @@ document.addEventListener('DOMContentLoaded', () => {
       'recentMeetings',
       'savedTranscript',
       'meetingTitle',
-      'startTime'
+      'startTime',
+      'devNanoSimMode'
     ],
     (result) => {
-      if (result.apiKey) {
+      renderDevSimPills(result.devNanoSimMode || 'real');
+
+      if (result.apiKey && result.apiKey.trim()) {
         apiKeyInput.value = result.apiKey;
-        loadModels(result.apiKey, result.modelSelectVal, result.userSelectedModel);
+        loadModels(result.apiKey.trim(), result.modelSelectVal, result.userSelectedModel);
       } else {
-        modelSelect.innerHTML = '<option value="">Enter API Key to load models</option>';
+        populateNanoDefaultOnly();
       }
 
       if (result.customModelVal) {
@@ -280,15 +579,21 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({ recentMeetings: recent });
       }
       renderRecentMeetings(recent);
-
-      // Trigger initial visibility of custom model container
-      toggleCustomModelVisibility();
+      toggleModelDetailsVisibility();
     }
   );
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.recentMeetings) {
+    if (area !== 'local') return;
+    if (changes.recentMeetings) {
       renderRecentMeetings(changes.recentMeetings.newValue || []);
+    }
+    if (changes.historyRegenProgress && changes.historyRegenProgress.newValue) {
+      updateHistoryRegenCardProgress(changes.historyRegenProgress.newValue);
+    }
+    if (changes.devNanoSimMode) {
+      renderDevSimPills(changes.devNanoSimMode.newValue || 'real');
+      refreshNanoStatusBox();
     }
   });
 
@@ -296,6 +601,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const key = apiKeyInput.value.trim();
     if (key) {
       loadModels(key, modelSelect.value, true);
+    } else {
+      statusEl.innerText = '';
+      populateNanoDefaultOnly();
     }
   });
 
@@ -310,7 +618,7 @@ document.addEventListener('DOMContentLoaded', () => {
       modelSelect.innerHTML = '';
       const finalModels = getTopStableFlashModels(data.models);
       const validIds = finalModels.map(m => m.name.replace('models/', ''));
-      const defaultModelId = validIds.length >= 2 ? validIds[1] : (validIds[0] || 'custom');
+      const defaultModelId = validIds.length >= 2 ? validIds[1] : (validIds[0] || GEMINI_NANO_MODEL_ID);
 
       finalModels.forEach(m => {
         const modelId = m.name.replace('models/', '');
@@ -321,12 +629,21 @@ document.addEventListener('DOMContentLoaded', () => {
         modelSelect.appendChild(option);
       });
 
+      const nanoOpt = document.createElement('option');
+      nanoOpt.value = GEMINI_NANO_MODEL_ID;
+      nanoOpt.textContent = 'Gemini Nano (On-Device)';
+      modelSelect.appendChild(nanoOpt);
+
       const customOpt = document.createElement('option');
       customOpt.value = 'custom';
       customOpt.textContent = 'Custom Model...';
       modelSelect.appendChild(customOpt);
 
-      if (userSelectedModel && selectedVal && (validIds.includes(selectedVal) || selectedVal === 'custom')) {
+      if (
+        userSelectedModel &&
+        selectedVal &&
+        (validIds.includes(selectedVal) || selectedVal === GEMINI_NANO_MODEL_ID || selectedVal === 'custom')
+      ) {
         modelSelect.value = selectedVal;
       } else {
         modelSelect.value = defaultModelId;
@@ -337,35 +654,39 @@ document.addEventListener('DOMContentLoaded', () => {
           });
         }
       }
-      
-      toggleCustomModelVisibility();
+
+      toggleModelDetailsVisibility();
       statusEl.innerText = "";
     } catch (e) {
-      statusEl.innerText = "Error loading models. Check API Key.";
+      statusEl.innerText = "Invalid API key for cloud models. Using Gemini Nano (On-Device).";
       statusEl.style.color = "#d32f2f";
-      modelSelect.innerHTML = '<option value="">Error loading models</option>';
+      populateNanoDefaultOnly();
     }
   }
 
-  // Toggle custom model input visibility based on dropdown selection
-  function toggleCustomModelVisibility() {
+  function toggleModelDetailsVisibility() {
     if (modelSelect.value === 'custom') {
       customModelContainer.style.display = 'block';
     } else {
       customModelContainer.style.display = 'none';
     }
+    refreshNanoStatusBox();
   }
 
-  modelSelect.addEventListener('change', toggleCustomModelVisibility);
+  modelSelect.addEventListener('change', toggleModelDetailsVisibility);
 
   saveBtn.addEventListener('click', () => {
     const apiKey = apiKeyInput.value.trim();
-    const modelSelectVal = modelSelect.value;
+    let modelSelectVal = modelSelect.value || GEMINI_NANO_MODEL_ID;
     const customModelVal = customModelInput.value.trim();
     const titleSource = titleSourceSelect ? titleSourceSelect.value : 'ai';
-    
+
+    if (!apiKey && modelSelectVal !== GEMINI_NANO_MODEL_ID) {
+      modelSelectVal = GEMINI_NANO_MODEL_ID;
+    }
+
     let selectedModel = modelSelectVal;
-    
+
     if (modelSelectVal === 'custom') {
       if (!customModelVal) {
         statusEl.innerText = "Error: Please enter a Custom Model ID.";

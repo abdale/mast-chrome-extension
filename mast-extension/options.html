@@ -32,7 +32,7 @@
       border-radius: 12px;
       box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
       width: 100%;
-      max-width: 480px;
+      max-width: 500px;
       padding: 30px;
       box-sizing: border-box;
       border: 1px solid rgba(255, 255, 255, 0.8);
@@ -53,6 +53,7 @@
       color: var(--text-muted);
       font-size: 14px;
       margin-bottom: 25px;
+      line-height: 1.45;
     }
 
     .form-group {
@@ -107,14 +108,20 @@
       display: flex;
       justify-content: center;
       align-items: center;
+      font-family: inherit;
     }
 
-    button:hover {
+    button:hover:not(:disabled) {
       background-color: var(--primary-hover);
       box-shadow: 0 4px 12px rgba(91, 95, 199, 0.2);
     }
 
-    button:active {
+    button:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+
+    button:active:not(:disabled) {
       transform: scale(0.98);
     }
 
@@ -132,21 +139,135 @@
       font-size: 12px;
       color: var(--text-muted);
       margin-top: 6px;
+      line-height: 1.45;
     }
 
-    .help-text a {
+    .help-text a,
+    .nano-box a {
       color: var(--primary);
       text-decoration: none;
       font-weight: 500;
     }
 
-    .help-text a:hover {
+    .help-text a:hover,
+    .nano-box a:hover {
       text-decoration: underline;
+    }
+
+    .nano-box {
+      margin-top: 10px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      line-height: 1.45;
+      display: none;
+    }
+    .nano-box.ready {
+      background: #eef7f0;
+      border: 1px solid #c3e6cb;
+      color: #1e5627;
+    }
+    .nano-box.download {
+      background: #f3f4fc;
+      border: 1px solid rgba(91, 95, 199, 0.35);
+      color: var(--text);
+    }
+    .nano-box.unavailable {
+      background: #fff8f7;
+      border: 1px solid #f5c6cb;
+      color: #3c4043;
+    }
+    .nano-box-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .nano-box.unavailable .nano-box-title {
+      color: #b71c1c;
+    }
+    .nano-steps {
+      margin: 6px 0 8px 0;
+      padding-left: 18px;
+      font-size: 12px;
+    }
+    .nano-steps li {
+      margin-bottom: 4px;
+    }
+    .inline-btn {
+      width: auto;
+      display: inline-flex;
+      padding: 6px 12px;
+      font-size: 12px;
+      border-radius: 6px;
+      margin-top: 6px;
+    }
+    .inline-btn.secondary {
+      background: #ffffff;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .inline-btn.secondary:hover:not(:disabled) {
+      background: #f1f3f4;
+      box-shadow: none;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 7px;
+      background: #e8eaed;
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #5B5FC7 0%, #7b7fe0 100%);
+      border-radius: 999px;
+      transition: width 0.3s ease;
     }
 
     #customModelContainer {
       display: none;
       animation: fadeIn 0.3s ease;
+    }
+
+    /* [DEV-ONLY] Simulation Controls */
+    .dev-sim-card {
+      margin-top: 20px;
+      padding: 12px 14px;
+      border: 1px dashed #e57373;
+      background: #fffafa;
+      border-radius: 8px;
+    }
+    .dev-sim-pills {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .dev-sim-pill {
+      flex: 1;
+      margin-top: 0;
+      padding: 7px 8px;
+      font-size: 11.5px;
+      font-weight: 600;
+      border-radius: 6px;
+      background: #ffffff;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .dev-sim-pill:hover:not(:disabled) {
+      background: #f1f3f4;
+      box-shadow: none;
+    }
+    .dev-sim-pill.active {
+      background: var(--primary);
+      color: #ffffff;
+      border-color: var(--primary);
+    }
+    .dev-sim-pill.active-warn {
+      background: #d32f2f;
+      color: #ffffff;
+      border-color: #d32f2f;
     }
 
     @keyframes fadeIn {
@@ -157,26 +278,30 @@
 </head>
 <body>
   <div class="container">
-    <h2>mast Settings</h2>
-    <div class="subtitle">Configure your Gemini API key and preferred model.</div>
-    
+    <h2>
+      <span>mast Settings</span>
+      <span style="background: #d32f2f; color: #ffffff; font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.5px;">DEV</span>
+    </h2>
+    <div class="subtitle">Use Gemini Nano (On-Device) with zero setup, or configure an optional Google AI Studio API key for cloud models.</div>
+
     <div class="form-group">
-      <label for="apiKey">Google AI Studio API Key</label>
-      <input type="password" id="apiKey" placeholder="AIzaSy...">
-      <div class="help-text">Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. For detailed instructions, see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>.</div>
+      <label for="apiKey">Google AI Studio API Key <span style="font-weight: 400; color: var(--text-muted); text-transform: none;">(Optional)</span></label>
+      <input type="password" id="apiKey" placeholder="Optional - leave blank for Gemini Nano (On-Device)">
+      <div class="help-text">Optional when using Gemini Nano (On-Device). For cloud Gemini Flash models, generate a key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a> (see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>).</div>
     </div>
 
     <div class="form-group">
       <label for="modelSelect">SELECT MODEL</label>
       <select id="modelSelect">
-        <option value="">Loading available models...</option>
+        <option value="gemini-nano">Gemini Nano (On-Device) (Default)</option>
       </select>
-      <div class="help-text">Select which Gemini intelligence level to summarize with.</div>
+      <div class="help-text">Select whether to summarize locally on your device or with cloud Gemini models.</div>
+      <div id="nanoStatusBox" class="nano-box"></div>
     </div>
 
     <div class="form-group" id="customModelContainer">
       <label for="customModel">Custom Model ID</label>
-      <input type="text" id="customModel" placeholder="e.g., gemini-3.5-flash">
+      <input type="text" id="customModel" placeholder="e.g., gemini-2.5-flash">
       <div class="help-text">Specify any valid model ID supported by the Gemini Developer API.</div>
     </div>
 
@@ -188,9 +313,24 @@
       </select>
       <div class="help-text">Choose whether the AI notes file is named by AI or matches the Teams meeting name.</div>
     </div>
-    
+
     <button id="saveBtn">Save Settings</button>
     <div id="status"></div>
+
+    <!-- [DEV-ONLY] Simulation Controls -->
+    <div class="dev-sim-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #d32f2f;">DEV Simulate: Gemini Nano (On-Device)</span>
+      </div>
+      <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">
+        Test disk space (&lt; 22 GB) troubleshooting and first-time model download progress bar.
+      </div>
+      <div class="dev-sim-pills">
+        <button type="button" class="dev-sim-pill active" data-sim-mode="real">Real Device</button>
+        <button type="button" class="dev-sim-pill" data-sim-mode="low_disk">Low Disk (&lt;22 GB)</button>
+        <button type="button" class="dev-sim-pill" data-sim-mode="downloadable">1st Download</button>
+      </div>
+    </div>
 
     <div style="margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border);">
       <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 10px;">RECENT MEETINGS</div>
@@ -202,19 +342,19 @@
     <div style="margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border);">
       <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 6px;">ABOUT MAST</div>
       <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
-        <strong style="color: var(--text);">mast</strong> is a lightweight, privacy-focused Chrome extension built for Googlers to securely transcribe and generate AI meeting notes for Microsoft Teams calls. All captions are processed locally in your browser using your own Google AI Studio API key, with no external servers or third-party data storage.
+        <strong style="color: var(--text);">mast</strong> is a lightweight, privacy-focused browser extension built for Googlers to securely transcribe and generate AI meeting notes for Microsoft Teams calls. Summarize meetings directly on your machine with <strong style="color: var(--text);">Gemini Nano (On-Device)</strong> or use your own Google AI Studio API key, with no external third-party servers.
       </div>
     </div>
 
     <div style="text-align: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); display: flex; justify-content: center; align-items: center; gap: 8px;">
-      <span>2.8</span>
+      <span style="color: #d32f2f; font-weight: 600;">2.9-dev</span>
       <span>&middot;</span>
       <a href="release-notes.html" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 500;">Release Notes</a>
       <span>&middot;</span>
       <a href="http://go/mast-feedback" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 500;">Report Bug</a>
     </div>
   </div>
-  
+
   <script src="options.js"></script>
 </body>
 </html>
