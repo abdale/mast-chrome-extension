@@ -1,4 +1,4 @@
-// On-Device Gemma 4 E2B-IT Engine (Single-Pass 128K Context, WebGPU + Multi-Threaded WASM64 SIMD CPU)
+// On-Device Gemma 4 E2B-IT Engine (Single-Pass, WebGPU + Multi-Threaded WASM64 SIMD CPU)
 import { Wllama, ModelManager } from './vendor/wllama/wllama.js';
 
 export const GEMMA_MODEL_ID = 'gemma-4-e2b-it';
@@ -11,10 +11,31 @@ export const MIN_FREE_DISK_BYTES = 3 * 1024 * 1024 * 1024; // 3 GB
 const WASM_URL = new URL('./vendor/wllama/wllama.wasm', import.meta.url).href;
 const IDLE_UNLOAD_MS = 5 * 60 * 1000;
 const MAX_MODEL_CTX = 131072; // Gemma 4 E2B native 128K context window
-const MAX_SINGLE_PASS_CHARS = 420000; // ~115K tokens (+ output headroom inside 128K)
+const MAX_WEBGPU_TRANSCRIPT_CHARS = 64000; // ~16K clean tokens (fast single-pass on WebGPU)
+const MAX_CPU_TRANSCRIPT_CHARS = 8500; // ~2.1K high-salience tokens (~1.5-3 min single-pass on CPU)
 
 const GEMMA_SYSTEM_PROMPT =
   'You are an expert meeting minutes generator. Produce clear, accurate, concise Markdown meeting notes strictly grounded in the provided transcript. Never invent facts, attendees, or action items.';
+
+const WLLAMA_QUIET_ERROR_LOGGER = {
+  debug: () => {},
+  log: () => {},
+  warn: () => {},
+  error: (...args) => console.error('[mast-gemma]', ...args)
+};
+
+const FILLER_EXACT_SET = new Set([
+  'yeah', 'yep', 'yes', 'yup', 'no', 'nope', 'ok', 'okay', 'k', 'sure', 'right',
+  'alright', 'all right', 'mm hmm', 'mhm', 'mmhmm', 'uh huh', 'uhhuh', 'hmm', 'hm',
+  'uh', 'um', 'ah', 'oh', 'got it', 'gotcha', 'makes sense', 'sounds good',
+  'perfect', 'great', 'awesome', 'cool', 'nice', 'exactly', 'totally', 'absolutely',
+  'agreed', 'true', 'fair enough', 'thank you', 'thanks', 'thanks everyone',
+  'thank you everyone', 'bye', 'bye everyone', 'see ya', 'take care', 'hello',
+  'hi', 'hey', 'hi everyone', 'hey everyone', 'good morning', 'good afternoon'
+]);
+
+const AV_CHECK_RE =
+  /^(?:can (?:you|everyone|everybody) (?:hear me|see my screen|see this)|sorry[,]? i was on mute|you(?:'re| are) on mute|let me share my screen|sharing my screen now)[.?!]*$/i;
 
 let sharedModelManager = null;
 let activeDownloadPromise = null;
@@ -202,19 +223,34 @@ function computeOptimalThreads() {
   const hw = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
   if (hw <= 2) return 2;
   if (hw <= 8) return Math.max(2, hw - 1);
-  return Math.min(16, Math.floor(hw * 0.75));
+  if (hw <= 20) return Math.floor(hw * 0.75);
+  return Math.min(32, Math.max(15, Math.floor(hw * 0.5)));
 }
 
-function pickTargetContextSize(estimatedPromptTokens) {
-  const needed = Math.max(8192, (estimatedPromptTokens || 0) + 2500);
+function pickTargetContextSize(estimatedPromptTokens, hasWebGPU) {
+  const needed = Math.max(4096, (estimatedPromptTokens || 0) + 1800);
+  if (!hasWebGPU) {
+    if (needed <= 4096) return 4096;
+    if (needed <= 8192) return 8192;
+    if (needed <= 16384) return 16384;
+    return 32768;
+  }
+  if (needed <= 8192) return 8192;
+  if (needed <= 16384) return 16384;
   if (needed <= 32768) return 32768;
   if (needed <= 65536) return 65536;
   return MAX_MODEL_CTX;
 }
 
 async function ensureLoadedRuntime(modelObj, hasWebGPU, requiredCtx, onLoadTick = null) {
-  const desiredCtx = Math.max(32768, requiredCtx || 32768);
-  if (warmRuntime && warmRuntime.wllama && warmRuntime.nCtx >= desiredCtx) {
+  const minDefaultCtx = hasWebGPU ? 16384 : 8192;
+  const desiredCtx = Math.max(minDefaultCtx, requiredCtx || minDefaultCtx);
+  if (
+    warmRuntime &&
+    warmRuntime.wllama &&
+    warmRuntime.hasWebGPU === !!hasWebGPU &&
+    warmRuntime.nCtx >= desiredCtx
+  ) {
     scheduleIdleUnload();
     return warmRuntime;
   }
@@ -234,10 +270,13 @@ async function ensureLoadedRuntime(modelObj, hasWebGPU, requiredCtx, onLoadTick 
   const buildLoadOpts = (useGpu, ctxSize) => ({
     n_gpu_layers: useGpu ? 99999 : 0,
     n_ctx: ctxSize,
-    n_batch: 2048,
-    n_ubatch: useGpu ? 512 : 256,
+    // Small n_batch on CPU emits prompt_progress every 128 tokens (~4-10s) and improves cache locality
+    n_batch: useGpu ? 512 : 128,
+    n_ubatch: useGpu ? 512 : 128,
     n_parallel: 1,
     n_threads: threads,
+    n_ctx_checkpoints: 0,
+    cache_idle_slots: false,
     reasoning: false,
     default_template_kwargs: { enable_thinking: false }
   });
@@ -245,12 +284,12 @@ async function ensureLoadedRuntime(modelObj, hasWebGPU, requiredCtx, onLoadTick 
   try {
     const wllama = new Wllama(
       { default: WASM_URL },
-      { suppressNativeLog: true }
+      { suppressNativeLog: false, logger: WLLAMA_QUIET_ERROR_LOGGER }
     );
 
     try {
       await wllama.loadModel(modelObj, buildLoadOpts(hasWebGPU, desiredCtx));
-      warmRuntime = { wllama, hasWebGPU, nCtx: desiredCtx };
+      warmRuntime = { wllama, hasWebGPU: !!hasWebGPU, nCtx: desiredCtx };
       scheduleIdleUnload();
       return warmRuntime;
     } catch (loadErr) {
@@ -258,12 +297,13 @@ async function ensureLoadedRuntime(modelObj, hasWebGPU, requiredCtx, onLoadTick 
         await wllama.exit();
       } catch (_) {}
       if (hasWebGPU) {
+        const cpuCtx = Math.min(desiredCtx, 16384);
         const cpuWllama = new Wllama(
           { default: WASM_URL },
-          { suppressNativeLog: true }
+          { suppressNativeLog: false, logger: WLLAMA_QUIET_ERROR_LOGGER }
         );
-        await cpuWllama.loadModel(modelObj, buildLoadOpts(false, desiredCtx));
-        warmRuntime = { wllama: cpuWllama, hasWebGPU: false, nCtx: desiredCtx };
+        await cpuWllama.loadModel(modelObj, buildLoadOpts(false, cpuCtx));
+        warmRuntime = { wllama: cpuWllama, hasWebGPU: false, nCtx: cpuCtx };
         scheduleIdleUnload();
         return warmRuntime;
       }
@@ -274,13 +314,111 @@ async function ensureLoadedRuntime(modelObj, hasWebGPU, requiredCtx, onLoadTick 
   }
 }
 
-export function compactTranscriptLines(rawLines) {
+function normalizeForMatch(str) {
+  return String(str || '')
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\b(?:uh+|um+|er+|ah+|like|you know|i mean)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanStutters(text) {
+  return String(text || '')
+    .replace(/\b(uh+|um+)\b[,\s]*/gi, '')
+    .replace(/\b(\w+)(?:\s*,\s*|\s+)\1\b/gi, '$1')
+    .replace(/\b(\w+\s+\w+)(?:\s*,\s*|\s+)\1\b/gi, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isProgressiveSuperset(olderNorm, newerNorm) {
+  if (!olderNorm || !newerNorm) return false;
+  if (olderNorm === newerNorm) return true;
+  if (newerNorm.length <= olderNorm.length) return false;
+  if (newerNorm.startsWith(olderNorm) && newerNorm.length - olderNorm.length < 300) {
+    return true;
+  }
+  const oldWords = olderNorm.split(' ');
+  const newWords = newerNorm.split(' ');
+  if (
+    oldWords.length >= 3 &&
+    newWords.length >= oldWords.length + 2 &&
+    newWords.length - oldWords.length <= 45
+  ) {
+    for (let i = 0; i < oldWords.length - 1; i++) {
+      if (oldWords[i] !== newWords[i]) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function scoreUtteranceSalience(text) {
+  const lower = text.toLowerCase();
+  let score = 1.0;
+
+  if (
+    /\b(decid\w*|decision\w*|agreed|approve\w*|confirm\w*|finaliz\w*|sign[- ]?off|consensus|conclud\w*|go ahead with|moving forward with|selected|chosen)\b/.test(
+      lower
+    )
+  ) {
+    score += 10;
+  }
+  if (
+    /\b(action item\w*|next step\w*|todo|to-do|follow[- ]?up\w*|i will|i'll|we will|we'll|will send|will share|will schedule|will update|will create|will review|take an action|assign\w*|owner|responsible|deliverable\w*)\b/.test(
+      lower
+    )
+  ) {
+    score += 9;
+  }
+  if (
+    /\b(monday|tuesday|wednesday|thursday|friday|next week|this week|tomorrow|eod|end of day|end of week|q[1-4]|january|february|march|april|may|june|july|august|september|october|november|december|deadline|target date|eta|milestone\w*|by the \d+)\b/.test(
+      lower
+    )
+  ) {
+    score += 6;
+  }
+  if (
+    /\b(agenda|purpose|goal|objective|blocker\w*|blocked|risk\w*|issue\w*|concern\w*|defer\w*|parking lot|open question\w*|escalat\w*|dependency|dependencies|requirement\w*|architecture|security|budget|cost|timeline|launch|migration|production)\b/.test(
+      lower
+    )
+  ) {
+    score += 4;
+  }
+  if (
+    /(?:\$\d|\b\d+(?:\.\d+)?%|\b\d+\s*(?:gb|tb|ms|days|weeks|months|users|nodes|clusters|million|k)\b|\bv\d+\.\d+)/i.test(
+      text
+    )
+  ) {
+    score += 4;
+  }
+  if (text.includes('?') && text.length > 35) {
+    score += 2.5;
+  }
+  const wordCount = text.split(/\s+/).length;
+  if (wordCount < 5) score -= 1.5;
+  else score += Math.min(3, wordCount / 18);
+
+  return score;
+}
+
+export function compactTranscriptLines(rawLines, options = {}) {
   if (!Array.isArray(rawLines) || rawLines.length === 0) return '';
 
-  const VTT_CUE_ID_RE = /^(?:\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/[\w-]+)?|[\w-]{12,}\/\d+(?:-\d+)?)$/i;
-  const VTT_TIMING_RE = /^(\d{1,2}:\d{2}(?::\d{2})?)(?:[.,]\d+)?\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?(?:\s+.*)?$/;
+  const maxChars =
+    typeof options.maxChars === 'number' && options.maxChars > 0
+      ? options.maxChars
+      : MAX_WEBGPU_TRANSCRIPT_CHARS;
+
+  const VTT_CUE_ID_RE =
+    /^(?:\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/[\w-]+)?|[\w-]{12,}\/\d+(?:-\d+)?)$/i;
+  const VTT_TIMING_RE =
+    /^(\d{1,2}:\d{2}(?::\d{2})?)(?:[.,]\d+)?\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?(?:\s+.*)?$/;
   const STANDALONE_TIME_RE = /^\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?$/i;
-  const TEAMS_HEADER_RE = /^([A-Za-z][A-Za-z0-9 .,'()_-]{1,55}?)\s{2,}(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?)$/i;
+  const TEAMS_HEADER_RE =
+    /^([A-Za-z][A-Za-z0-9 .,'()_-]{1,65}?)\s{2,}(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?)$/i;
   const BRACKET_SPEAKER_RE = /^\[([^\]]+)\]:\s*(.*)$/;
   const VTT_VOICE_OPEN_RE = /^<v\s+([^>]+)>([\s\S]*)$/i;
 
@@ -288,41 +426,67 @@ export function compactTranscriptLines(rawLines) {
   let activeVttSpeaker = null;
   let pendingTeamsSpeaker = null;
 
-  const blocks = []; // { speaker: string | null, parts: string[], charLen: number }
+  const participantSet = new Set();
+  const utterances = []; // { speaker: string | null, text: string, norm: string }
+  const seenLongNorms = new Set(); // deduplicates virtualized scroll re-mounts
+  const recentShortNorms = [];
 
-  const pushUtterance = (speaker, rawText) => {
-    const text = String(rawText || '')
-      .replace(/<\/v>/gi, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+  const pushUtterance = (rawSpeaker, rawText) => {
+    const text = cleanStutters(
+      String(rawText || '')
+        .replace(/<\/v>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+    );
     if (!text) return;
 
-    const cleanSpeaker = speaker ? String(speaker).replace(/\s+/g, ' ').trim() : null;
-    const prev = blocks.length > 0 ? blocks[blocks.length - 1] : null;
+    let cleanSpeaker = rawSpeaker ? String(rawSpeaker).replace(/\s+/g, ' ').trim() : null;
+    if (cleanSpeaker && /^unknown$/i.test(cleanSpeaker)) {
+      cleanSpeaker = null;
+    }
+    if (cleanSpeaker) {
+      participantSet.add(cleanSpeaker);
+    }
 
-    if (prev && prev.speaker === cleanSpeaker) {
-      const lastPart = prev.parts[prev.parts.length - 1];
-      if (lastPart === text) {
-        return; // exact duplicate line
+    const norm = normalizeForMatch(text);
+    if (!norm) return;
+    if (FILLER_EXACT_SET.has(norm) || AV_CHECK_RE.test(text)) {
+      return;
+    }
+
+    const lookbackStart = Math.max(0, utterances.length - 4);
+    for (let idx = utterances.length - 1; idx >= lookbackStart; idx--) {
+      const prev = utterances[idx];
+      const compatibleSpeaker =
+        !cleanSpeaker || !prev.speaker || prev.speaker === cleanSpeaker;
+      if (!compatibleSpeaker) continue;
+
+      if (prev.norm === norm) {
+        if (!prev.speaker && cleanSpeaker) prev.speaker = cleanSpeaker;
+        return;
       }
-      if (cleanSpeaker && lastPart && text.startsWith(lastPart) && text.length - lastPart.length < 160) {
-        prev.charLen += text.length - lastPart.length;
-        prev.parts[prev.parts.length - 1] = text;
-        return; // progressive live-caption superset
+      if (isProgressiveSuperset(prev.norm, norm)) {
+        if (prev.norm.length >= 32) seenLongNorms.delete(prev.norm);
+        prev.text = text;
+        prev.norm = norm;
+        if (!prev.speaker && cleanSpeaker) prev.speaker = cleanSpeaker;
+        if (norm.length >= 32) seenLongNorms.add(norm);
+        return;
       }
-      if (cleanSpeaker && prev.charLen + text.length < 1200) {
-        prev.parts.push(text);
-        prev.charLen += text.length + 1;
+      if (isProgressiveSuperset(norm, prev.norm)) {
         return;
       }
     }
 
-    blocks.push({
-      speaker: cleanSpeaker,
-      parts: [text],
-      charLen: text.length
-    });
+    if (norm.length >= 32) {
+      if (seenLongNorms.has(norm)) return;
+      seenLongNorms.add(norm);
+    } else {
+      if (recentShortNorms.includes(norm)) return;
+      recentShortNorms.push(norm);
+      if (recentShortNorms.length > 30) recentShortNorms.shift();
+    }
+
+    utterances.push({ speaker: cleanSpeaker, text, norm });
   };
 
   for (const item of rawLines) {
@@ -393,20 +557,103 @@ export function compactTranscriptLines(rawLines) {
     pushUtterance(null, line);
   }
 
-  const formattedLines = [];
+  if (utterances.length === 0) return '';
+
+  const headerLines = [];
   if (firstTimestamp) {
-    formattedLines.push(`[Transcript start time: ${firstTimestamp}]`);
+    headerLines.push(`[Transcript start time: ${firstTimestamp}]`);
   }
-  for (const b of blocks) {
-    const combined = b.parts.join(' ');
-    formattedLines.push(b.speaker ? `[${b.speaker}]: ${combined}` : combined);
+  const participants = Array.from(participantSet);
+  if (participants.length > 0) {
+    headerLines.push(`[Participants: ${participants.join(', ')}]`);
+  }
+  const headerStr = headerLines.length > 0 ? headerLines.join('\n') + '\n' : '';
+
+  const formatConsolidated = (uttList) => {
+    const blocks = [];
+    for (const u of uttList) {
+      const prev = blocks.length > 0 ? blocks[blocks.length - 1] : null;
+      if (prev && prev.speaker === u.speaker && prev.charLen + u.text.length < 900) {
+        prev.parts.push(u.text);
+        prev.charLen += u.text.length + 1;
+      } else {
+        blocks.push({ speaker: u.speaker, parts: [u.text], charLen: u.text.length });
+      }
+    }
+    return (
+      headerStr +
+      blocks
+        .map((b) => (b.speaker ? `[${b.speaker}]: ${b.parts.join(' ')}` : b.parts.join(' ')))
+        .join('\n')
+    );
+  };
+
+  const fullCleaned = formatConsolidated(utterances);
+  if (fullCleaned.length <= maxChars) {
+    return fullCleaned;
   }
 
-  let joined = formattedLines.join('\n');
-  if (joined.length > MAX_SINGLE_PASS_CHARS) {
-    joined = joined.slice(0, MAX_SINGLE_PASS_CHARS) + '\n[Transcript truncated at 128K token limit]';
+  // Salience-preserving chronological condensation when cleaned transcript exceeds hardware budget
+  const bodyBudget = Math.max(2000, maxChars - headerStr.length - 80);
+  const scored = utterances.map((u, idx) => ({
+    ...u,
+    idx,
+    cost: u.text.length + (u.speaker ? u.speaker.length + 5 : 1),
+    score: scoreUtteranceSalience(u.text)
+  }));
+
+  const selectedIdx = new Set();
+  let usedChars = 0;
+
+  const trySelect = (item) => {
+    if (selectedIdx.has(item.idx)) return false;
+    if (usedChars + item.cost > bodyBudget) return false;
+    selectedIdx.add(item.idx);
+    usedChars += item.cost;
+    return true;
+  };
+
+  // 1. Preserve each participant's top turn
+  const bestBySpeaker = new Map();
+  for (const item of scored) {
+    if (!item.speaker) continue;
+    const cur = bestBySpeaker.get(item.speaker);
+    if (!cur || item.score > cur.score) bestBySpeaker.set(item.speaker, item);
   }
-  return joined;
+  for (const item of bestBySpeaker.values()) {
+    if (item.cost <= bodyBudget * 0.15) trySelect(item);
+  }
+
+  // 2. Cover 12 equal chronological segments across the full meeting duration
+  const numBuckets = Math.min(12, scored.length);
+  const bucketBudget = Math.floor(((bodyBudget - usedChars) * 0.55) / numBuckets);
+  for (let b = 0; b < numBuckets; b++) {
+    const start = Math.floor((b * scored.length) / numBuckets);
+    const end = Math.floor(((b + 1) * scored.length) / numBuckets);
+    const slice = scored.slice(start, end).sort((a, c) => c.score - a.score);
+    let bUsed = 0;
+    for (const item of slice) {
+      if (bUsed + item.cost > bucketBudget && bUsed > 0) continue;
+      if (trySelect(item)) {
+        bUsed += item.cost;
+        if (bUsed >= bucketBudget) break;
+      }
+    }
+  }
+
+  // 3. Fill remaining budget with highest-salience decisions, action items, deadlines, and metrics
+  const remainingByScore = [...scored].sort((a, c) => c.score - a.score);
+  for (const item of remainingByScore) {
+    if (usedChars >= bodyBudget * 0.96) break;
+    trySelect(item);
+  }
+
+  const chosenChronological = utterances.filter((_, idx) => selectedIdx.has(idx));
+  let condensed = formatConsolidated(chosenChronological);
+  if (condensed.length > maxChars) {
+    condensed = condensed.slice(0, maxChars);
+  }
+  return condensed;
 }
 
 function stripThinkingArtifacts(text) {
@@ -418,7 +665,13 @@ function stripThinkingArtifacts(text) {
     .trim();
 }
 
-async function runChatCompletionStreaming(wllama, userPrompt, maxTokens, onPromptProgress, onTokenProgress) {
+async function runChatCompletionStreaming(
+  wllama,
+  userPrompt,
+  maxTokens,
+  onPromptProgress,
+  onTokenProgress
+) {
   const stream = await wllama.createChatCompletion({
     messages: [
       { role: 'system', content: GEMMA_SYSTEM_PROMPT },
@@ -427,6 +680,7 @@ async function runChatCompletionStreaming(wllama, userPrompt, maxTokens, onPromp
     max_tokens: maxTokens,
     temperature: 0.2,
     top_p: 0.9,
+    cache_prompt: false,
     return_progress: true,
     chat_template_kwargs: { enable_thinking: false },
     stream: true
@@ -499,7 +753,12 @@ function enqueueInference(fn) {
   return run;
 }
 
-export function generateNotesWithGemma(lines, dateFormatted, simMode = 'real', onProgress = () => {}) {
+export function generateNotesWithGemma(
+  lines,
+  dateFormatted,
+  simMode = 'real',
+  onProgress = () => {}
+) {
   return enqueueInference(async () => {
     if (simMode === 'low_disk') {
       const err = new Error('At least 3 GB of free disk space is required for Gemma On-Device.');
@@ -530,14 +789,15 @@ export function generateNotesWithGemma(lines, dateFormatted, simMode = 'real', o
       throw err;
     }
 
-    const compactedTranscript = compactTranscriptLines(lines);
+    const maxTranscriptChars = avail.hasWebGPU
+      ? MAX_WEBGPU_TRANSCRIPT_CHARS
+      : MAX_CPU_TRANSCRIPT_CHARS;
+    const compactedTranscript = compactTranscriptLines(lines, {
+      maxChars: maxTranscriptChars
+    });
     if (!compactedTranscript) {
       throw new Error('The transcript contains no readable speech lines.');
     }
-
-    const prompt = buildMinutesPrompt(compactedTranscript, dateFormatted);
-    const estimatedPromptTokens = Math.ceil(prompt.length / 3.2);
-    const targetCtx = pickTargetContextSize(estimatedPromptTokens);
 
     let modelObj = await getCachedGemmaModel();
     let loadStartPct = 12;
@@ -553,6 +813,10 @@ export function generateNotesWithGemma(lines, dateFormatted, simMode = 'real', o
       loadStartPct = 30;
     }
 
+    const prompt = buildMinutesPrompt(compactedTranscript, dateFormatted);
+    const estimatedPromptTokens = Math.ceil(prompt.length / 3.2);
+    const targetCtx = pickTargetContextSize(estimatedPromptTokens, avail.hasWebGPU);
+
     const accelLabel = avail.hasWebGPU ? 'WebGPU' : 'CPU';
     onProgress(loadStartPct, `Loading Gemma 4 E2B (${accelLabel})...`);
 
@@ -565,13 +829,24 @@ export function generateNotesWithGemma(lines, dateFormatted, simMode = 'real', o
         onProgress(tickPct, `Loading Gemma 4 E2B (${accelLabel})...`);
       }
     );
+
+    // If WebGPU failed to initialize and fell back to CPU, re-apply CPU transcript budget
+    let effectivePrompt = prompt;
+    if (avail.hasWebGPU && !runtime.hasWebGPU && compactedTranscript.length > MAX_CPU_TRANSCRIPT_CHARS) {
+      const cpuTranscript = compactTranscriptLines(lines, {
+        maxChars: MAX_CPU_TRANSCRIPT_CHARS
+      });
+      effectivePrompt = buildMinutesPrompt(cpuTranscript, dateFormatted);
+    }
+
     scheduleIdleUnload();
 
+    const maxOutputTokens = runtime.hasWebGPU ? 1500 : 950;
     onProgress(36, 'Reading transcript on-device...');
     const minutes = await runChatCompletionStreaming(
       runtime.wllama,
-      prompt,
-      1500,
+      effectivePrompt,
+      maxOutputTokens,
       (doneTokens, totalTokens) => {
         const ratio = Math.min(1, doneTokens / Math.max(1, totalTokens));
         const pct = 36 + Math.round(ratio * 38); // 36% -> 74% smoothly across prompt prefill
