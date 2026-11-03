@@ -3,132 +3,60 @@
 <head>
   <meta charset="utf-8">
   <style>
-    body { font-family: 'Segoe UI', Tahoma, sans-serif; padding: 15px; width: 330px; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+      padding: 15px;
+      width: 320px;
+      box-sizing: border-box;
+      margin: 0;
+      color: #202124;
+    }
     h3 { margin-bottom: 10px; }
-    button { background-color: #5B5FC7; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; width: 100%; margin-top: 10px; font-weight: 500; font-family: inherit; }
-    button:hover:not(:disabled) { background-color: #4b4fb5; }
+    button {
+      background-color: #5B5FC7;
+      color: white;
+      border: none;
+      padding: 9px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 10px;
+      font-weight: 600;
+      font-size: 13px;
+      font-family: inherit;
+      transition: background-color 0.15s ease;
+    }
+    button:hover:not(:disabled) { background-color: #464eb8; }
     button:disabled { background-color: #ccc; cursor: not-allowed; }
+    input[type="password"] {
+      width: 100%;
+      padding: 8px 10px;
+      box-sizing: border-box;
+      border: 1.5px solid #dadce0;
+      border-radius: 6px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    input[type="password"]:focus {
+      border-color: #5B5FC7;
+      box-shadow: 0 0 0 3px rgba(91, 95, 199, 0.2);
+    }
     #status { margin-top: 10px; font-size: 12px; color: #333; text-align: center; }
     #timer { font-size: 24px; font-weight: bold; text-align: center; margin-top: 10px; display: none; color: #5B5FC7; }
-    #captionHelperText { margin-top: 6px; font-size: 11px; color: #5f6368; line-height: 1.3; text-align: center; }
+    #captionHelperText { margin-top: 6px; font-size: 11px; color: #5f6368; line-height: 1.35; text-align: center; }
 
     a, a:visited, a:hover, a:active {
-      color: #0066cc !important;
+      color: #5B5FC7 !important;
       text-decoration: none;
+      font-weight: 500;
     }
     a:hover {
       text-decoration: underline;
     }
 
     .view-section { display: none; }
-
-    .choice-card {
-      display: block;
-      width: 100%;
-      text-align: left;
-      background: #ffffff;
-      color: #202124;
-      border: 1.5px solid #dadce0;
-      border-radius: 7px;
-      padding: 11px 12px;
-      margin-top: 9px;
-      cursor: pointer;
-      transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
-      box-sizing: border-box;
-    }
-    .choice-card:hover:not(:disabled) {
-      background: #f6f7fd;
-      border-color: #5B5FC7;
-      box-shadow: 0 2px 8px rgba(91, 95, 199, 0.12);
-    }
-    .choice-card-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: #202124;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 3px;
-    }
-    .choice-card-badge {
-      font-size: 10px;
-      font-weight: 600;
-      padding: 2px 6px;
-      border-radius: 999px;
-      background: #eef0fc;
-      color: #5B5FC7;
-    }
-    .choice-card-desc {
-      font-size: 11.5px;
-      font-weight: 400;
-      color: #5f6368;
-      line-height: 1.35;
-    }
-
-    .alt-choice-box {
-      background: #f3f4fc;
-      border: 1px solid rgba(91, 95, 199, 0.28);
-      border-radius: 6px;
-      padding: 10px 12px;
-      margin-top: 12px;
-      font-size: 11.5px;
-      color: #3c4043;
-      line-height: 1.4;
-    }
-    .outline-primary-btn {
-      background-color: #ffffff;
-      color: #5B5FC7;
-      border: 1px solid #5B5FC7;
-      padding: 6px 10px;
-      font-size: 11.5px;
-      font-weight: 600;
-      margin-top: 7px;
-    }
-    .outline-primary-btn:hover:not(:disabled) {
-      background-color: rgba(91, 95, 199, 0.08);
-    }
-
-    .fix-card {
-      background: #fff8f7;
-      border: 1px solid #f5c6cb;
-      border-radius: 8px;
-      padding: 12px 13px;
-      margin-top: 12px;
-      text-align: left;
-    }
-    .fix-card-title {
-      font-size: 12.5px;
-      font-weight: 600;
-      color: #b71c1c;
-      margin: 0 0 4px 0;
-    }
-    .fix-card-sub {
-      font-size: 11.5px;
-      color: #3c4043;
-      margin: 0;
-      line-height: 1.45;
-    }
-    .fix-actions {
-      display: flex;
-      gap: 6px;
-      margin-top: 9px;
-    }
-    .fix-actions button {
-      margin-top: 0;
-      width: auto;
-      flex: 1;
-    }
-    .secondary-btn {
-      background-color: #ffffff;
-      color: #3c4043;
-      border: 1px solid #dadce0;
-      padding: 6px 10px;
-      font-size: 11.5px;
-      margin-top: 4px;
-    }
-    .secondary-btn:hover:not(:disabled) {
-      background-color: #f1f3f4;
-    }
 
     .progress-track {
       width: 100%;
@@ -154,49 +82,6 @@
       font-size: 11px;
       color: #5f6368;
     }
-
-    /* [DEV-ONLY] Simulation Bar */
-    .dev-sim-bar {
-      margin-top: 14px;
-      padding-top: 10px;
-      border-top: 1px dashed #dadce0;
-    }
-    .dev-sim-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 10px;
-      color: #5f6368;
-      margin-bottom: 6px;
-    }
-    .dev-sim-pills {
-      display: flex;
-      gap: 4px;
-    }
-    .dev-sim-pill {
-      flex: 1;
-      margin-top: 0;
-      padding: 4px 5px;
-      font-size: 10px;
-      font-weight: 600;
-      border-radius: 4px;
-      background: #f1f3f4;
-      color: #3c4043;
-      border: 1px solid #dadce0;
-    }
-    .dev-sim-pill:hover:not(:disabled) {
-      background: #e8eaed;
-    }
-    .dev-sim-pill.active {
-      background: #5B5FC7;
-      color: #ffffff;
-      border-color: #5B5FC7;
-    }
-    .dev-sim-pill.active-warn {
-      background: #d32f2f;
-      color: #ffffff;
-      border-color: #d32f2f;
-    }
   </style>
 </head>
 <body>
@@ -212,63 +97,18 @@
     </div>
   </div>
 
-  <div id="view-onboarding" class="view-section">
-    <p style="font-size: 12px; color: #3c4043; margin: 12px 0 4px 0; font-weight: 600;">Choose how to generate meeting notes</p>
-    <p style="font-size: 11.5px; color: #5f6368; margin: 0 0 8px 0; line-height: 1.35;">Select your preferred AI model to get started:</p>
-
-    <button type="button" id="chooseNanoBtn" class="choice-card">
-      <div class="choice-card-title">
-        <span>Gemma 4 E2B (On-Device)</span>
-        <span class="choice-card-badge">No API Key</span>
-      </div>
-      <div class="choice-card-desc">Summarizes locally on your device with zero setup.</div>
-    </button>
-
-    <button type="button" id="chooseCloudBtn" class="choice-card">
-      <div class="choice-card-title">
-        <span>Gemini Flash (API Key)</span>
-        <span class="choice-card-badge">Cloud</span>
-      </div>
-      <div class="choice-card-desc">Fast cloud summarization using your Google AI Studio API key.</div>
-    </button>
-
-    <div style="font-size: 10.5px; color: #5f6368; text-align: center; margin-top: 10px;">
-      You can switch between models anytime in Settings.
-    </div>
-  </div>
-
   <div id="view-api-key" class="view-section">
     <p style="font-size: 12px; color: #202124; font-weight: 600; margin: 12px 0 6px 0;">Enter your Google AI Studio API key</p>
-    <input type="password" id="apiKeyInput" placeholder="AIzaSy..." style="width: 100%; padding: 7px 8px; box-sizing: border-box; border: 1px solid #dadce0; border-radius: 4px;">
+    <input type="password" id="apiKeyInput" placeholder="AIzaSy...">
     <button id="validateBtn">Save &amp; Validate</button>
-    <div id="apiError" style="color: #d32f2f; font-size: 11px; margin-top: 5px; display: none;"></div>
+    <div id="apiError" style="color: #d32f2f; font-size: 11px; margin-top: 6px; display: none;"></div>
     <div style="font-size: 11px; margin-top: 8px; color: #5f6368; line-height: 1.4;">
       Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. For instructions, see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>.
-    </div>
-
-    <div class="alt-choice-box">
-      <div><strong>Don't have an API key?</strong> If you don't have an API key, you can select <strong>Gemma On-Device</strong> instead - no API key required.</div>
-      <button type="button" id="useNanoInsteadBtn" class="outline-primary-btn">Use Gemma On-Device</button>
-    </div>
-  </div>
-
-  <div id="view-nano-unavailable" class="view-section">
-    <div class="fix-card">
-      <div id="nanoUnavailableTitle" class="fix-card-title">Not enough disk space</div>
-      <div id="nanoUnavailableSub" class="fix-card-sub">At least <strong>3 GB</strong> of free disk space is required for Gemma On-Device.</div>
-      <div class="fix-actions">
-        <button type="button" id="recheckNanoBtn" class="secondary-btn">Re-check</button>
-      </div>
-    </div>
-
-    <div class="alt-choice-box">
-      <div id="nanoUnavailableSwitchText">Or switch to <strong>Gemini Flash</strong> with an API key.</div>
-      <button type="button" id="switchToCloudModeBtn" class="outline-primary-btn">Use Gemini Flash</button>
     </div>
   </div>
 
   <div id="view-no-call" class="view-section">
-    <div style="background: #f8f9fa; border: 1px solid #dadce0; padding: 15px; border-radius: 6px; margin-top: 15px; text-align: center;">
+    <div style="background: #f8f9fa; border: 1px solid #dadce0; padding: 15px; border-radius: 8px; margin-top: 14px; text-align: center;">
       <h4 style="margin-top: 0; margin-bottom: 6px; color: #202124;">No active Teams call</h4>
       <p style="font-size: 12px; color: #5f6368; margin: 0; line-height: 1.4;">
         Join a Microsoft Teams call in this tab to capture meeting notes.
@@ -277,7 +117,7 @@
   </div>
 
   <div id="view-main" class="view-section">
-    <div id="issueBanner" style="display: none; background: #f8d7da; color: #721c24; padding: 8px; border-radius: 4px; font-size: 11px; margin-top: 10px; border: 1px solid #f5c6cb; text-align: center;">
+    <div id="issueBanner" style="display: none; background: #f8d7da; color: #721c24; padding: 8px; border-radius: 6px; font-size: 11px; margin-top: 10px; border: 1px solid #f5c6cb; text-align: center;">
       No text captured. Did Teams update? <br><a href="http://go/report-mast-issue" target="_blank" style="font-weight:bold; color: #721c24 !important; text-decoration: underline;">Report Issue</a>
     </div>
     <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 15px;">
@@ -291,7 +131,7 @@
   </div>
 
   <div id="view-results" class="view-section">
-    <div style="background: #f8f9fa; border: 1px solid #dadce0; padding: 15px; border-radius: 6px; margin-top: 15px; text-align: center;">
+    <div style="background: #f8f9fa; border: 1px solid #dadce0; padding: 15px; border-radius: 8px; margin-top: 14px; text-align: center;">
       <h4 id="resultsHeading" style="margin-top: 0; margin-bottom: 6px; color: #202124;">Session Completed</h4>
       <p id="resultsStatus" style="font-size: 12px; color: #5f6368; margin: 0; line-height: 1.4; word-wrap: break-word;">
         Your AI meeting notes and transcript have been saved to your Downloads folder.
@@ -307,32 +147,10 @@
         </div>
       </div>
 
-      <div id="resultsNanoFixBox" class="fix-card" style="display: none; margin-top: 10px;">
-        <div id="resultsNanoFixTitle" class="fix-card-title" style="font-size: 11.5px;">Gemma On-Device unavailable</div>
-        <div id="resultsNanoFixSub" class="fix-card-sub"></div>
-      </div>
-
       <div style="display: flex; gap: 8px; justify-content: center;">
         <button id="retryBtn" style="display: none; margin-top: 10px; background-color: #5B5FC7; color: white;">Retry</button>
         <button id="dismissBtn" style="display: none; margin-top: 10px; background-color: transparent; color: #5f6368; border: 1px solid #dadce0;">Dismiss</button>
       </div>
-    </div>
-  </div>
-
-  <!-- [DEV-ONLY] Simulation Controls -->
-  <div id="devSimBar" class="dev-sim-bar">
-    <div class="dev-sim-header">
-      <span><strong style="color: #d32f2f;">DEV SIMULATE</strong> &middot; <span id="devActiveModelHint"></span></span>
-      <span style="display: inline-flex; gap: 6px; align-items: center;">
-        <a href="#" id="devOpenTranscriptTesterLink" style="font-size: 10px; font-weight: 600;">Upload Transcript</a>
-        <span>&middot;</span>
-        <a href="#" id="devResetOnboardingLink" style="font-size: 10px; font-weight: 600;">Reset Choice</a>
-      </span>
-    </div>
-    <div class="dev-sim-pills">
-      <button type="button" class="dev-sim-pill active" data-sim-mode="real">Real</button>
-      <button type="button" class="dev-sim-pill" data-sim-mode="low_disk">Low Disk</button>
-      <button type="button" class="dev-sim-pill" data-sim-mode="downloadable">1st Download</button>
     </div>
   </div>
 

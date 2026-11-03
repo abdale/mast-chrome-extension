@@ -362,16 +362,8 @@
         const title = extractTeamsMeetingTitle();
         chrome.runtime.sendMessage({ action: 'start_from_toast', meetingTitle: title }, (res) => {
           void chrome.runtime.lastError;
-          if (res && res.status === 'choose_mode') {
-            renderStatusToast('choose_mode');
-            return;
-          }
           if (res && res.status === 'no_api_key') {
             renderStatusToast('api_key_needed');
-            return;
-          }
-          if (res && res.status === 'nano_unavailable') {
-            renderStatusToast('nano_unavailable', res.reason);
             return;
           }
           isTranscribing = true;
@@ -396,75 +388,6 @@
       actionsRow.appendChild(captureBtn);
       actionsRow.appendChild(dismissBtn);
       toast.appendChild(actionsRow);
-    } else if (state === 'choose_mode') {
-      toast.style.borderLeftColor = '#5B5FC7';
-      messageEl.textContent = 'mast: Choose how to generate meeting notes:';
-      toast.appendChild(messageEl);
-
-      const subEl = document.createElement('div');
-      subEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
-      subEl.textContent =
-        'Select Gemma 4 E2B (On-Device) with no API key required, or use a Google AI Studio API key.';
-      toast.appendChild(subEl);
-
-      const actionsRow = document.createElement('div');
-      actionsRow.style.cssText = 'display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;';
-
-      const gemmaBtn = document.createElement('button');
-      gemmaBtn.textContent = 'Gemma 4 E2B (On-Device)';
-      gemmaBtn.style.cssText =
-        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 6px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
-      gemmaBtn.addEventListener('click', () => {
-        gemmaBtn.disabled = true;
-        gemmaBtn.textContent = 'Starting...';
-        const title = extractTeamsMeetingTitle();
-        chrome.runtime.sendMessage(
-          { action: 'start_from_toast', meetingTitle: title, chosenMode: 'gemma' },
-          (res) => {
-            void chrome.runtime.lastError;
-            if (res && res.status === 'nano_unavailable') {
-              renderStatusToast('nano_unavailable', res.reason);
-              return;
-            }
-            isTranscribing = true;
-            transcriptionStartedAt = (res && res.startTime) || Date.now();
-            sawCaptionsActive = areCaptionsVisible();
-            captionsOffDismissed = false;
-            ensureCaptionsEnabled();
-            startObserving();
-            renderStatusToast('capturing_started');
-          }
-        );
-      });
-
-      const cloudBtn = document.createElement('button');
-      cloudBtn.textContent = 'Gemini Flash (API Key)';
-      cloudBtn.style.cssText =
-        'background: #ffffff; color: #5B5FC7; border: 1px solid #5B5FC7; border-radius: 4px; padding: 6px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
-      cloudBtn.addEventListener('click', () => {
-        const title = extractTeamsMeetingTitle();
-        chrome.runtime.sendMessage(
-          { action: 'start_from_toast', meetingTitle: title, chosenMode: 'cloud' },
-          (res) => {
-            void chrome.runtime.lastError;
-            if (res && res.status === 'no_api_key') {
-              renderStatusToast('api_key_needed');
-              return;
-            }
-            isTranscribing = true;
-            transcriptionStartedAt = (res && res.startTime) || Date.now();
-            sawCaptionsActive = areCaptionsVisible();
-            captionsOffDismissed = false;
-            ensureCaptionsEnabled();
-            startObserving();
-            renderStatusToast('capturing_started');
-          }
-        );
-      });
-
-      actionsRow.appendChild(gemmaBtn);
-      actionsRow.appendChild(cloudBtn);
-      toast.appendChild(actionsRow);
     } else if (state === 'capturing_started') {
       toast.style.borderLeftColor = '#2e7d32';
       messageEl.textContent = 'mast: Capturing meeting notes...';
@@ -476,88 +399,13 @@
       }, 3500);
     } else if (state === 'api_key_needed') {
       toast.style.borderLeftColor = '#d9534f';
-      messageEl.textContent = 'mast: Google AI Studio API key needed.';
+      messageEl.textContent = 'mast: Please save your Google AI Studio API key in Settings first.';
       toast.appendChild(messageEl);
-
-      const hintEl = document.createElement('div');
-      hintEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
-      hintEl.textContent =
-        "If you don't have an API key, you can select Gemma On-Device instead - no API key required.";
-      toast.appendChild(hintEl);
-
-      const actionsRow = document.createElement('div');
-      actionsRow.style.cssText = 'display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;';
-
-      const useGemmaBtn = document.createElement('button');
-      useGemmaBtn.textContent = 'Use Gemma On-Device';
-      useGemmaBtn.style.cssText =
-        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
-      useGemmaBtn.addEventListener('click', () => {
-        useGemmaBtn.disabled = true;
-        useGemmaBtn.textContent = 'Starting...';
-        const title = extractTeamsMeetingTitle();
-        chrome.runtime.sendMessage(
-          { action: 'start_from_toast', meetingTitle: title, chosenMode: 'gemma' },
-          (res) => {
-            void chrome.runtime.lastError;
-            if (res && res.status === 'nano_unavailable') {
-              renderStatusToast('nano_unavailable', res.reason);
-              return;
-            }
-            isTranscribing = true;
-            transcriptionStartedAt = (res && res.startTime) || Date.now();
-            sawCaptionsActive = areCaptionsVisible();
-            captionsOffDismissed = false;
-            ensureCaptionsEnabled();
-            startObserving();
-            renderStatusToast('capturing_started');
-          }
-        );
-      });
-
-      const dismissBtn = document.createElement('button');
-      dismissBtn.textContent = 'Dismiss';
-      dismissBtn.style.cssText =
-        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer;';
-      dismissBtn.addEventListener('click', () => {
-        removeStatusToast();
-      });
-
-      actionsRow.appendChild(useGemmaBtn);
-      actionsRow.appendChild(dismissBtn);
-      toast.appendChild(actionsRow);
-    } else if (state === 'nano_unavailable') {
-      toast.style.borderLeftColor = '#d9534f';
-      messageEl.textContent = 'mast: Not enough disk space.';
-      toast.appendChild(messageEl);
-
-      const fixEl = document.createElement('div');
-      fixEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
-      fixEl.textContent = 'At least 3 GB of free disk space is required, or switch models in Settings.';
-      toast.appendChild(fixEl);
-
-      const actionsRow = document.createElement('div');
-      actionsRow.style.cssText = 'display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;';
-
-      const settingsBtn = document.createElement('button');
-      settingsBtn.textContent = 'Settings';
-      settingsBtn.style.cssText =
-        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
-      settingsBtn.addEventListener('click', () => {
-        chrome.runtime.sendMessage({ action: 'open_options' });
-      });
-
-      const dismissBtn = document.createElement('button');
-      dismissBtn.textContent = 'Dismiss';
-      dismissBtn.style.cssText =
-        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer;';
-      dismissBtn.addEventListener('click', () => {
-        removeStatusToast();
-      });
-
-      actionsRow.appendChild(settingsBtn);
-      actionsRow.appendChild(dismissBtn);
-      toast.appendChild(actionsRow);
+      statusToastTimer = setTimeout(() => {
+        if (currentToastState === 'api_key_needed') {
+          removeStatusToast();
+        }
+      }, 6000);
     } else if (state === 'generating') {
       toast.style.borderLeftColor = '#5B5FC7';
       messageEl.textContent = 'mast: Transcript saved. Generating AI notes...';
@@ -602,7 +450,7 @@
       toast.appendChild(messageEl);
 
       const actionsRow = document.createElement('div');
-      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap;';
+      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
 
       const retryBtn = document.createElement('button');
       retryBtn.textContent = 'Retry';
@@ -611,18 +459,6 @@
       retryBtn.addEventListener('click', () => {
         chrome.runtime.sendMessage({ action: 'generate_notes' });
       });
-      actionsRow.appendChild(retryBtn);
-
-      if (errorMessage && /on-device/i.test(errorMessage)) {
-        const settingsBtn = document.createElement('button');
-        settingsBtn.textContent = 'Settings';
-        settingsBtn.style.cssText =
-          'background: #ffffff; color: #5B5FC7; border: 1px solid #5B5FC7; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
-        settingsBtn.addEventListener('click', () => {
-          chrome.runtime.sendMessage({ action: 'open_options' });
-        });
-        actionsRow.appendChild(settingsBtn);
-      }
 
       const dismissBtn = document.createElement('button');
       dismissBtn.textContent = 'Dismiss';
@@ -633,6 +469,7 @@
         removeStatusToast();
       });
 
+      actionsRow.appendChild(retryBtn);
       actionsRow.appendChild(dismissBtn);
       toast.appendChild(actionsRow);
     } else if (state === 'captions_off') {
@@ -937,10 +774,8 @@
           if (meetingDetectedToastDismissed) return;
           if (
             currentToastState !== 'meeting_detected' &&
-            currentToastState !== 'choose_mode' &&
             currentToastState !== 'capturing_started' &&
             currentToastState !== 'api_key_needed' &&
-            currentToastState !== 'nano_unavailable' &&
             currentToastState !== 'generating' &&
             currentToastState !== 'done' &&
             currentToastState !== 'error'

@@ -32,7 +32,7 @@
       border-radius: 12px;
       box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
       width: 100%;
-      max-width: 500px;
+      max-width: 480px;
       padding: 30px;
       box-sizing: border-box;
       border: 1px solid rgba(255, 255, 255, 0.8);
@@ -118,60 +118,6 @@
       transform: scale(0.98);
     }
 
-    .mode-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
-
-    .mode-card {
-      background: #ffffff;
-      color: var(--text);
-      border: 1.5px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 14px;
-      margin-top: 0;
-      text-align: center;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: all 0.18s ease;
-    }
-
-    .mode-card:hover:not(:disabled) {
-      background: #f8f9fe;
-      border-color: var(--primary);
-      box-shadow: none;
-    }
-
-    .mode-card.selected {
-      background: #f3f4fc;
-      border-color: var(--primary);
-      box-shadow: 0 0 0 3px var(--focus-ring);
-    }
-
-    .mode-card-title {
-      font-size: 13.5px;
-      font-weight: 600;
-      color: var(--text);
-    }
-
-    .mode-card.selected .mode-card-title {
-      color: var(--primary);
-    }
-
-    .no-key-callout {
-      margin-top: 10px;
-      padding: 11px 13px;
-      background: #f3f4fc;
-      border: 1px solid rgba(91, 95, 199, 0.28);
-      border-radius: 8px;
-      font-size: 12px;
-      color: #3c4043;
-      line-height: 1.45;
-    }
-
     #status {
       margin-top: 15px;
       color: #2e7d32;
@@ -189,99 +135,14 @@
       line-height: 1.45;
     }
 
-    .help-text a,
-    .nano-box a {
+    .help-text a {
       color: var(--primary);
       text-decoration: none;
       font-weight: 500;
     }
 
-    .help-text a:hover,
-    .nano-box a:hover {
+    .help-text a:hover {
       text-decoration: underline;
-    }
-
-    .nano-box {
-      padding: 12px 14px;
-      border-radius: 10px;
-      font-size: 13px;
-      line-height: 1.45;
-      display: none;
-    }
-    .nano-box.ready {
-      background: #eef7f0;
-      border: 1px solid #c3e6cb;
-      color: #1e5627;
-    }
-    .nano-box.download {
-      background: transparent;
-      border: none;
-      padding: 0;
-      color: var(--text);
-    }
-    .nano-box.unavailable {
-      background: #fff8f7;
-      border: 1px solid #f5c6cb;
-      color: #3c4043;
-    }
-    .nano-box-title {
-      font-weight: 600;
-      margin-bottom: 3px;
-    }
-    .nano-box.unavailable .nano-box-title {
-      color: #b71c1c;
-    }
-    .nano-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 10px;
-      flex-wrap: wrap;
-    }
-    .nano-actions .inline-btn {
-      margin-top: 0;
-    }
-    .download-model-btn {
-      width: 100%;
-      margin-top: 0;
-      padding: 10px 14px;
-      font-size: 13px;
-      font-weight: 600;
-      border-radius: 10px;
-      background: #f3f4fc;
-      color: var(--primary);
-      border: 1.5px solid rgba(91, 95, 199, 0.35);
-    }
-    .download-model-btn:hover:not(:disabled) {
-      background: rgba(91, 95, 199, 0.12);
-      border-color: var(--primary);
-      box-shadow: none;
-    }
-    .inline-btn {
-      width: auto;
-      display: inline-flex;
-      padding: 6px 12px;
-      font-size: 12px;
-      border-radius: 6px;
-      margin-top: 6px;
-    }
-    .inline-btn.secondary {
-      background: #ffffff;
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
-    .inline-btn.secondary:hover:not(:disabled) {
-      background: #f1f3f4;
-      box-shadow: none;
-    }
-    .inline-btn.outline-primary {
-      background: #ffffff;
-      color: var(--primary);
-      border: 1px solid var(--primary);
-    }
-    .inline-btn.outline-primary:hover:not(:disabled) {
-      background: rgba(91, 95, 199, 0.08);
-      box-shadow: none;
     }
 
     .progress-track {
@@ -292,6 +153,7 @@
       overflow: hidden;
       margin-top: 8px;
     }
+
     .progress-fill {
       height: 100%;
       width: 0%;
@@ -303,109 +165,6 @@
     #customModelContainer {
       display: none;
       animation: fadeIn 0.3s ease;
-    }
-
-    /* [DEV-ONLY] Simulation Controls */
-    .dev-sim-card {
-      margin-top: 20px;
-      padding: 12px 14px;
-      border: 1px dashed #e57373;
-      background: #fffafa;
-      border-radius: 8px;
-    }
-    .dev-sim-pills {
-      display: flex;
-      gap: 6px;
-      margin-top: 8px;
-    }
-    .dev-sim-pill {
-      flex: 1;
-      margin-top: 0;
-      padding: 7px 8px;
-      font-size: 11.5px;
-      font-weight: 600;
-      border-radius: 6px;
-      background: #ffffff;
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
-    .dev-sim-pill:hover:not(:disabled) {
-      background: #f1f3f4;
-      box-shadow: none;
-    }
-    .dev-sim-pill.active {
-      background: var(--primary);
-      color: #ffffff;
-      border-color: var(--primary);
-    }
-    .dev-sim-pill.active-warn {
-      background: #d32f2f;
-      color: #ffffff;
-      border-color: #d32f2f;
-    }
-    .dev-upload-section {
-      margin-top: 12px;
-      padding-top: 12px;
-      border-top: 1px dashed rgba(211, 47, 47, 0.35);
-    }
-    .dev-upload-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-    .dev-upload-title {
-      font-size: 11.5px;
-      font-weight: 600;
-      color: var(--text);
-    }
-    .dev-upload-meta {
-      font-size: 11px;
-      color: var(--text-muted);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .dev-upload-controls {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .dev-upload-controls .inline-btn {
-      margin-top: 0;
-    }
-    .dev-summary-box {
-      display: none;
-      margin-top: 10px;
-      background: #ffffff;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      overflow: hidden;
-    }
-    .dev-summary-bar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 7px 11px;
-      background: #f3f4fc;
-      border-bottom: 1px solid var(--border);
-      font-size: 11px;
-      color: var(--primary);
-      font-weight: 600;
-    }
-    .dev-summary-output {
-      margin: 0;
-      padding: 12px;
-      max-height: 300px;
-      overflow-y: auto;
-      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-      font-size: 12px;
-      line-height: 1.5;
-      color: var(--text);
-      white-space: pre-wrap;
-      word-wrap: break-word;
     }
 
     @keyframes fadeIn {
@@ -422,103 +181,36 @@
     </h2>
 
     <div class="form-group">
-      <label>CHOOSE AI MODEL</label>
-      <div class="mode-grid">
-        <button type="button" class="mode-card" id="modeCardNano" data-ai-mode="gemma">
-          <span class="mode-card-title">Gemma On-Device</span>
-        </button>
-        <button type="button" class="mode-card" id="modeCardCloud" data-ai-mode="cloud">
-          <span class="mode-card-title">Gemini Flash</span>
-        </button>
-      </div>
+      <label for="apiKey">Google AI Studio API Key</label>
+      <input type="password" id="apiKey" placeholder="AIzaSy...">
+      <div class="help-text">Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. For instructions, see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>.</div>
     </div>
 
-    <div id="nanoSection" class="form-group" style="display: none;">
-      <div id="nanoStatusBox" class="nano-box"></div>
+    <div class="form-group">
+      <label for="modelSelect">SELECT MODEL</label>
+      <select id="modelSelect">
+        <option value="">Enter API key to load models</option>
+      </select>
+      <div class="help-text">Select which Gemini model to summarize with.</div>
     </div>
 
-    <div id="cloudSection" style="display: none;">
-      <div class="form-group">
-        <label for="apiKey">Google AI Studio API Key</label>
-        <input type="password" id="apiKey" placeholder="AIzaSy...">
-        <div class="help-text">Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. For detailed instructions, see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>.</div>
-        <div id="noKeyCallout" class="no-key-callout">
-          <div><strong>Don't have an API key?</strong> If you don't have an API key, you can select <strong>Gemma On-Device</strong> instead - no API key required.</div>
-          <button type="button" id="switchToNanoInSettingsBtn" class="inline-btn outline-primary">Use Gemma On-Device</button>
-        </div>
-      </div>
+    <div class="form-group" id="customModelContainer">
+      <label for="customModel">Custom Model ID</label>
+      <input type="text" id="customModel" placeholder="e.g., gemini-2.5-flash">
+      <div class="help-text">Specify any valid model ID supported by the Gemini Developer API.</div>
+    </div>
 
-      <div class="form-group">
-        <label for="modelSelect">SELECT CLOUD MODEL</label>
-        <select id="modelSelect">
-          <option value="">Enter API Key to load cloud models</option>
-        </select>
-        <div class="help-text">Select which cloud Gemini Flash model to summarize with.</div>
-      </div>
-
-      <div class="form-group" id="customModelContainer">
-        <label for="customModel">Custom Model ID</label>
-        <input type="text" id="customModel" placeholder="e.g., gemini-2.5-flash">
-        <div class="help-text">Specify any valid model ID supported by the Gemini Developer API.</div>
-      </div>
-
-      <div class="form-group">
-        <label for="titleSource">NOTES FILE NAMING</label>
-        <select id="titleSource">
-          <option value="ai">AI-Generated Title (Default)</option>
-          <option value="teams">Teams Meeting Name</option>
-        </select>
-        <div class="help-text">Choose whether the AI notes file is named by AI or matches the Teams meeting name.</div>
-      </div>
+    <div class="form-group">
+      <label for="titleSource">NOTES FILE NAMING</label>
+      <select id="titleSource">
+        <option value="ai">AI-Generated Title (Default)</option>
+        <option value="teams">Teams Meeting Name</option>
+      </select>
+      <div class="help-text">Choose whether the AI notes file is named by AI or matches the Teams meeting name.</div>
     </div>
 
     <button id="saveBtn">Save Settings</button>
     <div id="status"></div>
-
-    <!-- [DEV-ONLY] Simulation Controls -->
-    <div class="dev-sim-card" id="dev-transcript-test">
-      <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
-        <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #d32f2f;">DEV Simulate: Gemma On-Device</span>
-        <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;">
-          <a href="#" id="devClearModelCacheLink" style="color: #d32f2f; text-decoration: none; font-weight: 600;">Clear Cache</a>
-          <span style="color: var(--text-muted);">&middot;</span>
-          <a href="#" id="devResetChoiceSettingsLink" style="color: var(--primary); text-decoration: none; font-weight: 600;">Reset Choice UI</a>
-        </span>
-      </div>
-      <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">
-        Simulate low disk (&lt;3 GB) or first download.
-      </div>
-      <div class="dev-sim-pills">
-        <button type="button" class="dev-sim-pill active" data-sim-mode="real">Real</button>
-        <button type="button" class="dev-sim-pill" data-sim-mode="low_disk">Low Disk</button>
-        <button type="button" class="dev-sim-pill" data-sim-mode="downloadable">1st Download</button>
-      </div>
-
-      <div class="dev-upload-section">
-        <div class="dev-upload-header">
-          <span class="dev-upload-title">Test Transcript on Gemma On-Device</span>
-          <span id="devTranscriptMeta" class="dev-upload-meta"></span>
-        </div>
-        <div class="dev-upload-controls">
-          <input type="file" id="devTranscriptInput" accept=".txt,.md,.vtt,.srt,.log,text/*" style="display: none;">
-          <button type="button" id="devUploadTranscriptBtn" class="inline-btn outline-primary">Upload Transcript</button>
-          <button type="button" id="devCopySummaryBtn" class="inline-btn secondary" style="display: none;">Copy Summary</button>
-          <button type="button" id="devClearSummaryBtn" class="inline-btn secondary" style="display: none;">Clear</button>
-        </div>
-        <div id="devTranscriptProgressWrap" style="display: none; margin-top: 8px;">
-          <div class="progress-track"><div id="devTranscriptProgressFill" class="progress-fill"></div></div>
-          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); margin-top: 5px;">
-            <span id="devTranscriptStage" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Preparing...</span>
-            <span id="devTranscriptPct" style="font-weight: 600; color: var(--primary); flex-shrink: 0;">0%</span>
-          </div>
-        </div>
-        <div id="devTranscriptError" style="display: none; margin-top: 8px; font-size: 12px; color: #d32f2f;"></div>
-        <div id="devSummaryBox" class="dev-summary-box">
-          <div id="devSummaryHeader" class="dev-summary-bar">AI Summary</div>
-          <pre id="devTranscriptOutput" class="dev-summary-output"></pre>
-        </div>
-      </div>
-    </div>
 
     <div style="margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border);">
       <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 10px;">RECENT MEETINGS</div>
@@ -530,7 +222,7 @@
     <div style="margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border);">
       <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 6px;">ABOUT MAST</div>
       <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
-        <strong style="color: var(--text);">mast</strong> is a lightweight, privacy-focused browser extension built for Googlers to securely transcribe and generate AI meeting notes for Microsoft Teams calls. Choose between <strong style="color: var(--text);">Gemma 4 E2B (On-Device)</strong> with zero setup or cloud Gemini Flash models using your Google AI Studio API key, with no external third-party servers.
+        <strong style="color: var(--text);">mast</strong> is a lightweight, privacy-focused Chrome extension built for Googlers to securely transcribe and generate AI meeting notes for Microsoft Teams calls. All captions are processed locally in your browser using your own Google AI Studio API key, with no external servers or third-party data storage.
       </div>
     </div>
 
@@ -543,6 +235,6 @@
     </div>
   </div>
 
-  <script type="module" src="options.js"></script>
+  <script src="options.js"></script>
 </body>
 </html>
