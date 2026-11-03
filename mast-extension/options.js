@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9.1';
+  const WORKER_BUILD_VERSION = '2.9.2';
   const GEMINI_NANO_MODEL_ID = 'gemini-nano';
 
   chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
@@ -74,7 +74,56 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
+  async function diagnoseUnavailableReason(lm) {
+    if (!lm) return 'unsupported';
+
+    if (typeof lm.create === 'function') {
+      try {
+        const probeSession = await lm.create({
+          expectedInputs: [{ type: 'text', languages: ['en'] }],
+          expectedOutputs: [{ type: 'text', languages: ['en'] }]
+        }).catch(async (firstErr) => {
+          if (firstErr && firstErr.name === 'TypeError') {
+            return await lm.create();
+          }
+          throw firstErr;
+        });
+        if (probeSession && typeof probeSession.destroy === 'function') {
+          probeSession.destroy();
+        }
+      } catch (err) {
+        const msg = String((err && err.message) || '');
+        if (/enough\s+(disk\s+)?space|insufficient.*space|disk\s+space/i.test(msg)) {
+          return 'low_disk';
+        }
+        if (/disabled|not\s+enabled|feature\s+flag|service\s+is\s+not\s+running|required\s+configuration|on-device\s+ai|policy/i.test(msg)) {
+          return 'setting_off';
+        }
+        if (/gpu|not\s+eligible|unsupported/i.test(msg)) {
+          return 'unsupported';
+        }
+      }
+    }
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.estimate === 'function') {
+        const est = await navigator.storage.estimate();
+        if (est && typeof est.quota === 'number' && est.quota > 0) {
+          const remaining = est.quota - (est.usage || 0);
+          if (remaining < 22 * 1024 * 1024 * 1024) {
+            return 'low_disk';
+          }
+        }
+      }
+    } catch (_) {}
+
+    return 'unknown';
+  }
+
   async function checkNanoAvailabilityLocal(simMode = 'real') {
+    if (simMode === 'setting_off') {
+      return { status: 'unavailable', simulated: true, reason: 'setting_off' };
+    }
     if (simMode === 'low_disk') {
       return { status: 'unavailable', simulated: true, reason: 'low_disk' };
     }
@@ -87,7 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return new Promise((resolve) => {
         chrome.runtime.sendMessage({ action: 'get_nano_availability', simMode }, (res) => {
           if (chrome.runtime.lastError || !res) {
-            resolve({ status: 'unavailable', simulated: false, reason: 'api_missing' });
+            resolve({ status: 'unavailable', simulated: false, reason: 'unsupported' });
           } else {
             resolve(res);
           }
@@ -107,24 +156,26 @@ document.addEventListener('DOMContentLoaded', () => {
           raw = await lm.availability();
         }
         if (raw === 'available' || raw === 'readily') {
-          return { status: 'available', simulated: false };
+          return { status: 'available', simulated: false, reason: 'ok' };
         }
         if (raw === 'downloadable' || raw === 'after-download') {
-          return { status: 'downloadable', simulated: false };
+          return { status: 'downloadable', simulated: false, reason: 'needs_download' };
         }
         if (raw === 'downloading') {
-          return { status: 'downloading', simulated: false };
+          return { status: 'downloading', simulated: false, reason: 'downloading' };
         }
-        return { status: 'unavailable', simulated: false };
+        const reason = await diagnoseUnavailableReason(lm);
+        return { status: 'unavailable', simulated: false, reason };
       }
       if (typeof lm.capabilities === 'function') {
         const caps = await lm.capabilities();
-        if (caps && caps.available === 'readily') return { status: 'available', simulated: false };
-        if (caps && caps.available === 'after-download') return { status: 'downloadable', simulated: false };
+        if (caps && caps.available === 'readily') return { status: 'available', simulated: false, reason: 'ok' };
+        if (caps && caps.available === 'after-download') return { status: 'downloadable', simulated: false, reason: 'needs_download' };
       }
     } catch (_) {}
 
-    return { status: 'unavailable', simulated: false };
+    const reason = await diagnoseUnavailableReason(lm);
+    return { status: 'unavailable', simulated: false, reason };
   }
 
   function updateNoKeyCalloutVisibility() {
@@ -201,7 +252,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const pillMode = pill.getAttribute('data-sim-mode');
       pill.classList.remove('active', 'active-warn');
       if (pillMode === currentSimMode) {
-        pill.classList.add(currentSimMode === 'low_disk' ? 'active-warn' : 'active');
+        const isWarn = currentSimMode === 'low_disk' || currentSimMode === 'setting_off';
+        pill.classList.add(isWarn ? 'active-warn' : 'active');
       }
     });
   }
@@ -211,7 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const mode = pill.getAttribute('data-sim-mode') || 'real';
       renderDevSimPills(mode);
       const updates = { devNanoSimMode: mode };
-      if (mode === 'low_disk' || mode === 'downloadable') {
+      if (mode === 'setting_off' || mode === 'low_disk' || mode === 'downloadable') {
         updates.aiMode = 'nano';
         updates.selectedModel = GEMINI_NANO_MODEL_ID;
         updates.modelSelectVal = GEMINI_NANO_MODEL_ID;
@@ -249,6 +301,45 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function getUnavailableCardMarkup(reason) {
+    if (reason === 'setting_off') {
+      return (
+        '<div class="nano-box-title">On-Device AI is turned off</div>' +
+        '<div>Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a>.</div>' +
+        '<div class="nano-actions">' +
+        '  <button type="button" class="inline-btn outline-primary" data-chrome-url="chrome://settings/system">Open System Settings</button>' +
+        '  <button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check</button>' +
+        '</div>'
+      );
+    }
+    if (reason === 'low_disk') {
+      return (
+        '<div class="nano-box-title">Not enough disk space</div>' +
+        '<div>At least <strong>22 GB</strong> of free disk space is required for Gemini On-Device.</div>' +
+        '<div class="nano-actions">' +
+        '  <button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check</button>' +
+        '</div>'
+      );
+    }
+    if (reason === 'unsupported') {
+      return (
+        '<div class="nano-box-title">Not supported on this device</div>' +
+        '<div>Update Chrome at <a href="#" data-chrome-url="chrome://settings/help">chrome://settings/help</a> or select <strong>Gemini Flash</strong> above.</div>' +
+        '<div class="nano-actions">' +
+        '  <button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check</button>' +
+        '</div>'
+      );
+    }
+    return (
+      '<div class="nano-box-title">Gemini On-Device is unavailable</div>' +
+      '<div>Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a> and ensure <strong>22 GB</strong> of free disk space.</div>' +
+      '<div class="nano-actions">' +
+      '  <button type="button" class="inline-btn outline-primary" data-chrome-url="chrome://settings/system">Open System Settings</button>' +
+      '  <button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check</button>' +
+      '</div>'
+    );
+  }
+
   async function refreshNanoStatusBox() {
     if (!nanoStatusBox || currentAiMode !== 'nano') return;
 
@@ -262,16 +353,14 @@ document.addEventListener('DOMContentLoaded', () => {
       nanoStatusBox.classList.add('ready');
       nanoStatusBox.innerHTML =
         '<div class="nano-box-title">Gemini Nano (On-Device) is ready</div>' +
-        '<div>Meetings will be summarized locally on your device with no API key required.</div>';
+        '<div>Meetings will be summarized locally on your device.</div>';
       return;
     }
 
     if (avail.status === 'downloadable' || avail.status === 'downloading') {
       nanoStatusBox.classList.add('download');
       nanoStatusBox.innerHTML =
-        '<div class="nano-box-title">One-time model download needed</div>' +
-        '<div>Gemini Nano (On-Device) requires a one-time download (~4 GB; requires 22 GB free disk space). It downloads automatically on your first meeting or when you click below.</div>' +
-        '<button type="button" id="downloadNanoBtn" class="inline-btn">Download On-Device Model</button>' +
+        '<button type="button" id="downloadNanoBtn" class="download-model-btn">Download On-Device Model</button>' +
         '<div id="nanoDownloadProgressWrap" style="display: none; margin-top: 8px;">' +
         '  <div class="progress-track"><div id="nanoDownloadFill" class="progress-fill"></div></div>' +
         '  <div id="nanoDownloadLabel" style="font-size: 11.5px; color: var(--text-muted); margin-top: 5px;">Starting download...</div>' +
@@ -291,7 +380,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (currentSimMode === 'downloadable') {
             for (const pct of [5, 22, 46, 71, 90, 100]) {
               if (fill) fill.style.width = `${pct}%`;
-              if (label) label.textContent = `Downloading Gemini Nano (On-Device) (${pct}%)...`;
+              if (label) label.textContent = `Downloading model (${pct}%)...`;
               await new Promise((r) => setTimeout(r, 420));
             }
             dlBtn.textContent = 'Downloaded (Simulated)';
@@ -319,7 +408,7 @@ document.addEventListener('DOMContentLoaded', () => {
                       : 0;
                   const pct = Math.min(100, Math.max(0, Math.round(ratio * 100)));
                   if (fill) fill.style.width = `${Math.max(4, pct)}%`;
-                  if (label) label.textContent = `Downloading Gemini Nano (On-Device) (${pct}%)...`;
+                  if (label) label.textContent = `Downloading model (${pct}%)...`;
                 });
               }
             });
@@ -332,7 +421,7 @@ document.addEventListener('DOMContentLoaded', () => {
             dlBtn.textContent = 'Retry Download';
             if (label) {
               label.style.color = '#d32f2f';
-              label.textContent = `Download failed: ${err.message || 'Check disk space (22 GB required).'}`;
+              label.textContent = `Download failed: ${err.message || 'Check System Settings or disk space.'}`;
             }
           }
         });
@@ -341,16 +430,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     nanoStatusBox.classList.add('unavailable');
-    nanoStatusBox.innerHTML =
-      '<div class="nano-box-title">Gemini Nano (On-Device) Unavailable</div>' +
-      '<div>This device cannot load the on-device AI model yet. How to fix:</div>' +
-      '<ol class="nano-steps">' +
-      '  <li><strong>Free up disk space:</strong> Ensure at least <strong>22 GB of free space</strong> on the drive storing your browser profile (10 GB minimum once downloaded).</li>' +
-      '  <li><strong>Update model component:</strong> Open <a href="#" data-chrome-url="chrome://components">chrome://components</a>, locate <strong>Optimization Guide On Device Model</strong>, and click <strong>Check for update</strong> (inspect status at <a href="#" data-chrome-url="chrome://on-device-internals">chrome://on-device-internals</a>).</li>' +
-      '  <li><strong>Update browser:</strong> Ensure version 138+ at <a href="#" data-chrome-url="chrome://settings/help">chrome://settings/help</a>.</li>' +
-      '  <li><strong>Or choose API Key model:</strong> Select <strong>Gemini Flash (API Key)</strong> above if you prefer cloud summarization.</li>' +
-      '</ol>' +
-      '<button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check Availability</button>';
+    nanoStatusBox.innerHTML = getUnavailableCardMarkup(avail.reason);
 
     bindChromeUrls(nanoStatusBox);
     const recheckBtn = document.getElementById('recheckNanoSettingsBtn');
@@ -363,6 +443,17 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
   }
+
+  window.addEventListener('focus', () => {
+    if (currentAiMode === 'nano') {
+      refreshNanoStatusBox();
+    }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && currentAiMode === 'nano') {
+      refreshNanoStatusBox();
+    }
+  });
 
   function getTopStableFlashModels(models) {
     const validModels = (models || []).filter(
@@ -787,7 +878,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const titleSource = titleSourceSelect ? titleSourceSelect.value : 'ai';
 
     if (currentAiMode === 'unconfigured') {
-      statusEl.innerText = "Please choose Gemini Nano (On-Device) or Gemini Flash (API Key) above.";
+      statusEl.innerText = "Please choose Gemini On-Device or Gemini Flash above.";
       statusEl.style.color = "#d32f2f";
       return;
     }

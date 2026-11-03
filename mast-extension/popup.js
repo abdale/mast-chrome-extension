@@ -15,6 +15,9 @@ const validateBtn = document.getElementById('validateBtn');
 const apiError = document.getElementById('apiError');
 const useNanoInsteadBtn = document.getElementById('useNanoInsteadBtn');
 
+const nanoUnavailableTitle = document.getElementById('nanoUnavailableTitle');
+const nanoUnavailableSub = document.getElementById('nanoUnavailableSub');
+const openSystemSettingsBtn = document.getElementById('openSystemSettingsBtn');
 const recheckNanoBtn = document.getElementById('recheckNanoBtn');
 const nanoUnavailableSwitchText = document.getElementById('nanoUnavailableSwitchText');
 const switchToCloudModeBtn = document.getElementById('switchToCloudModeBtn');
@@ -35,7 +38,8 @@ const progressBarFill = document.getElementById('progressBarFill');
 const progressStageText = document.getElementById('progressStageText');
 const progressPercentText = document.getElementById('progressPercentText');
 const resultsNanoFixBox = document.getElementById('resultsNanoFixBox');
-const resultsOpenSettingsLink = document.getElementById('resultsOpenSettingsLink');
+const resultsNanoFixTitle = document.getElementById('resultsNanoFixTitle');
+const resultsNanoFixSub = document.getElementById('resultsNanoFixSub');
 const retryBtn = document.getElementById('retryBtn');
 const dismissBtn = document.getElementById('dismissBtn');
 
@@ -49,7 +53,7 @@ let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 let forceShowApiKeyEntry = false;
 
-const WORKER_BUILD_VERSION = '2.9.1';
+const WORKER_BUILD_VERSION = '2.9.2';
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
     chrome.runtime.reload();
@@ -61,22 +65,30 @@ settingsLink.addEventListener('click', (e) => {
   window.open(chrome.runtime.getURL('options.html'));
 });
 
-if (resultsOpenSettingsLink) {
-  resultsOpenSettingsLink.addEventListener('click', (e) => {
-    e.preventDefault();
-    window.open(chrome.runtime.getURL('options.html'));
+function bindDynamicLinks(root = document) {
+  root.querySelectorAll('[data-chrome-url]').forEach((el) => {
+    if (el.dataset.boundChromeUrl === 'true') return;
+    el.dataset.boundChromeUrl = 'true';
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const targetUrl = el.getAttribute('data-chrome-url');
+      if (targetUrl) {
+        chrome.tabs.create({ url: targetUrl });
+      }
+    });
+  });
+
+  root.querySelectorAll('[data-open-settings]').forEach((el) => {
+    if (el.dataset.boundOpenSettings === 'true') return;
+    el.dataset.boundOpenSettings = 'true';
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.open(chrome.runtime.getURL('options.html'));
+    });
   });
 }
 
-document.querySelectorAll('[data-chrome-url]').forEach((el) => {
-  el.addEventListener('click', (e) => {
-    e.preventDefault();
-    const targetUrl = el.getAttribute('data-chrome-url');
-    if (targetUrl) {
-      chrome.tabs.create({ url: targetUrl });
-    }
-  });
-});
+bindDynamicLinks(document);
 
 function hideAllViews() {
   if (viewOnboarding) viewOnboarding.style.display = 'none';
@@ -113,7 +125,56 @@ function getLanguageModelNamespace() {
   return null;
 }
 
+async function diagnoseUnavailableReason(lm) {
+  if (!lm) return 'unsupported';
+
+  if (typeof lm.create === 'function') {
+    try {
+      const probeSession = await lm.create({
+        expectedInputs: [{ type: 'text', languages: ['en'] }],
+        expectedOutputs: [{ type: 'text', languages: ['en'] }]
+      }).catch(async (firstErr) => {
+        if (firstErr && firstErr.name === 'TypeError') {
+          return await lm.create();
+        }
+        throw firstErr;
+      });
+      if (probeSession && typeof probeSession.destroy === 'function') {
+        probeSession.destroy();
+      }
+    } catch (err) {
+      const msg = String((err && err.message) || '');
+      if (/enough\s+(disk\s+)?space|insufficient.*space|disk\s+space/i.test(msg)) {
+        return 'low_disk';
+      }
+      if (/disabled|not\s+enabled|feature\s+flag|service\s+is\s+not\s+running|required\s+configuration|on-device\s+ai|policy/i.test(msg)) {
+        return 'setting_off';
+      }
+      if (/gpu|not\s+eligible|unsupported/i.test(msg)) {
+        return 'unsupported';
+      }
+    }
+  }
+
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.estimate === 'function') {
+      const est = await navigator.storage.estimate();
+      if (est && typeof est.quota === 'number' && est.quota > 0) {
+        const remaining = est.quota - (est.usage || 0);
+        if (remaining < 22 * 1024 * 1024 * 1024) {
+          return 'low_disk';
+        }
+      }
+    }
+  } catch (_) {}
+
+  return 'unknown';
+}
+
 async function checkNanoAvailabilityLocal(simMode = 'real') {
+  if (simMode === 'setting_off') {
+    return { status: 'unavailable', simulated: true, reason: 'setting_off' };
+  }
   if (simMode === 'low_disk') {
     return { status: 'unavailable', simulated: true, reason: 'low_disk' };
   }
@@ -126,7 +187,7 @@ async function checkNanoAvailabilityLocal(simMode = 'real') {
     return new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: 'get_nano_availability', simMode }, (res) => {
         if (chrome.runtime.lastError || !res) {
-          resolve({ status: 'unavailable', simulated: false, reason: 'api_missing' });
+          resolve({ status: 'unavailable', simulated: false, reason: 'unsupported' });
         } else {
           resolve(res);
         }
@@ -146,24 +207,70 @@ async function checkNanoAvailabilityLocal(simMode = 'real') {
         raw = await lm.availability();
       }
       if (raw === 'available' || raw === 'readily') {
-        return { status: 'available', simulated: false };
+        return { status: 'available', simulated: false, reason: 'ok' };
       }
       if (raw === 'downloadable' || raw === 'after-download') {
-        return { status: 'downloadable', simulated: false };
+        return { status: 'downloadable', simulated: false, reason: 'needs_download' };
       }
       if (raw === 'downloading') {
-        return { status: 'downloading', simulated: false };
+        return { status: 'downloading', simulated: false, reason: 'downloading' };
       }
-      return { status: 'unavailable', simulated: false };
+      const reason = await diagnoseUnavailableReason(lm);
+      return { status: 'unavailable', simulated: false, reason };
     }
     if (typeof lm.capabilities === 'function') {
       const caps = await lm.capabilities();
-      if (caps && caps.available === 'readily') return { status: 'available', simulated: false };
-      if (caps && caps.available === 'after-download') return { status: 'downloadable', simulated: false };
+      if (caps && caps.available === 'readily') return { status: 'available', simulated: false, reason: 'ok' };
+      if (caps && caps.available === 'after-download') return { status: 'downloadable', simulated: false, reason: 'needs_download' };
     }
   } catch (_) {}
 
-  return { status: 'unavailable', simulated: false };
+  const reason = await diagnoseUnavailableReason(lm);
+  return { status: 'unavailable', simulated: false, reason };
+}
+
+function renderPopupNanoUnavailable(reason) {
+  if (!nanoUnavailableTitle || !nanoUnavailableSub) return;
+  if (reason === 'setting_off') {
+    nanoUnavailableTitle.textContent = 'On-Device AI is turned off';
+    nanoUnavailableSub.innerHTML =
+      'Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a>.';
+    if (openSystemSettingsBtn) openSystemSettingsBtn.style.display = 'inline-block';
+  } else if (reason === 'low_disk') {
+    nanoUnavailableTitle.textContent = 'Not enough disk space';
+    nanoUnavailableSub.innerHTML =
+      'At least <strong>22 GB</strong> of free disk space is required for Gemini On-Device.';
+    if (openSystemSettingsBtn) openSystemSettingsBtn.style.display = 'none';
+  } else if (reason === 'unsupported') {
+    nanoUnavailableTitle.textContent = 'Not supported on this device';
+    nanoUnavailableSub.innerHTML =
+      'Update Chrome at <a href="#" data-chrome-url="chrome://settings/help">chrome://settings/help</a> or switch to Gemini Flash.';
+    if (openSystemSettingsBtn) openSystemSettingsBtn.style.display = 'none';
+  } else {
+    nanoUnavailableTitle.textContent = 'Gemini On-Device is unavailable';
+    nanoUnavailableSub.innerHTML =
+      'Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a> and ensure <strong>22 GB</strong> of free disk space.';
+    if (openSystemSettingsBtn) openSystemSettingsBtn.style.display = 'inline-block';
+  }
+  bindDynamicLinks(viewNanoUnavailable || document);
+}
+
+function renderResultsNanoFix(reason) {
+  if (!resultsNanoFixBox || !resultsNanoFixTitle || !resultsNanoFixSub) return;
+  if (reason === 'setting_off') {
+    resultsNanoFixTitle.textContent = 'On-Device AI is turned off';
+    resultsNanoFixSub.innerHTML =
+      'Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a> and click <strong>Retry</strong>, or switch models in <a href="#" data-open-settings="true">Settings</a>.';
+  } else if (reason === 'low_disk') {
+    resultsNanoFixTitle.textContent = 'Not enough disk space';
+    resultsNanoFixSub.innerHTML =
+      'Free at least <strong>22 GB</strong> of disk space and click <strong>Retry</strong>, or switch models in <a href="#" data-open-settings="true">Settings</a>.';
+  } else {
+    resultsNanoFixTitle.textContent = 'Gemini On-Device is unavailable';
+    resultsNanoFixSub.innerHTML =
+      'Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a> and ensure <strong>22 GB</strong> free space, or switch models in <a href="#" data-open-settings="true">Settings</a>.';
+  }
+  bindDynamicLinks(resultsNanoFixBox);
 }
 
 function warmUpGeminiNanoIfNeeded(simMode) {
@@ -328,7 +435,7 @@ if (recheckNanoBtn) {
     recheckNanoBtn.innerText = "Checking...";
     await new Promise((r) => setTimeout(r, 250));
     recheckNanoBtn.disabled = false;
-    recheckNanoBtn.innerText = "Re-check Availability";
+    recheckNanoBtn.innerText = "Re-check";
     updateUI();
   });
 }
@@ -374,7 +481,8 @@ function renderDevSimControls(simMode, effectiveMode) {
     const pillMode = pill.getAttribute('data-sim-mode');
     pill.classList.remove('active', 'active-warn');
     if (pillMode === mode) {
-      pill.classList.add(mode === 'low_disk' ? 'active-warn' : 'active');
+      const isWarn = mode === 'low_disk' || mode === 'setting_off';
+      pill.classList.add(isWarn ? 'active-warn' : 'active');
     }
   });
 
@@ -394,7 +502,7 @@ devSimPills.forEach((pill) => {
     const mode = pill.getAttribute('data-sim-mode') || 'real';
     forceShowApiKeyEntry = false;
     const updates = { devNanoSimMode: mode };
-    if (mode === 'low_disk' || mode === 'downloadable') {
+    if (mode === 'setting_off' || mode === 'low_disk' || mode === 'downloadable') {
       updates.aiMode = 'nano';
       updates.selectedModel = GEMINI_NANO_MODEL_ID;
       updates.modelSelectVal = GEMINI_NANO_MODEL_ID;
@@ -635,6 +743,7 @@ function updateUI() {
     'notesStatus',
     'notesError',
     'notesErrorCode',
+    'notesErrorReason',
     'notesProgress',
     'notesStage',
     'completionUnseen',
@@ -700,6 +809,7 @@ function updateUI() {
         notesStatus: 'idle',
         notesError: '',
         notesErrorCode: '',
+        notesErrorReason: '',
         notesProgress: 0,
         notesStage: '',
         completionUnseen: false,
@@ -712,6 +822,7 @@ function updateUI() {
       result.notesStatus = 'idle';
       result.notesError = '';
       result.notesErrorCode = '';
+      result.notesErrorReason = '';
       result.completionUnseen = false;
       result.callEnded = false;
     }
@@ -792,7 +903,12 @@ function updateUI() {
           "Transcript saved, but AI notes failed to generate." +
           (result.notesError ? " (" + result.notesError + ")" : "");
         if (resultsNanoFixBox) {
-          resultsNanoFixBox.style.display = result.notesErrorCode === 'nano_unavailable' ? "block" : "none";
+          if (result.notesErrorCode === 'nano_unavailable') {
+            renderResultsNanoFix(result.notesErrorReason);
+            resultsNanoFixBox.style.display = "block";
+          } else {
+            resultsNanoFixBox.style.display = "none";
+          }
         }
         if (retryBtn) {
           retryBtn.style.display = "block";
@@ -832,17 +948,18 @@ function updateUI() {
         hideAllViews();
         stopTimer();
         if (viewNanoUnavailable) {
+          renderPopupNanoUnavailable(nanoAvail.reason);
           viewNanoUnavailable.style.display = "block";
           const canInstantSwitch = hasSavedKey && result.onboardingCompleted !== false;
           if (nanoUnavailableSwitchText) {
             nanoUnavailableSwitchText.innerHTML = canInstantSwitch
-              ? 'You also have a saved API key. You can switch to <strong>Gemini Flash (API Key)</strong>.'
-              : 'Prefer to use a cloud model? You can choose <strong>Gemini Flash (API Key)</strong> instead.';
+              ? 'Switch to <strong>Gemini Flash</strong> using your saved API key.'
+              : 'Or switch to <strong>Gemini Flash</strong> with an API key.';
           }
           if (switchToCloudModeBtn) {
             switchToCloudModeBtn.innerText = canInstantSwitch
-              ? 'Switch to Gemini Flash (API Key)'
-              : 'Choose Gemini Flash (API Key)';
+              ? 'Switch to Gemini Flash'
+              : 'Use Gemini Flash';
           }
         }
         return;
@@ -967,6 +1084,7 @@ startBtn.addEventListener('click', async () => {
     notesStatus: 'idle',
     notesError: '',
     notesErrorCode: '',
+    notesErrorReason: '',
     notesProgress: 0,
     notesStage: '',
     completionUnseen: false,
@@ -1051,6 +1169,7 @@ if (dismissBtn) {
         notesStatus: 'idle',
         notesError: '',
         notesErrorCode: '',
+        notesErrorReason: '',
         notesProgress: 0,
         notesStage: '',
         completionUnseen: false,

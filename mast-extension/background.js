@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9.1';
+const WORKER_BUILD_VERSION = '2.9.2';
 const GEMINI_NANO_MODEL_ID = 'gemini-nano';
 let isGeneratingInMemory = false;
 
@@ -90,6 +90,65 @@ function getLanguageModelNamespace() {
   return null;
 }
 
+async function diagnoseUnavailableReason(lm) {
+  if (!lm) return 'unsupported';
+
+  if (typeof lm.create === 'function') {
+    try {
+      const probeSession = await lm.create({
+        expectedInputs: [{ type: 'text', languages: ['en'] }],
+        expectedOutputs: [{ type: 'text', languages: ['en'] }]
+      }).catch(async (firstErr) => {
+        if (firstErr && firstErr.name === 'TypeError') {
+          return await lm.create();
+        }
+        throw firstErr;
+      });
+      if (probeSession && typeof probeSession.destroy === 'function') {
+        probeSession.destroy();
+      }
+    } catch (err) {
+      const msg = String((err && err.message) || '');
+      if (/enough\s+(disk\s+)?space|insufficient.*space|disk\s+space/i.test(msg)) {
+        return 'low_disk';
+      }
+      if (/disabled|not\s+enabled|feature\s+flag|service\s+is\s+not\s+running|required\s+configuration|on-device\s+ai|policy/i.test(msg)) {
+        return 'setting_off';
+      }
+      if (/gpu|not\s+eligible|unsupported/i.test(msg)) {
+        return 'unsupported';
+      }
+    }
+  }
+
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.estimate === 'function') {
+      const est = await navigator.storage.estimate();
+      if (est && typeof est.quota === 'number' && est.quota > 0) {
+        const remaining = est.quota - (est.usage || 0);
+        if (remaining < 22 * 1024 * 1024 * 1024) {
+          return 'low_disk';
+        }
+      }
+    }
+  } catch (_) {}
+
+  return 'unknown';
+}
+
+function getNanoUnavailableErrorMessage(reason) {
+  if (reason === 'setting_off') {
+    return 'On-Device AI is turned off in Chrome System Settings.';
+  }
+  if (reason === 'low_disk') {
+    return 'At least 22 GB of free disk space is required for Gemini On-Device.';
+  }
+  if (reason === 'unsupported') {
+    return 'Gemini On-Device is not supported on this device.';
+  }
+  return 'Gemini On-Device is unavailable. Check On-device AI in Chrome System Settings.';
+}
+
 async function checkGeminiNanoAvailability(simModeOverride = null) {
   let simMode = simModeOverride;
   if (!simMode) {
@@ -101,6 +160,9 @@ async function checkGeminiNanoAvailability(simModeOverride = null) {
     }
   }
 
+  if (simMode === 'setting_off') {
+    return { status: 'unavailable', simulated: true, reason: 'setting_off' };
+  }
   if (simMode === 'low_disk') {
     return { status: 'unavailable', simulated: true, reason: 'low_disk' };
   }
@@ -110,7 +172,7 @@ async function checkGeminiNanoAvailability(simModeOverride = null) {
 
   const lm = getLanguageModelNamespace();
   if (!lm) {
-    return { status: 'unavailable', simulated: false, reason: 'api_missing' };
+    return { status: 'unavailable', simulated: false, reason: 'unsupported' };
   }
 
   try {
@@ -133,7 +195,8 @@ async function checkGeminiNanoAvailability(simModeOverride = null) {
       if (rawStatus === 'downloading') {
         return { status: 'downloading', simulated: false, reason: 'downloading' };
       }
-      return { status: 'unavailable', simulated: false, reason: 'device_unavailable' };
+      const reason = await diagnoseUnavailableReason(lm);
+      return { status: 'unavailable', simulated: false, reason };
     }
 
     if (typeof lm.capabilities === 'function') {
@@ -150,7 +213,8 @@ async function checkGeminiNanoAvailability(simModeOverride = null) {
     console.warn('mast: Gemini Nano availability check failed:', err);
   }
 
-  return { status: 'unavailable', simulated: false, reason: 'device_unavailable' };
+  const reason = await diagnoseUnavailableReason(lm);
+  return { status: 'unavailable', simulated: false, reason };
 }
 
 function getEffectiveAiMode(storedState = {}) {
@@ -522,11 +586,10 @@ ${samplePoints || '    *   Discussion captured from live captions.'}
 }
 
 async function generateNotesWithGeminiNano(lines, dateFormatted, simMode, onProgress) {
-  if (simMode === 'low_disk') {
-    const err = new Error(
-      'Gemini Nano (On-Device) is unavailable. At least 22 GB of free disk space is required.'
-    );
+  if (simMode === 'setting_off' || simMode === 'low_disk') {
+    const err = new Error(getNanoUnavailableErrorMessage(simMode));
     err.code = 'NANO_UNAVAILABLE';
+    err.reason = simMode;
     throw err;
   }
 
@@ -546,17 +609,17 @@ async function generateNotesWithGeminiNano(lines, dateFormatted, simMode, onProg
     if (simMode === 'downloadable') {
       return await runSimulatedNanoFallback(lines, dateFormatted, onProgress);
     }
-    const err = new Error(
-      'Gemini Nano (On-Device) is unavailable on this device (requires 22 GB free disk space).'
-    );
+    const err = new Error(getNanoUnavailableErrorMessage(realAvail.reason));
     err.code = 'NANO_UNAVAILABLE';
+    err.reason = realAvail.reason || 'unknown';
     throw err;
   }
 
   const lm = getLanguageModelNamespace();
   if (!lm) {
-    const err = new Error('Gemini Nano (On-Device) is not supported in this browser version.');
+    const err = new Error(getNanoUnavailableErrorMessage('unsupported'));
     err.code = 'NANO_UNAVAILABLE';
+    err.reason = 'unsupported';
     throw err;
   }
 
@@ -811,6 +874,7 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
         notesStatus: 'generating',
         notesError: '',
         notesErrorCode: '',
+        notesErrorReason: '',
         notesProgress: 5,
         notesStage: isNanoModel
           ? 'Preparing Gemini Nano (On-Device)...'
@@ -927,6 +991,7 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
         notesStatus: 'done',
         notesError: '',
         notesErrorCode: '',
+        notesErrorReason: '',
         notesProgress: 100,
         notesStage: 'Completed',
         completionUnseen: true
@@ -937,6 +1002,7 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
   } catch (error) {
     console.error("mast: Generation failed:", error);
     const errCode = error && error.code === 'NANO_UNAVAILABLE' ? 'nano_unavailable' : '';
+    const errReason = error && error.reason ? error.reason : '';
     if (isHistoryRegen) {
       try {
         await chrome.storage.local.set({
@@ -953,11 +1019,12 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
         notesStatus: 'error',
         notesError: error.message || "Failed to generate AI summary.",
         notesErrorCode: errCode,
+        notesErrorReason: errReason,
         notesProgress: 0,
         notesStage: ''
       });
     }
-    return { status: "error", error: error.message, errorCode: errCode };
+    return { status: "error", error: error.message, errorCode: errCode, errorReason: errReason };
   } finally {
     if (cloudTickerInterval) {
       clearInterval(cloudTickerInterval);
@@ -1094,7 +1161,7 @@ async function startFromToast(sender, meetingTitle, chosenMode = null) {
     const nanoAvail = await checkGeminiNanoAvailability(stored.devNanoSimMode || null);
     if (nanoAvail.status === 'unavailable') {
       chrome.runtime.openOptionsPage();
-      return { status: "nano_unavailable" };
+      return { status: "nano_unavailable", reason: nanoAvail.reason || 'unknown' };
     }
   } else if (!cleanKey) {
     chrome.runtime.openOptionsPage();
@@ -1117,6 +1184,7 @@ async function startFromToast(sender, meetingTitle, chosenMode = null) {
     notesStatus: 'idle',
     notesError: '',
     notesErrorCode: '',
+    notesErrorReason: '',
     notesProgress: 0,
     notesStage: '',
     completionUnseen: false,

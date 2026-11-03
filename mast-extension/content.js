@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9.1';
+  const CONTENT_SCRIPT_VERSION = '2.9.2';
   if (window.__mastContentScriptVersion === CONTENT_SCRIPT_VERSION) {
     return;
   }
@@ -371,7 +371,7 @@
             return;
           }
           if (res && res.status === 'nano_unavailable') {
-            renderStatusToast('nano_unavailable');
+            renderStatusToast('nano_unavailable', res.reason);
             return;
           }
           isTranscribing = true;
@@ -423,7 +423,7 @@
           (res) => {
             void chrome.runtime.lastError;
             if (res && res.status === 'nano_unavailable') {
-              renderStatusToast('nano_unavailable');
+              renderStatusToast('nano_unavailable', res.reason);
               return;
             }
             isTranscribing = true;
@@ -501,7 +501,7 @@
           (res) => {
             void chrome.runtime.lastError;
             if (res && res.status === 'nano_unavailable') {
-              renderStatusToast('nano_unavailable');
+              renderStatusToast('nano_unavailable', res.reason);
               return;
             }
             isTranscribing = true;
@@ -528,22 +528,47 @@
       toast.appendChild(actionsRow);
     } else if (state === 'nano_unavailable') {
       toast.style.borderLeftColor = '#d9534f';
-      messageEl.textContent = 'mast: Gemini Nano (On-Device) is unavailable on this device.';
+      const reason = errorMessage || 'unknown';
+      if (reason === 'setting_off') {
+        messageEl.textContent = 'mast: On-Device AI is turned off.';
+      } else if (reason === 'low_disk') {
+        messageEl.textContent = 'mast: Not enough disk space.';
+      } else {
+        messageEl.textContent = 'mast: Gemini On-Device is unavailable.';
+      }
       toast.appendChild(messageEl);
 
       const fixEl = document.createElement('div');
       fixEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
-      fixEl.textContent =
-        'Ensure at least 22 GB of free disk space and check chrome://components, or add a Google AI Studio API key in Settings.';
+      if (reason === 'setting_off') {
+        fixEl.textContent = 'Turn on On-device AI in Chrome System Settings, or switch models in Settings.';
+      } else if (reason === 'low_disk') {
+        fixEl.textContent = 'At least 22 GB of free disk space is required, or switch models in Settings.';
+      } else {
+        fixEl.textContent = 'Turn on On-device AI in Chrome System Settings and ensure 22 GB free disk space.';
+      }
       toast.appendChild(fixEl);
 
       const actionsRow = document.createElement('div');
-      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
+      actionsRow.style.cssText = 'display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;';
+
+      if (reason === 'setting_off' || reason === 'unknown') {
+        const sysBtn = document.createElement('button');
+        sysBtn.textContent = 'Open System Settings';
+        sysBtn.style.cssText =
+          'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
+        sysBtn.addEventListener('click', () => {
+          chrome.runtime.sendMessage({ action: 'open_chrome_url', url: 'chrome://settings/system' });
+        });
+        actionsRow.appendChild(sysBtn);
+      }
 
       const settingsBtn = document.createElement('button');
-      settingsBtn.textContent = 'View Fix Steps / Settings';
+      settingsBtn.textContent = 'Settings';
       settingsBtn.style.cssText =
-        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
+        reason === 'setting_off' || reason === 'unknown'
+          ? 'background: #ffffff; color: #5B5FC7; border: 1px solid #5B5FC7; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;'
+          : 'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
       settingsBtn.addEventListener('click', () => {
         chrome.runtime.sendMessage({ action: 'open_options' });
       });
@@ -551,7 +576,7 @@
       const dismissBtn = document.createElement('button');
       dismissBtn.textContent = 'Dismiss';
       dismissBtn.style.cssText =
-        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer;';
+        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer;';
       dismissBtn.addEventListener('click', () => {
         removeStatusToast();
       });
@@ -614,9 +639,9 @@
       });
       actionsRow.appendChild(retryBtn);
 
-      if (errorMessage && errorMessage.includes('Gemini Nano (On-Device)')) {
+      if (errorMessage && /on-device/i.test(errorMessage)) {
         const settingsBtn = document.createElement('button');
-        settingsBtn.textContent = 'Fix / Settings';
+        settingsBtn.textContent = 'Settings';
         settingsBtn.style.cssText =
           'background: #ffffff; color: #5B5FC7; border: 1px solid #5B5FC7; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
         settingsBtn.addEventListener('click', () => {
