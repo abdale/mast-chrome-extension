@@ -1,4 +1,8 @@
-const GEMINI_NANO_MODEL_ID = 'gemini-nano';
+const GEMMA_MODEL_ID = 'gemma-4-e2b-it';
+const LEGACY_NANO_MODEL_ID = 'gemini-nano';
+const GEMMA_MODEL_URL =
+  'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q3_K_S.gguf';
+const MIN_FREE_DISK_BYTES = 3 * 1024 * 1024 * 1024;
 
 const viewOnboarding = document.getElementById('view-onboarding');
 const viewApiKey = document.getElementById('view-api-key');
@@ -54,7 +58,7 @@ let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 let forceShowApiKeyEntry = false;
 
-const WORKER_BUILD_VERSION = '2.9.3';
+const WORKER_BUILD_VERSION = '2.9.4';
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
     chrome.runtime.reload();
@@ -100,14 +104,21 @@ function hideAllViews() {
   if (viewResults) viewResults.style.display = 'none';
 }
 
+function normalizeSimMode(rawMode) {
+  if (rawMode === 'low_disk' || rawMode === 'downloadable') return rawMode;
+  return 'real';
+}
+
 function getEffectiveAiMode(storedState = {}) {
-  if (storedState.aiMode === 'nano') return 'nano';
+  if (storedState.aiMode === 'gemma' || storedState.aiMode === 'nano') return 'gemma';
   if (storedState.aiMode === 'cloud') return 'cloud';
   if (
-    storedState.modelSelectVal === GEMINI_NANO_MODEL_ID ||
-    storedState.selectedModel === GEMINI_NANO_MODEL_ID
+    storedState.modelSelectVal === GEMMA_MODEL_ID ||
+    storedState.selectedModel === GEMMA_MODEL_ID ||
+    storedState.modelSelectVal === LEGACY_NANO_MODEL_ID ||
+    storedState.selectedModel === LEGACY_NANO_MODEL_ID
   ) {
-    return 'nano';
+    return 'gemma';
   }
   if (
     storedState.onboardingCompleted !== false &&
@@ -119,63 +130,33 @@ function getEffectiveAiMode(storedState = {}) {
   return 'unconfigured';
 }
 
-function getLanguageModelNamespace() {
-  if (typeof LanguageModel !== 'undefined') return LanguageModel;
-  if (typeof self !== 'undefined' && self.LanguageModel) return self.LanguageModel;
-  if (typeof self !== 'undefined' && self.ai && self.ai.languageModel) return self.ai.languageModel;
-  return null;
-}
-
-async function diagnoseUnavailableReason(lm) {
-  if (!lm) return 'unsupported';
-
-  if (typeof lm.create === 'function') {
-    try {
-      const probeSession = await lm.create({
-        expectedInputs: [{ type: 'text', languages: ['en'] }],
-        expectedOutputs: [{ type: 'text', languages: ['en'] }]
-      }).catch(async (firstErr) => {
-        if (firstErr && firstErr.name === 'TypeError') {
-          return await lm.create();
-        }
-        throw firstErr;
-      });
-      if (probeSession && typeof probeSession.destroy === 'function') {
-        probeSession.destroy();
-      }
-    } catch (err) {
-      const msg = String((err && err.message) || '');
-      if (/enough\s+(disk\s+)?space|insufficient.*space|disk\s+space/i.test(msg)) {
-        return 'low_disk';
-      }
-      if (/disabled|not\s+enabled|feature\s+flag|service\s+is\s+not\s+running|required\s+configuration|on-device\s+ai|policy/i.test(msg)) {
-        return 'setting_off';
-      }
-      if (/gpu|not\s+eligible|unsupported/i.test(msg)) {
-        return 'unsupported';
-      }
-    }
-  }
-
+async function isGemmaCachedInOPFS() {
   try {
-    if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.estimate === 'function') {
-      const est = await navigator.storage.estimate();
-      if (est && typeof est.quota === 'number' && est.quota > 0) {
-        const remaining = est.quota - (est.usage || 0);
-        if (remaining < 22 * 1024 * 1024 * 1024) {
-          return 'low_disk';
-        }
-      }
-    }
-  } catch (_) {}
-
-  return 'unknown';
+    if (!navigator.storage || typeof navigator.storage.getDirectory !== 'function') return false;
+    const root = await navigator.storage.getDirectory();
+    const cacheDir = await root.getDirectoryHandle('cache', { create: false });
+    const hashBuf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(GEMMA_MODEL_URL));
+    const hashHex = Array.from(new Uint8Array(hashBuf))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    const fileKey = `${hashHex}_gemma-4-E2B-it-Q3_K_S.gguf`;
+    const fileHandle = await cacheDir.getFileHandle(fileKey, { create: false });
+    const file = await fileHandle.getFile();
+    if (!file || file.size < 2000000000) return false;
+    try {
+      const metaHandle = await cacheDir.getFileHandle(`__metadata__${fileKey}`, { create: false });
+      const metaFile = await metaHandle.getFile();
+      const meta = JSON.parse(await metaFile.text());
+      if (meta && meta.originalSize && file.size !== meta.originalSize) return false;
+    } catch (_) {}
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
-async function checkNanoAvailabilityLocal(simMode = 'real') {
-  if (simMode === 'setting_off') {
-    return { status: 'unavailable', simulated: true, reason: 'setting_off' };
-  }
+async function checkNanoAvailabilityLocal(rawSimMode = 'real') {
+  const simMode = normalizeSimMode(rawSimMode);
   if (simMode === 'low_disk') {
     return { status: 'unavailable', simulated: true, reason: 'low_disk' };
   }
@@ -183,134 +164,56 @@ async function checkNanoAvailabilityLocal(simMode = 'real') {
     return { status: 'downloadable', simulated: true, reason: 'simulated_download' };
   }
 
-  const lm = getLanguageModelNamespace();
-  if (!lm) {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: 'get_nano_availability', simMode }, (res) => {
-        if (chrome.runtime.lastError || !res) {
-          resolve({ status: 'unavailable', simulated: false, reason: 'unsupported' });
-        } else {
-          resolve(res);
-        }
-      });
-    });
+  if (await isGemmaCachedInOPFS()) {
+    return { status: 'available', simulated: false, reason: 'ok' };
   }
 
   try {
-    if (typeof lm.availability === 'function') {
-      let raw;
-      try {
-        raw = await lm.availability({
-          expectedInputs: [{ type: 'text', languages: ['en'] }],
-          expectedOutputs: [{ type: 'text', languages: ['en'] }]
-        });
-      } catch (_) {
-        raw = await lm.availability();
+    if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.estimate === 'function') {
+      const est = await navigator.storage.estimate();
+      if (est && typeof est.quota === 'number' && est.quota > 0) {
+        const remaining = est.quota - (est.usage || 0);
+        if (remaining < MIN_FREE_DISK_BYTES) {
+          return { status: 'unavailable', simulated: false, reason: 'low_disk' };
+        }
       }
-      if (raw === 'available' || raw === 'readily') {
-        return { status: 'available', simulated: false, reason: 'ok' };
-      }
-      if (raw === 'downloadable' || raw === 'after-download') {
-        return { status: 'downloadable', simulated: false, reason: 'needs_download' };
-      }
-      if (raw === 'downloading') {
-        return { status: 'downloading', simulated: false, reason: 'downloading' };
-      }
-      const reason = await diagnoseUnavailableReason(lm);
-      return { status: 'unavailable', simulated: false, reason };
-    }
-    if (typeof lm.capabilities === 'function') {
-      const caps = await lm.capabilities();
-      if (caps && caps.available === 'readily') return { status: 'available', simulated: false, reason: 'ok' };
-      if (caps && caps.available === 'after-download') return { status: 'downloadable', simulated: false, reason: 'needs_download' };
     }
   } catch (_) {}
 
-  const reason = await diagnoseUnavailableReason(lm);
-  return { status: 'unavailable', simulated: false, reason };
+  return { status: 'downloadable', simulated: false, reason: 'needs_download' };
 }
 
-function renderPopupNanoUnavailable(reason) {
+function renderPopupNanoUnavailable() {
   if (!nanoUnavailableTitle || !nanoUnavailableSub) return;
-  if (reason === 'setting_off') {
-    nanoUnavailableTitle.textContent = 'On-Device AI is turned off';
-    nanoUnavailableSub.innerHTML =
-      'Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a>.';
-    if (openSystemSettingsBtn) openSystemSettingsBtn.style.display = 'inline-block';
-  } else if (reason === 'low_disk') {
-    nanoUnavailableTitle.textContent = 'Not enough disk space';
-    nanoUnavailableSub.innerHTML =
-      'At least <strong>22 GB</strong> of free disk space is required for Gemini On-Device.';
-    if (openSystemSettingsBtn) openSystemSettingsBtn.style.display = 'none';
-  } else if (reason === 'unsupported') {
-    nanoUnavailableTitle.textContent = 'Not supported on this device';
-    nanoUnavailableSub.innerHTML =
-      'Update Chrome at <a href="#" data-chrome-url="chrome://settings/help">chrome://settings/help</a> or switch to Gemini Flash.';
-    if (openSystemSettingsBtn) openSystemSettingsBtn.style.display = 'none';
-  } else {
-    nanoUnavailableTitle.textContent = 'Gemini On-Device is unavailable';
-    nanoUnavailableSub.innerHTML =
-      'Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a> and ensure <strong>22 GB</strong> of free disk space.';
-    if (openSystemSettingsBtn) openSystemSettingsBtn.style.display = 'inline-block';
-  }
+  nanoUnavailableTitle.textContent = 'Not enough disk space';
+  nanoUnavailableSub.innerHTML =
+    'At least <strong>3 GB</strong> of free disk space is required for Gemma On-Device.';
+  if (openSystemSettingsBtn) openSystemSettingsBtn.style.display = 'none';
   bindDynamicLinks(viewNanoUnavailable || document);
 }
 
-function renderResultsNanoFix(reason) {
+function renderResultsNanoFix() {
   if (!resultsNanoFixBox || !resultsNanoFixTitle || !resultsNanoFixSub) return;
-  if (reason === 'setting_off') {
-    resultsNanoFixTitle.textContent = 'On-Device AI is turned off';
-    resultsNanoFixSub.innerHTML =
-      'Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a> and click <strong>Retry</strong>, or switch models in <a href="#" data-open-settings="true">Settings</a>.';
-  } else if (reason === 'low_disk') {
-    resultsNanoFixTitle.textContent = 'Not enough disk space';
-    resultsNanoFixSub.innerHTML =
-      'Free at least <strong>22 GB</strong> of disk space and click <strong>Retry</strong>, or switch models in <a href="#" data-open-settings="true">Settings</a>.';
-  } else {
-    resultsNanoFixTitle.textContent = 'Gemini On-Device is unavailable';
-    resultsNanoFixSub.innerHTML =
-      'Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a> and ensure <strong>22 GB</strong> free space, or switch models in <a href="#" data-open-settings="true">Settings</a>.';
-  }
+  resultsNanoFixTitle.textContent = 'Not enough disk space';
+  resultsNanoFixSub.innerHTML =
+    'Free at least <strong>3 GB</strong> of disk space and click <strong>Retry</strong>, or switch models in <a href="#" data-open-settings="true">Settings</a>.';
   bindDynamicLinks(resultsNanoFixBox);
-}
-
-function warmUpGeminiNanoIfNeeded(simMode) {
-  if (simMode && simMode !== 'real') return;
-  const lm = getLanguageModelNamespace();
-  if (!lm || typeof lm.create !== 'function') return;
-  (async () => {
-    try {
-      const avail = await checkNanoAvailabilityLocal('real');
-      if (avail.status === 'downloadable') {
-        const s = await lm.create({
-          expectedInputs: [{ type: 'text', languages: ['en'] }],
-          expectedOutputs: [{ type: 'text', languages: ['en'] }]
-        }).catch(() => lm.create());
-        if (s && typeof s.destroy === 'function') {
-          s.destroy();
-        }
-      }
-    } catch (_) {}
-  })();
 }
 
 function selectGeminiNanoMode() {
   forceShowApiKeyEntry = false;
-  chrome.storage.local.get(['devNanoSimMode'], (s) => {
-    warmUpGeminiNanoIfNeeded(s.devNanoSimMode || 'real');
-    chrome.storage.local.set(
-      {
-        aiMode: 'nano',
-        selectedModel: GEMINI_NANO_MODEL_ID,
-        modelSelectVal: GEMINI_NANO_MODEL_ID,
-        userSelectedModel: true,
-        onboardingCompleted: true
-      },
-      () => {
-        updateUI();
-      }
-    );
-  });
+  chrome.storage.local.set(
+    {
+      aiMode: 'gemma',
+      selectedModel: GEMMA_MODEL_ID,
+      modelSelectVal: GEMMA_MODEL_ID,
+      userSelectedModel: true,
+      onboardingCompleted: true
+    },
+    () => {
+      updateUI();
+    }
+  );
 }
 
 if (chooseNanoBtn) {
@@ -388,7 +291,7 @@ async function validateApiKey(key) {
 validateBtn.addEventListener('click', async () => {
   const key = apiKeyInput.value.trim();
   if (!key) {
-    apiError.innerText = "Key cannot be empty. If you don't have one, choose Gemini Nano (On-Device) below.";
+    apiError.innerText = "Key cannot be empty. If you don't have one, select Gemma On-Device below.";
     apiError.style.display = "block";
     return;
   }
@@ -410,7 +313,8 @@ validateBtn.addEventListener('click', async () => {
       };
       if (
         !result.selectedModel ||
-        result.selectedModel === GEMINI_NANO_MODEL_ID ||
+        result.selectedModel === GEMMA_MODEL_ID ||
+        result.selectedModel === LEGACY_NANO_MODEL_ID ||
         result.modelSelectVal !== 'custom'
       ) {
         updates.selectedModel = validation.latestFlashModel;
@@ -422,7 +326,7 @@ validateBtn.addEventListener('click', async () => {
         updateUI();
       });
     } else {
-      apiError.innerText = "Invalid API Key. Please try again or use Gemini Nano (On-Device) below.";
+      apiError.innerText = "Invalid API Key. Please try again or use Gemma On-Device below.";
       apiError.style.display = "block";
       validateBtn.innerText = "Save & Validate";
       validateBtn.disabled = false;
@@ -477,19 +381,19 @@ if (switchToCloudModeBtn) {
 
 // [DEV-ONLY] Simulation toggle handlers
 function renderDevSimControls(simMode, effectiveMode) {
-  const mode = simMode || 'real';
+  const mode = normalizeSimMode(simMode);
   devSimPills.forEach((pill) => {
     const pillMode = pill.getAttribute('data-sim-mode');
     pill.classList.remove('active', 'active-warn');
     if (pillMode === mode) {
-      const isWarn = mode === 'low_disk' || mode === 'setting_off';
+      const isWarn = mode === 'low_disk';
       pill.classList.add(isWarn ? 'active-warn' : 'active');
     }
   });
 
   if (devActiveModelHint) {
-    if (effectiveMode === 'nano') {
-      devActiveModelHint.textContent = 'On-Device';
+    if (effectiveMode === 'gemma') {
+      devActiveModelHint.textContent = 'Gemma 4 E2B';
     } else if (effectiveMode === 'cloud') {
       devActiveModelHint.textContent = 'Cloud Key';
     } else {
@@ -500,13 +404,13 @@ function renderDevSimControls(simMode, effectiveMode) {
 
 devSimPills.forEach((pill) => {
   pill.addEventListener('click', () => {
-    const mode = pill.getAttribute('data-sim-mode') || 'real';
+    const mode = normalizeSimMode(pill.getAttribute('data-sim-mode'));
     forceShowApiKeyEntry = false;
     const updates = { devNanoSimMode: mode };
-    if (mode === 'setting_off' || mode === 'low_disk' || mode === 'downloadable') {
-      updates.aiMode = 'nano';
-      updates.selectedModel = GEMINI_NANO_MODEL_ID;
-      updates.modelSelectVal = GEMINI_NANO_MODEL_ID;
+    if (mode === 'low_disk' || mode === 'downloadable') {
+      updates.aiMode = 'gemma';
+      updates.selectedModel = GEMMA_MODEL_ID;
+      updates.modelSelectVal = GEMMA_MODEL_ID;
       updates.userSelectedModel = true;
       updates.onboardingCompleted = true;
     }
@@ -763,8 +667,8 @@ function updateUI() {
   ], async (result) => {
     const hasSavedKey = !!(result.apiKey && result.apiKey.trim());
     const effectiveMode = getEffectiveAiMode(result);
-    const isUsingNano = effectiveMode === 'nano';
-    const simMode = result.devNanoSimMode || 'real';
+    const isUsingNano = effectiveMode === 'gemma';
+    const simMode = normalizeSimMode(result.devNanoSimMode);
 
     renderDevSimControls(simMode, effectiveMode);
 
@@ -796,7 +700,7 @@ function updateUI() {
     const lastGenBeat = result.generationHeartbeatAt || result.generationStartedAt;
     const isGeneratingStale =
       result.notesStatus === 'generating' &&
-      (!lastGenBeat || Date.now() - lastGenBeat > 120000);
+      (!lastGenBeat || Date.now() - lastGenBeat > 300000);
 
     // Never reset state while actively transcribing
     if (
@@ -893,7 +797,7 @@ function updateUI() {
         if (resultsHeading) resultsHeading.innerText = "Generating Meeting Notes";
         resultsStatus.style.color = "#5f6368";
         resultsStatus.innerText = isUsingNano
-          ? "Summarizing locally with Gemini Nano (On-Device)..."
+          ? "Summarizing locally with Gemma 4 E2B (On-Device)..."
           : "Generating AI meeting notes and saving transcript...";
         if (progressContainer) progressContainer.style.display = "block";
         applyProgressUI(result.notesProgress, result.notesStage);
@@ -950,7 +854,7 @@ function updateUI() {
     }
 
     // 4. Model Readiness Gate based on user's chosen mode
-    if (effectiveMode === 'nano') {
+    if (effectiveMode === 'gemma') {
       const nanoAvail = await checkNanoAvailabilityLocal(simMode);
       if (nanoAvail.status === 'unavailable') {
         hideAllViews();
@@ -1064,18 +968,6 @@ async function executeInActiveTab(action, callback, preferredTabId = null) {
 startBtn.addEventListener('click', async () => {
   sawSessionTransitionInPopup = true;
   const startTime = Date.now();
-
-  const stored = await chrome.storage.local.get([
-    'apiKey',
-    'aiMode',
-    'onboardingCompleted',
-    'selectedModel',
-    'modelSelectVal',
-    'devNanoSimMode'
-  ]);
-  if (getEffectiveAiMode(stored) === 'nano') {
-    warmUpGeminiNanoIfNeeded(stored.devNanoSimMode || 'real');
-  }
 
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const pageStatus = await checkPageStatus(tab ? tab.id : null);

@@ -424,8 +424,8 @@
     <div class="form-group">
       <label>CHOOSE AI MODEL</label>
       <div class="mode-grid">
-        <button type="button" class="mode-card" id="modeCardNano" data-ai-mode="nano">
-          <span class="mode-card-title">Gemini On-Device</span>
+        <button type="button" class="mode-card" id="modeCardNano" data-ai-mode="gemma">
+          <span class="mode-card-title">Gemma On-Device</span>
         </button>
         <button type="button" class="mode-card" id="modeCardCloud" data-ai-mode="cloud">
           <span class="mode-card-title">Gemini Flash</span>
@@ -443,8 +443,8 @@
         <input type="password" id="apiKey" placeholder="AIzaSy...">
         <div class="help-text">Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. For detailed instructions, see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>.</div>
         <div id="noKeyCallout" class="no-key-callout">
-          <div><strong>Don't have an API key?</strong> If you don't have an API key, you can select <strong>Gemini On-Device</strong> instead - no API key required.</div>
-          <button type="button" id="switchToNanoInSettingsBtn" class="inline-btn outline-primary">Use Gemini On-Device</button>
+          <div><strong>Don't have an API key?</strong> If you don't have an API key, you can select <strong>Gemma On-Device</strong> instead - no API key required.</div>
+          <button type="button" id="switchToNanoInSettingsBtn" class="inline-btn outline-primary">Use Gemma On-Device</button>
         </div>
       </div>
 
@@ -477,23 +477,26 @@
 
     <!-- [DEV-ONLY] Simulation Controls -->
     <div class="dev-sim-card" id="dev-transcript-test">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #d32f2f;">DEV Simulate: Gemini On-Device</span>
-        <a href="#" id="devResetChoiceSettingsLink" style="font-size: 11.5px; color: var(--primary); text-decoration: none; font-weight: 600;">Reset Choice UI</a>
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+        <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #d32f2f;">DEV Simulate: Gemma On-Device</span>
+        <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;">
+          <a href="#" id="devClearModelCacheLink" style="color: #d32f2f; text-decoration: none; font-weight: 600;">Clear Cache</a>
+          <span style="color: var(--text-muted);">&middot;</span>
+          <a href="#" id="devResetChoiceSettingsLink" style="color: var(--primary); text-decoration: none; font-weight: 600;">Reset Choice UI</a>
+        </span>
       </div>
       <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">
-        Simulate On-device AI off, low disk (&lt;22 GB), or first download.
+        Simulate low disk (&lt;3 GB) or first download.
       </div>
       <div class="dev-sim-pills">
         <button type="button" class="dev-sim-pill active" data-sim-mode="real">Real</button>
-        <button type="button" class="dev-sim-pill" data-sim-mode="setting_off">AI Off</button>
         <button type="button" class="dev-sim-pill" data-sim-mode="low_disk">Low Disk</button>
         <button type="button" class="dev-sim-pill" data-sim-mode="downloadable">1st Download</button>
       </div>
 
       <div class="dev-upload-section">
         <div class="dev-upload-header">
-          <span class="dev-upload-title">Test Transcript on Gemini On-Device</span>
+          <span class="dev-upload-title">Test Transcript on Gemma On-Device</span>
           <span id="devTranscriptMeta" class="dev-upload-meta"></span>
         </div>
         <div class="dev-upload-controls">
@@ -527,7 +530,7 @@
     <div style="margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border);">
       <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 6px;">ABOUT MAST</div>
       <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
-        <strong style="color: var(--text);">mast</strong> is a lightweight, privacy-focused browser extension built for Googlers to securely transcribe and generate AI meeting notes for Microsoft Teams calls. Choose between <strong style="color: var(--text);">Gemini Nano (On-Device)</strong> with zero setup or cloud Gemini Flash models using your Google AI Studio API key, with no external third-party servers.
+        <strong style="color: var(--text);">mast</strong> is a lightweight, privacy-focused browser extension built for Googlers to securely transcribe and generate AI meeting notes for Microsoft Teams calls. Choose between <strong style="color: var(--text);">Gemma 4 E2B (On-Device)</strong> with zero setup or cloud Gemini Flash models using your Google AI Studio API key, with no external third-party servers.
       </div>
     </div>
 
@@ -540,6 +543,6 @@
     </div>
   </div>
 
-  <script src="options.js"></script>
+  <script type="module" src="options.js"></script>
 </body>
 </html>

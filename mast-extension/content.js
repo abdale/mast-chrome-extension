@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9.3';
+  const CONTENT_SCRIPT_VERSION = '2.9.4';
   if (window.__mastContentScriptVersion === CONTENT_SCRIPT_VERSION) {
     return;
   }
@@ -404,22 +404,22 @@
       const subEl = document.createElement('div');
       subEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
       subEl.textContent =
-        'Select Gemini Nano (On-Device) with no API key required, or use a Google AI Studio API key.';
+        'Select Gemma 4 E2B (On-Device) with no API key required, or use a Google AI Studio API key.';
       toast.appendChild(subEl);
 
       const actionsRow = document.createElement('div');
       actionsRow.style.cssText = 'display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;';
 
-      const nanoBtn = document.createElement('button');
-      nanoBtn.textContent = 'Gemini Nano (On-Device)';
-      nanoBtn.style.cssText =
+      const gemmaBtn = document.createElement('button');
+      gemmaBtn.textContent = 'Gemma 4 E2B (On-Device)';
+      gemmaBtn.style.cssText =
         'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 6px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
-      nanoBtn.addEventListener('click', () => {
-        nanoBtn.disabled = true;
-        nanoBtn.textContent = 'Starting...';
+      gemmaBtn.addEventListener('click', () => {
+        gemmaBtn.disabled = true;
+        gemmaBtn.textContent = 'Starting...';
         const title = extractTeamsMeetingTitle();
         chrome.runtime.sendMessage(
-          { action: 'start_from_toast', meetingTitle: title, chosenMode: 'nano' },
+          { action: 'start_from_toast', meetingTitle: title, chosenMode: 'gemma' },
           (res) => {
             void chrome.runtime.lastError;
             if (res && res.status === 'nano_unavailable') {
@@ -462,7 +462,7 @@
         );
       });
 
-      actionsRow.appendChild(nanoBtn);
+      actionsRow.appendChild(gemmaBtn);
       actionsRow.appendChild(cloudBtn);
       toast.appendChild(actionsRow);
     } else if (state === 'capturing_started') {
@@ -482,22 +482,22 @@
       const hintEl = document.createElement('div');
       hintEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
       hintEl.textContent =
-        "If you don't have an API key, you can select Gemini On-Device instead - no API key required.";
+        "If you don't have an API key, you can select Gemma On-Device instead - no API key required.";
       toast.appendChild(hintEl);
 
       const actionsRow = document.createElement('div');
       actionsRow.style.cssText = 'display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;';
 
-      const useNanoBtn = document.createElement('button');
-      useNanoBtn.textContent = 'Use Gemini On-Device';
-      useNanoBtn.style.cssText =
+      const useGemmaBtn = document.createElement('button');
+      useGemmaBtn.textContent = 'Use Gemma On-Device';
+      useGemmaBtn.style.cssText =
         'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
-      useNanoBtn.addEventListener('click', () => {
-        useNanoBtn.disabled = true;
-        useNanoBtn.textContent = 'Starting...';
+      useGemmaBtn.addEventListener('click', () => {
+        useGemmaBtn.disabled = true;
+        useGemmaBtn.textContent = 'Starting...';
         const title = extractTeamsMeetingTitle();
         chrome.runtime.sendMessage(
-          { action: 'start_from_toast', meetingTitle: title, chosenMode: 'nano' },
+          { action: 'start_from_toast', meetingTitle: title, chosenMode: 'gemma' },
           (res) => {
             void chrome.runtime.lastError;
             if (res && res.status === 'nano_unavailable') {
@@ -523,52 +523,26 @@
         removeStatusToast();
       });
 
-      actionsRow.appendChild(useNanoBtn);
+      actionsRow.appendChild(useGemmaBtn);
       actionsRow.appendChild(dismissBtn);
       toast.appendChild(actionsRow);
     } else if (state === 'nano_unavailable') {
       toast.style.borderLeftColor = '#d9534f';
-      const reason = errorMessage || 'unknown';
-      if (reason === 'setting_off') {
-        messageEl.textContent = 'mast: On-Device AI is turned off.';
-      } else if (reason === 'low_disk') {
-        messageEl.textContent = 'mast: Not enough disk space.';
-      } else {
-        messageEl.textContent = 'mast: Gemini On-Device is unavailable.';
-      }
+      messageEl.textContent = 'mast: Not enough disk space.';
       toast.appendChild(messageEl);
 
       const fixEl = document.createElement('div');
       fixEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
-      if (reason === 'setting_off') {
-        fixEl.textContent = 'Turn on On-device AI in Chrome System Settings, or switch models in Settings.';
-      } else if (reason === 'low_disk') {
-        fixEl.textContent = 'At least 22 GB of free disk space is required, or switch models in Settings.';
-      } else {
-        fixEl.textContent = 'Turn on On-device AI in Chrome System Settings and ensure 22 GB free disk space.';
-      }
+      fixEl.textContent = 'At least 3 GB of free disk space is required, or switch models in Settings.';
       toast.appendChild(fixEl);
 
       const actionsRow = document.createElement('div');
       actionsRow.style.cssText = 'display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;';
 
-      if (reason === 'setting_off' || reason === 'unknown') {
-        const sysBtn = document.createElement('button');
-        sysBtn.textContent = 'Open System Settings';
-        sysBtn.style.cssText =
-          'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
-        sysBtn.addEventListener('click', () => {
-          chrome.runtime.sendMessage({ action: 'open_chrome_url', url: 'chrome://settings/system' });
-        });
-        actionsRow.appendChild(sysBtn);
-      }
-
       const settingsBtn = document.createElement('button');
       settingsBtn.textContent = 'Settings';
       settingsBtn.style.cssText =
-        reason === 'setting_off' || reason === 'unknown'
-          ? 'background: #ffffff; color: #5B5FC7; border: 1px solid #5B5FC7; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;'
-          : 'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
+        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
       settingsBtn.addEventListener('click', () => {
         chrome.runtime.sendMessage({ action: 'open_options' });
       });

@@ -218,7 +218,7 @@
 
     <button type="button" id="chooseNanoBtn" class="choice-card">
       <div class="choice-card-title">
-        <span>Gemini Nano (On-Device)</span>
+        <span>Gemma 4 E2B (On-Device)</span>
         <span class="choice-card-badge">No API Key</span>
       </div>
       <div class="choice-card-desc">Summarizes locally on your device with zero setup.</div>
@@ -247,17 +247,16 @@
     </div>
 
     <div class="alt-choice-box">
-      <div><strong>Don't have an API key?</strong> If you don't have an API key, you can select <strong>Gemini On-Device</strong> instead - no API key required.</div>
-      <button type="button" id="useNanoInsteadBtn" class="outline-primary-btn">Use Gemini On-Device</button>
+      <div><strong>Don't have an API key?</strong> If you don't have an API key, you can select <strong>Gemma On-Device</strong> instead - no API key required.</div>
+      <button type="button" id="useNanoInsteadBtn" class="outline-primary-btn">Use Gemma On-Device</button>
     </div>
   </div>
 
   <div id="view-nano-unavailable" class="view-section">
     <div class="fix-card">
-      <div id="nanoUnavailableTitle" class="fix-card-title">On-Device AI is turned off</div>
-      <div id="nanoUnavailableSub" class="fix-card-sub">Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a>.</div>
+      <div id="nanoUnavailableTitle" class="fix-card-title">Not enough disk space</div>
+      <div id="nanoUnavailableSub" class="fix-card-sub">At least <strong>3 GB</strong> of free disk space is required for Gemma On-Device.</div>
       <div class="fix-actions">
-        <button type="button" id="openSystemSettingsBtn" class="outline-primary-btn" data-chrome-url="chrome://settings/system">Open System Settings</button>
         <button type="button" id="recheckNanoBtn" class="secondary-btn">Re-check</button>
       </div>
     </div>
@@ -309,7 +308,7 @@
       </div>
 
       <div id="resultsNanoFixBox" class="fix-card" style="display: none; margin-top: 10px;">
-        <div id="resultsNanoFixTitle" class="fix-card-title" style="font-size: 11.5px;">Gemini On-Device unavailable</div>
+        <div id="resultsNanoFixTitle" class="fix-card-title" style="font-size: 11.5px;">Gemma On-Device unavailable</div>
         <div id="resultsNanoFixSub" class="fix-card-sub"></div>
       </div>
 
@@ -332,7 +331,6 @@
     </div>
     <div class="dev-sim-pills">
       <button type="button" class="dev-sim-pill active" data-sim-mode="real">Real</button>
-      <button type="button" class="dev-sim-pill" data-sim-mode="setting_off">AI Off</button>
       <button type="button" class="dev-sim-pill" data-sim-mode="low_disk">Low Disk</button>
       <button type="button" class="dev-sim-pill" data-sim-mode="downloadable">1st Download</button>
     </div>

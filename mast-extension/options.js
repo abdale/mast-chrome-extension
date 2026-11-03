@@ -1,14 +1,67 @@
-document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9.3';
-  const GEMINI_NANO_MODEL_ID = 'gemini-nano';
+import {
+  GEMMA_MODEL_ID,
+  checkGemmaAvailability,
+  downloadGemmaModel,
+  clearCachedGemmaModel,
+  generateNotesWithGemma,
+  formatBytesGB
+} from './gemma-engine.js';
 
-  chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
-    if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
-      chrome.storage.local.set({ reopenOptionsAfterReload: true }, () => {
-        chrome.runtime.reload();
-      });
-    }
-  });
+const WORKER_BUILD_VERSION = '2.9.4';
+const LEGACY_NANO_MODEL_ID = 'gemini-nano';
+const IS_BG_INFER_TAB = new URLSearchParams(window.location.search).get('bg_infer') === '1';
+
+function normalizeSimMode(rawMode) {
+  if (rawMode === 'low_disk' || rawMode === 'downloadable') return rawMode;
+  return 'real';
+}
+
+// Register background bridge listener immediately so options.html?bg_infer=1 responds without delay
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+  if (request.action === 'bridge_gemma_check' || request.action === 'bridge_nano_check') {
+    checkGemmaAvailability(normalizeSimMode(request.simMode)).then(sendResponse);
+    return true;
+  }
+  if (request.action === 'bridge_gemma_generate' || request.action === 'bridge_nano_generate') {
+    generateNotesWithGemma(
+      request.lines || [],
+      request.dateFormatted || '',
+      normalizeSimMode(request.simMode),
+      (pct, stage) => {
+        if (request.channel) {
+          chrome.runtime.sendMessage(
+            { action: 'bridge_gemma_progress', channel: request.channel, pct, stage },
+            () => {
+              void chrome.runtime.lastError;
+            }
+          );
+        }
+      }
+    )
+      .then((minutesText) => sendResponse({ ok: true, minutesText }))
+      .catch((err) =>
+        sendResponse({
+          ok: false,
+          error: err.message || 'Generation failed.',
+          code: err.code || '',
+          reason: err.reason || ''
+        })
+      );
+    return true;
+  }
+  return false;
+});
+
+function initOptionsPage() {
+  if (!IS_BG_INFER_TAB) {
+    chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
+      if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
+        chrome.storage.local.set({ reopenOptionsAfterReload: true }, () => {
+          chrome.runtime.reload();
+        });
+      }
+    });
+  }
 
   const modeCardNano = document.getElementById('modeCardNano');
   const modeCardCloud = document.getElementById('modeCardCloud');
@@ -28,6 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const recentMeetingsList = document.getElementById('recentMeetingsList');
 
   const devSimPills = document.querySelectorAll('.dev-sim-pill[data-sim-mode]');
+  const devClearModelCacheLink = document.getElementById('devClearModelCacheLink');
   const devResetChoiceSettingsLink = document.getElementById('devResetChoiceSettingsLink');
   const devTranscriptInput = document.getElementById('devTranscriptInput');
   const devUploadTranscriptBtn = document.getElementById('devUploadTranscriptBtn');
@@ -44,17 +98,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const devTranscriptOutput = document.getElementById('devTranscriptOutput');
 
   let currentSimMode = 'real';
-  let currentAiMode = 'unconfigured'; // 'nano' | 'cloud' | 'unconfigured'
+  let currentAiMode = 'unconfigured'; // 'gemma' | 'cloud' | 'unconfigured'
   let lastApiKeyInvalid = false;
 
   function getEffectiveAiMode(storedState = {}) {
-    if (storedState.aiMode === 'nano') return 'nano';
+    if (storedState.aiMode === 'gemma' || storedState.aiMode === 'nano') return 'gemma';
     if (storedState.aiMode === 'cloud') return 'cloud';
     if (
-      storedState.modelSelectVal === GEMINI_NANO_MODEL_ID ||
-      storedState.selectedModel === GEMINI_NANO_MODEL_ID
+      storedState.modelSelectVal === GEMMA_MODEL_ID ||
+      storedState.selectedModel === GEMMA_MODEL_ID ||
+      storedState.modelSelectVal === LEGACY_NANO_MODEL_ID ||
+      storedState.selectedModel === LEGACY_NANO_MODEL_ID
     ) {
-      return 'nano';
+      return 'gemma';
     }
     if (
       storedState.onboardingCompleted !== false &&
@@ -66,131 +122,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return 'unconfigured';
   }
 
-  function bindChromeUrls(root = document) {
-    root.querySelectorAll('[data-chrome-url]').forEach((el) => {
-      if (el.dataset.boundChromeUrl === 'true') return;
-      el.dataset.boundChromeUrl = 'true';
-      el.addEventListener('click', (e) => {
-        e.preventDefault();
-        const url = el.getAttribute('data-chrome-url');
-        if (url) {
-          chrome.tabs.create({ url });
-        }
-      });
-    });
-  }
-
-  function getLanguageModelNamespace() {
-    if (typeof LanguageModel !== 'undefined') return LanguageModel;
-    if (typeof self !== 'undefined' && self.LanguageModel) return self.LanguageModel;
-    if (typeof self !== 'undefined' && self.ai && self.ai.languageModel) return self.ai.languageModel;
-    return null;
-  }
-
-  async function diagnoseUnavailableReason(lm) {
-    if (!lm) return 'unsupported';
-
-    if (typeof lm.create === 'function') {
-      try {
-        const probeSession = await lm.create({
-          expectedInputs: [{ type: 'text', languages: ['en'] }],
-          expectedOutputs: [{ type: 'text', languages: ['en'] }]
-        }).catch(async (firstErr) => {
-          if (firstErr && firstErr.name === 'TypeError') {
-            return await lm.create();
-          }
-          throw firstErr;
-        });
-        if (probeSession && typeof probeSession.destroy === 'function') {
-          probeSession.destroy();
-        }
-      } catch (err) {
-        const msg = String((err && err.message) || '');
-        if (/enough\s+(disk\s+)?space|insufficient.*space|disk\s+space/i.test(msg)) {
-          return 'low_disk';
-        }
-        if (/disabled|not\s+enabled|feature\s+flag|service\s+is\s+not\s+running|required\s+configuration|on-device\s+ai|policy/i.test(msg)) {
-          return 'setting_off';
-        }
-        if (/gpu|not\s+eligible|unsupported/i.test(msg)) {
-          return 'unsupported';
-        }
-      }
-    }
-
-    try {
-      if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.estimate === 'function') {
-        const est = await navigator.storage.estimate();
-        if (est && typeof est.quota === 'number' && est.quota > 0) {
-          const remaining = est.quota - (est.usage || 0);
-          if (remaining < 22 * 1024 * 1024 * 1024) {
-            return 'low_disk';
-          }
-        }
-      }
-    } catch (_) {}
-
-    return 'unknown';
-  }
-
-  async function checkNanoAvailabilityLocal(simMode = 'real') {
-    if (simMode === 'setting_off') {
-      return { status: 'unavailable', simulated: true, reason: 'setting_off' };
-    }
-    if (simMode === 'low_disk') {
-      return { status: 'unavailable', simulated: true, reason: 'low_disk' };
-    }
-    if (simMode === 'downloadable') {
-      return { status: 'downloadable', simulated: true, reason: 'simulated_download' };
-    }
-
-    const lm = getLanguageModelNamespace();
-    if (!lm) {
-      return new Promise((resolve) => {
-        chrome.runtime.sendMessage({ action: 'get_nano_availability', simMode }, (res) => {
-          if (chrome.runtime.lastError || !res) {
-            resolve({ status: 'unavailable', simulated: false, reason: 'unsupported' });
-          } else {
-            resolve(res);
-          }
-        });
-      });
-    }
-
-    try {
-      if (typeof lm.availability === 'function') {
-        let raw;
-        try {
-          raw = await lm.availability({
-            expectedInputs: [{ type: 'text', languages: ['en'] }],
-            expectedOutputs: [{ type: 'text', languages: ['en'] }]
-          });
-        } catch (_) {
-          raw = await lm.availability();
-        }
-        if (raw === 'available' || raw === 'readily') {
-          return { status: 'available', simulated: false, reason: 'ok' };
-        }
-        if (raw === 'downloadable' || raw === 'after-download') {
-          return { status: 'downloadable', simulated: false, reason: 'needs_download' };
-        }
-        if (raw === 'downloading') {
-          return { status: 'downloading', simulated: false, reason: 'downloading' };
-        }
-        const reason = await diagnoseUnavailableReason(lm);
-        return { status: 'unavailable', simulated: false, reason };
-      }
-      if (typeof lm.capabilities === 'function') {
-        const caps = await lm.capabilities();
-        if (caps && caps.available === 'readily') return { status: 'available', simulated: false, reason: 'ok' };
-        if (caps && caps.available === 'after-download') return { status: 'downloadable', simulated: false, reason: 'needs_download' };
-      }
-    } catch (_) {}
-
-    const reason = await diagnoseUnavailableReason(lm);
-    return { status: 'unavailable', simulated: false, reason };
-  }
-
   function updateNoKeyCalloutVisibility() {
     if (!noKeyCallout) return;
     const hasKeyText = !!(apiKeyInput && apiKeyInput.value.trim());
@@ -199,10 +130,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function applyAiModeUI(mode) {
     currentAiMode = mode;
-    if (modeCardNano) modeCardNano.classList.toggle('selected', mode === 'nano');
+    if (modeCardNano) modeCardNano.classList.toggle('selected', mode === 'gemma');
     if (modeCardCloud) modeCardCloud.classList.toggle('selected', mode === 'cloud');
 
-    if (mode === 'nano') {
+    if (mode === 'gemma') {
       if (nanoSection) nanoSection.style.display = 'block';
       if (cloudSection) cloudSection.style.display = 'none';
       refreshNanoStatusBox();
@@ -220,7 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (modeCardNano) {
     modeCardNano.addEventListener('click', () => {
       statusEl.innerText = '';
-      applyAiModeUI('nano');
+      applyAiModeUI('gemma');
     });
   }
 
@@ -237,20 +168,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (switchToNanoInSettingsBtn) {
     switchToNanoInSettingsBtn.addEventListener('click', () => {
-      applyAiModeUI('nano');
+      applyAiModeUI('gemma');
       chrome.storage.local.set(
         {
-          aiMode: 'nano',
-          selectedModel: GEMINI_NANO_MODEL_ID,
-          modelSelectVal: GEMINI_NANO_MODEL_ID,
+          aiMode: 'gemma',
+          selectedModel: GEMMA_MODEL_ID,
+          modelSelectVal: GEMMA_MODEL_ID,
           userSelectedModel: true,
           onboardingCompleted: true
         },
         () => {
-          statusEl.innerText = 'Switched to Gemini On-Device!';
+          statusEl.innerText = 'Switched to Gemma On-Device!';
           statusEl.style.color = '#2e7d32';
           setTimeout(() => {
-            if (statusEl.innerText === 'Switched to Gemini On-Device!') {
+            if (statusEl.innerText === 'Switched to Gemma On-Device!') {
               statusEl.innerText = '';
             }
           }, 3000);
@@ -260,12 +191,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderDevSimPills(mode) {
-    currentSimMode = mode || 'real';
+    currentSimMode = normalizeSimMode(mode);
     devSimPills.forEach((pill) => {
       const pillMode = pill.getAttribute('data-sim-mode');
       pill.classList.remove('active', 'active-warn');
       if (pillMode === currentSimMode) {
-        const isWarn = currentSimMode === 'low_disk' || currentSimMode === 'setting_off';
+        const isWarn = currentSimMode === 'low_disk';
         pill.classList.add(isWarn ? 'active-warn' : 'active');
       }
     });
@@ -273,24 +204,44 @@ document.addEventListener('DOMContentLoaded', () => {
 
   devSimPills.forEach((pill) => {
     pill.addEventListener('click', () => {
-      const mode = pill.getAttribute('data-sim-mode') || 'real';
+      const mode = normalizeSimMode(pill.getAttribute('data-sim-mode'));
       renderDevSimPills(mode);
       const updates = { devNanoSimMode: mode };
-      if (mode === 'setting_off' || mode === 'low_disk' || mode === 'downloadable') {
-        updates.aiMode = 'nano';
-        updates.selectedModel = GEMINI_NANO_MODEL_ID;
-        updates.modelSelectVal = GEMINI_NANO_MODEL_ID;
+      if (mode === 'low_disk' || mode === 'downloadable') {
+        updates.aiMode = 'gemma';
+        updates.selectedModel = GEMMA_MODEL_ID;
+        updates.modelSelectVal = GEMMA_MODEL_ID;
         updates.userSelectedModel = true;
         updates.onboardingCompleted = true;
-        applyAiModeUI('nano');
+        applyAiModeUI('gemma');
       }
       chrome.storage.local.set(updates, () => {
-        if (currentAiMode === 'nano') {
+        if (currentAiMode === 'gemma') {
           refreshNanoStatusBox();
         }
       });
     });
   });
+
+  if (devClearModelCacheLink) {
+    devClearModelCacheLink.addEventListener('click', async (e) => {
+      e.preventDefault();
+      devClearModelCacheLink.textContent = 'Clearing...';
+      try {
+        await clearCachedGemmaModel();
+        statusEl.innerText = 'Cleared cached Gemma 4 E2B model.';
+        statusEl.style.color = '#5B5FC7';
+      } catch (err) {
+        statusEl.innerText = `Clear cache error: ${err.message || err}`;
+        statusEl.style.color = '#d32f2f';
+      } finally {
+        devClearModelCacheLink.textContent = 'Clear Cache';
+        if (currentAiMode === 'gemma') {
+          refreshNanoStatusBox();
+        }
+      }
+    });
+  }
 
   if (devResetChoiceSettingsLink) {
     devResetChoiceSettingsLink.addEventListener('click', (e) => {
@@ -314,333 +265,45 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  const NANO_SYSTEM_PROMPT =
-    'You are an expert meeting minutes generator. Produce clear, accurate, concise Markdown meeting notes strictly grounded in the provided transcript. Never invent facts, attendees, or action items.';
-
-  function buildNanoMinutesPrompt(sourceText, dateFormatted, isFromChunkSummaries = false) {
-    const sourceLabel = isFromChunkSummaries ? 'Segment Summaries' : 'Transcript';
-    return `Generate concise Markdown meeting minutes for a meeting on ${dateFormatted} using these exact top-level bullet headings (do not output a # Title section):
-*   **Date, time, and attendees:**
-    *   [Date], at [Time from transcript]
-    *   Attendees: [Name] ([Company if clear from transcript, else omit company])
-*   **Meeting purpose:** Brief goal of the meeting.
-*   **Agenda items:** Key agenda sections.
-*   **Key discussions:** Concise summary of main points discussed.
-*   **Decisions made:** State decisions clearly in **bold**.
-*   **Action items:** Owner, action, and deadline if stated.
-*   **Follow-ups:** Unresolved or deferred topics.
-
-${sourceLabel}:
-${sourceText}`;
+  function formatShortDate(dateObj = new Date()) {
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    return `${months[dateObj.getMonth()]}${dateObj.getDate()}-${dateObj.getFullYear()}`;
   }
 
-  async function createWindowNanoSession(lm, systemPrompt, monitorCb = null) {
-    let temperature = 0.2;
-    let topK = 3;
-    try {
-      if (typeof lm.params === 'function') {
-        const params = await lm.params();
-        if (params) {
-          if (typeof params.maxTopK === 'number' && params.maxTopK >= 1) {
-            topK = Math.min(3, Math.max(1, Math.floor(params.maxTopK)));
-          }
-          if (typeof params.maxTemperature === 'number') {
-            temperature = Math.min(0.2, params.maxTemperature);
-          }
-        }
-      }
-    } catch (_) {}
-
-    const baseOpts = {
-      temperature,
-      topK,
-      initialPrompts: [{ role: 'system', content: systemPrompt }]
-    };
-    if (monitorCb) baseOpts.monitor = monitorCb;
-
-    try {
-      return await lm.create({
-        ...baseOpts,
-        expectedInputs: [{ type: 'text', languages: ['en'] }],
-        expectedOutputs: [{ type: 'text', languages: ['en'] }]
-      });
-    } catch (_) {
-      try {
-        return await lm.create(baseOpts);
-      } catch (_) {
-        const legacyOpts = { systemPrompt };
-        if (monitorCb) legacyOpts.monitor = monitorCb;
-        return await lm.create(legacyOpts);
-      }
-    }
+  function sanitizeFilenameTitle(rawTitle, fallback = 'meeting') {
+    if (!rawTitle || typeof rawTitle !== 'string') return fallback;
+    const sanitized = rawTitle
+      .toLowerCase()
+      .replace(/[^a-z0-9\s_-]/g, '')
+      .trim()
+      .replace(/[\s_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .substring(0, 60);
+    if (!sanitized || sanitized === 'title') return fallback;
+    return sanitized;
   }
 
-  async function promptWindowNanoStreaming(session, promptText, onProgressText) {
-    if (typeof session.promptStreaming === 'function') {
-      const stream = session.promptStreaming(promptText);
-      let accumulated = '';
-      for await (const chunk of stream) {
-        const piece = typeof chunk === 'string' ? chunk : String(chunk || '');
-        if (!piece) continue;
-        if (accumulated.length > 10 && piece.startsWith(accumulated)) {
-          accumulated = piece;
+  function downloadMarkdownFile(content, filename) {
+    const dataUrl = `data:text/markdown;charset=utf-8,${encodeURIComponent(content)}`;
+    return new Promise((resolve, reject) => {
+      chrome.downloads.download({ url: dataUrl, filename, saveAs: false }, (downloadId) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
         } else {
-          accumulated += piece;
+          resolve(downloadId);
         }
-        if (onProgressText) onProgressText(accumulated);
-      }
-      if (accumulated.trim()) return accumulated;
-    }
-    const full = await session.prompt(promptText);
-    if (onProgressText) onProgressText(full || '');
-    return full || '';
-  }
-
-  function splitTranscriptChunksLocal(lines, maxCharsPerChunk = 6500) {
-    const chunks = [];
-    let current = [];
-    let currentLen = 0;
-    for (const rawLine of lines) {
-      const line = String(rawLine || '');
-      if (line.length > maxCharsPerChunk) {
-        if (current.length > 0) {
-          chunks.push(current.join('\n'));
-          current = [];
-          currentLen = 0;
-        }
-        for (let i = 0; i < line.length; i += maxCharsPerChunk) {
-          chunks.push(line.slice(i, i + maxCharsPerChunk));
-        }
-        continue;
-      }
-      if (currentLen + line.length + 1 > maxCharsPerChunk && current.length > 0) {
-        chunks.push(current.join('\n'));
-        current = [line];
-        currentLen = line.length;
-      } else {
-        current.push(line);
-        currentLen += line.length + 1;
-      }
-    }
-    if (current.length > 0) chunks.push(current.join('\n'));
-    return chunks;
-  }
-
-  async function runWindowNanoBridgeGenerate(lines, dateFormatted, simMode, onProgress) {
-    let baseStartPct = 12;
-    if (simMode === 'downloadable') {
-      for (const dlPct of [0, 14, 31, 52, 74, 91, 100]) {
-        onProgress(6 + Math.round(dlPct * 0.30), `Downloading Gemini Nano (On-Device) (${dlPct}%)...`);
-        await new Promise((r) => setTimeout(r, 450));
-      }
-      baseStartPct = 38;
-    }
-
-    const realAvail = await checkNanoAvailabilityLocal('real');
-    if (realAvail.status === 'unavailable') {
-      if (simMode === 'downloadable') {
-        for (const [pct, label] of [
-          [45, 'Analyzing transcript on-device...'],
-          [70, 'Extracting discussions and action items...'],
-          [90, 'Formatting Markdown output...']
-        ]) {
-          onProgress(pct, label);
-          await new Promise((r) => setTimeout(r, 450));
-        }
-        const preview = lines
-          .slice(0, 5)
-          .map((l) => `    *   ${String(l).substring(0, 140)}`)
-          .join('\n');
-        return `*   **Date, time, and attendees:**\n    *   ${dateFormatted}\n    *   Attendees: Meeting Participants\n*   **Meeting purpose:** Simulated DEV On-Device summary.\n*   **Agenda items:**\n    *   Transcript review (${lines.length} lines)\n*   **Key discussions:**\n${preview || '    *   Discussion captured.'}\n*   **Decisions made:**\n    *   **Verified simulated On-Device pipeline.**\n*   **Action items:**\n    *   Review generated Markdown file.\n*   **Follow-ups:**\n    *   Switch DEV Simulate to Real for hardware inference.`;
-      }
-      const reason = realAvail.reason || 'unknown';
-      const msg =
-        reason === 'setting_off'
-          ? 'On-Device AI is turned off in Chrome System Settings.'
-          : reason === 'low_disk'
-            ? 'At least 22 GB of free disk space is required for Gemini On-Device.'
-            : 'Gemini On-Device is unavailable on this device.';
-      const err = new Error(msg);
-      err.code = 'NANO_UNAVAILABLE';
-      err.reason = reason;
-      throw err;
-    }
-
-    const lm = getLanguageModelNamespace();
-    if (!lm) {
-      const err = new Error('Gemini On-Device is not supported on this device.');
-      err.code = 'NANO_UNAVAILABLE';
-      err.reason = 'unsupported';
-      throw err;
-    }
-
-    onProgress(
-      baseStartPct,
-      realAvail.status === 'downloadable' || realAvail.status === 'downloading'
-        ? 'Downloading Gemini Nano (On-Device)...'
-        : 'Loading Gemini Nano (On-Device)...'
-    );
-
-    let session = null;
-    try {
-      session = await createWindowNanoSession(lm, NANO_SYSTEM_PROMPT, (m) => {
-        try {
-          m.addEventListener('downloadprogress', (e) => {
-            const rawRatio =
-              typeof e.loaded === 'number'
-                ? e.total && e.total > 0
-                  ? e.loaded / e.total
-                  : e.loaded
-                : 0;
-            const dlPct = Math.min(100, Math.max(0, Math.round(rawRatio * 100)));
-            onProgress(6 + Math.round(dlPct * 0.30), `Downloading Gemini Nano (On-Device) (${dlPct}%)...`);
-          });
-        } catch (_) {}
       });
-
-      const fullTranscript = lines.join('\n');
-      const singlePassPrompt = buildNanoMinutesPrompt(fullTranscript, dateFormatted, false);
-
-      let inputTokens = Math.ceil(singlePassPrompt.length / 3.5);
-      const inputQuota =
-        session && typeof session.inputQuota === 'number' && session.inputQuota > 0
-          ? session.inputQuota
-          : 4096;
-      if (session && typeof session.measureInputUsage === 'function') {
-        try {
-          const measured = await session.measureInputUsage(singlePassPrompt);
-          if (typeof measured === 'number' && measured > 0) inputTokens = measured;
-        } catch (_) {}
-      }
-
-      if (inputTokens <= Math.floor(inputQuota * 0.70) && fullTranscript.length <= 12000) {
-        onProgress(42, 'Analyzing transcript on-device...');
-        try {
-          const minutesText = await promptWindowNanoStreaming(session, singlePassPrompt, (partial) => {
-            const ratio = Math.min(1, partial.length / 1500);
-            onProgress(45 + Math.round(ratio * 49), 'Drafting meeting notes...');
-          });
-          if (minutesText && minutesText.trim()) return minutesText;
-        } catch (singleErr) {
-          if (!singleErr || singleErr.name !== 'QuotaExceededError') throw singleErr;
-        }
-      }
-
-      if (session && typeof session.destroy === 'function') {
-        try { session.destroy(); } catch (_) {}
-        session = null;
-      }
-
-      const chunks = splitTranscriptChunksLocal(lines, 6500);
-      const chunkSummaries = [];
-      for (let i = 0; i < chunks.length; i++) {
-        const chunkStartPct = 36 + Math.round((i / chunks.length) * 36);
-        const chunkEndPct = 36 + Math.round(((i + 1) / chunks.length) * 36);
-        onProgress(chunkStartPct, `Summarizing transcript part ${i + 1} of ${chunks.length}...`);
-
-        let chunkSession = null;
-        try {
-          chunkSession = await createWindowNanoSession(lm, NANO_SYSTEM_PROMPT);
-          const chunkPrompt = `Extract concise bullet points from part ${i + 1} of ${chunks.length} of this meeting transcript. Include:
-- Attendees (and company if stated)
-- Key points discussed
-- Decisions made
-- Action items (owner and deadline)
-- Follow-ups
-
-Transcript Part ${i + 1}:
-${chunks[i]}`;
-          const summary = await promptWindowNanoStreaming(chunkSession, chunkPrompt, (partial) => {
-            const ratio = Math.min(1, partial.length / 700);
-            onProgress(
-              chunkStartPct + Math.round(ratio * (chunkEndPct - chunkStartPct)),
-              `Summarizing transcript part ${i + 1} of ${chunks.length}...`
-            );
-          });
-          chunkSummaries.push(`### Segment ${i + 1}\n${summary.trim()}`);
-        } finally {
-          if (chunkSession && typeof chunkSession.destroy === 'function') {
-            try { chunkSession.destroy(); } catch (_) {}
-          }
-        }
-      }
-
-      onProgress(74, 'Synthesizing final meeting notes...');
-      let synthSession = null;
-      try {
-        synthSession = await createWindowNanoSession(lm, NANO_SYSTEM_PROMPT);
-        const finalPrompt = buildNanoMinutesPrompt(chunkSummaries.join('\n\n'), dateFormatted, true);
-        const finalMinutes = await promptWindowNanoStreaming(synthSession, finalPrompt, (partial) => {
-          const ratio = Math.min(1, partial.length / 1500);
-          onProgress(76 + Math.round(ratio * 18), 'Drafting final meeting notes...');
-        });
-        if (!finalMinutes || !finalMinutes.trim()) {
-          throw new Error('Empty response from Gemini Nano (On-Device).');
-        }
-        return finalMinutes;
-      } finally {
-        if (synthSession && typeof synthSession.destroy === 'function') {
-          try { synthSession.destroy(); } catch (_) {}
-        }
-      }
-    } finally {
-      if (session && typeof session.destroy === 'function') {
-        try { session.destroy(); } catch (_) {}
-      }
-    }
+    });
   }
-
-  chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-    if (request.action === 'bridge_nano_check') {
-      checkNanoAvailabilityLocal(request.simMode || 'real').then(sendResponse);
-      return true;
-    }
-    if (request.action === 'bridge_nano_generate') {
-      runWindowNanoBridgeGenerate(
-        request.lines || [],
-        request.dateFormatted || '',
-        request.simMode || 'real',
-        (pct, stage) => {
-          if (request.channel) {
-            chrome.runtime.sendMessage(
-              { action: 'bridge_nano_progress', channel: request.channel, pct, stage },
-              () => {
-                void chrome.runtime.lastError;
-              }
-            );
-          }
-        }
-      )
-        .then((minutesText) => sendResponse({ ok: true, minutesText }))
-        .catch((err) =>
-          sendResponse({
-            ok: false,
-            error: err.message || 'Generation failed.',
-            code: err.code || '',
-            reason: err.reason || ''
-          })
-        );
-      return true;
-    }
-    return false;
-  });
 
   // [DEV-ONLY] Transcript Upload & Summarize Tester
-  function applyDevTranscriptProgress(progressState) {
-    if (!devTranscriptProgressWrap || !progressState) return;
-    if (!progressState.active) {
-      if (progressState.progress === 100) {
-        if (devTranscriptProgressFill) devTranscriptProgressFill.style.width = '100%';
-        if (devTranscriptStage) devTranscriptStage.textContent = 'Completed';
-        if (devTranscriptPct) devTranscriptPct.textContent = '100%';
-      }
-      return;
-    }
-    const pct = Math.max(0, Math.min(100, Math.round(progressState.progress || 0)));
+  function applyDevTranscriptProgress(pct, stage) {
+    if (!devTranscriptProgressWrap) return;
+    const clamped = Math.max(0, Math.min(100, Math.round(pct || 0)));
     devTranscriptProgressWrap.style.display = 'block';
-    if (devTranscriptProgressFill) devTranscriptProgressFill.style.width = `${Math.max(4, pct)}%`;
-    if (devTranscriptStage) devTranscriptStage.textContent = progressState.stage || 'Summarizing...';
-    if (devTranscriptPct) devTranscriptPct.textContent = `${pct}%`;
+    if (devTranscriptProgressFill) devTranscriptProgressFill.style.width = `${Math.max(4, clamped)}%`;
+    if (devTranscriptStage) devTranscriptStage.textContent = stage || 'Summarizing...';
+    if (devTranscriptPct) devTranscriptPct.textContent = `${clamped}%`;
   }
 
   function deriveTitleFromFilename(fileName) {
@@ -689,50 +352,63 @@ ${chunks[i]}`;
 
       devUploadTranscriptBtn.disabled = true;
       devUploadTranscriptBtn.textContent = 'Summarizing...';
-      if (devTranscriptProgressWrap) devTranscriptProgressWrap.style.display = 'block';
-      if (devTranscriptProgressFill) devTranscriptProgressFill.style.width = '5%';
-      if (devTranscriptStage) devTranscriptStage.textContent = 'Preparing Gemini On-Device...';
-      if (devTranscriptPct) devTranscriptPct.textContent = '5%';
+      applyDevTranscriptProgress(5, 'Preparing Gemma 4 E2B...');
 
-      chrome.runtime.sendMessage(
-        {
-          action: 'dev_test_nano_transcript',
+      const startedAt = Date.now();
+      const dateObj = new Date();
+      const dateFormatted =
+        dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) +
+        ' at ' +
+        dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) +
+        ' UTC';
+
+      try {
+        let minutesText = await generateNotesWithGemma(
           lines,
-          meetingTitle: derivedTitle,
-          simMode: currentSimMode
-        },
-        (res) => {
-          devUploadTranscriptBtn.disabled = false;
-          devUploadTranscriptBtn.textContent = 'Upload Transcript';
-          if (chrome.runtime.lastError || !res || res.status !== 'done') {
-            if (devTranscriptProgressWrap) devTranscriptProgressWrap.style.display = 'none';
-            const errMsg =
-              (res && res.error) ||
-              (chrome.runtime.lastError && chrome.runtime.lastError.message) ||
-              'Failed to generate summary.';
-            if (devTranscriptError) {
-              devTranscriptError.textContent = errMsg;
-              devTranscriptError.style.display = 'block';
-            }
-            if (res && res.errorCode === 'nano_unavailable') {
-              applyAiModeUI('nano');
-            }
-            return;
-          }
+          dateFormatted,
+          currentSimMode,
+          (pct, stage) => applyDevTranscriptProgress(pct, stage)
+        );
 
-          if (devTranscriptProgressWrap) devTranscriptProgressWrap.style.display = 'none';
-          const secs = ((res.elapsedMs || 0) / 1000).toFixed(1);
-          if (devSummaryHeader) {
-            devSummaryHeader.textContent = `Saved as ${res.filename} (${secs}s)`;
-          }
-          if (devTranscriptOutput) {
-            devTranscriptOutput.textContent = res.summary || '';
-          }
-          if (devSummaryBox) devSummaryBox.style.display = 'block';
-          if (devCopySummaryBtn) devCopySummaryBtn.style.display = 'inline-flex';
-          if (devClearSummaryBtn) devClearSummaryBtn.style.display = 'inline-flex';
+        const hasTitle = derivedTitle && derivedTitle.toLowerCase() !== 'meeting';
+        if (!minutesText.trimStart().startsWith('#')) {
+          const headingTitle = hasTitle ? derivedTitle : 'Meeting Notes';
+          minutesText = `# ${headingTitle}\n\n${minutesText.trimStart()}`;
         }
-      );
+
+        applyDevTranscriptProgress(96, 'Saving Markdown file...');
+        const sanitizedTitle = sanitizeFilenameTitle(hasTitle ? derivedTitle : 'meeting', 'meeting');
+        const filename = `${sanitizedTitle}_${formatShortDate(dateObj)}.md`;
+        await downloadMarkdownFile(minutesText, filename);
+
+        if (devTranscriptProgressWrap) devTranscriptProgressWrap.style.display = 'none';
+        const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
+        if (devSummaryHeader) {
+          devSummaryHeader.textContent = `Saved as ${filename} (${secs}s)`;
+        }
+        if (devTranscriptOutput) {
+          devTranscriptOutput.textContent = minutesText;
+        }
+        if (devSummaryBox) devSummaryBox.style.display = 'block';
+        if (devCopySummaryBtn) devCopySummaryBtn.style.display = 'inline-flex';
+        if (devClearSummaryBtn) devClearSummaryBtn.style.display = 'inline-flex';
+
+        if (currentAiMode === 'gemma') {
+          refreshNanoStatusBox();
+        }
+      } catch (err) {
+        if (devTranscriptProgressWrap) devTranscriptProgressWrap.style.display = 'none';
+        if (devTranscriptError) {
+          devTranscriptError.textContent = err.message || 'Failed to generate summary.';
+          devTranscriptError.style.display = 'block';
+        }
+        if (err && err.code === 'NANO_UNAVAILABLE') {
+          applyAiModeUI('gemma');
+        }
+      } finally {
+        devUploadTranscriptBtn.disabled = false;
+        devUploadTranscriptBtn.textContent = 'Upload Transcript';
+      }
     });
   }
 
@@ -770,50 +446,21 @@ ${chunks[i]}`;
     }
   }
 
-  function getUnavailableCardMarkup(reason) {
-    if (reason === 'setting_off') {
-      return (
-        '<div class="nano-box-title">On-Device AI is turned off</div>' +
-        '<div>Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a>.</div>' +
-        '<div class="nano-actions">' +
-        '  <button type="button" class="inline-btn outline-primary" data-chrome-url="chrome://settings/system">Open System Settings</button>' +
-        '  <button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check</button>' +
-        '</div>'
-      );
-    }
-    if (reason === 'low_disk') {
-      return (
-        '<div class="nano-box-title">Not enough disk space</div>' +
-        '<div>At least <strong>22 GB</strong> of free disk space is required for Gemini On-Device.</div>' +
-        '<div class="nano-actions">' +
-        '  <button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check</button>' +
-        '</div>'
-      );
-    }
-    if (reason === 'unsupported') {
-      return (
-        '<div class="nano-box-title">Not supported on this device</div>' +
-        '<div>Update Chrome at <a href="#" data-chrome-url="chrome://settings/help">chrome://settings/help</a> or select <strong>Gemini Flash</strong> above.</div>' +
-        '<div class="nano-actions">' +
-        '  <button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check</button>' +
-        '</div>'
-      );
-    }
+  function getUnavailableCardMarkup() {
     return (
-      '<div class="nano-box-title">Gemini On-Device is unavailable</div>' +
-      '<div>Turn on <strong>On-device AI</strong> in <a href="#" data-chrome-url="chrome://settings/system">Chrome System Settings</a> and ensure <strong>22 GB</strong> of free disk space.</div>' +
+      '<div class="nano-box-title">Not enough disk space</div>' +
+      '<div>At least <strong>3 GB</strong> of free disk space is required for Gemma On-Device.</div>' +
       '<div class="nano-actions">' +
-      '  <button type="button" class="inline-btn outline-primary" data-chrome-url="chrome://settings/system">Open System Settings</button>' +
       '  <button type="button" id="recheckNanoSettingsBtn" class="inline-btn secondary">Re-check</button>' +
       '</div>'
     );
   }
 
   async function refreshNanoStatusBox() {
-    if (!nanoStatusBox || currentAiMode !== 'nano') return;
+    if (!nanoStatusBox || currentAiMode !== 'gemma') return;
 
-    const avail = await checkNanoAvailabilityLocal(currentSimMode);
-    if (currentAiMode !== 'nano') return;
+    const avail = await checkGemmaAvailability(currentSimMode);
+    if (currentAiMode !== 'gemma') return;
 
     nanoStatusBox.className = 'nano-box';
     nanoStatusBox.style.display = 'block';
@@ -821,7 +468,7 @@ ${chunks[i]}`;
     if (avail.status === 'available') {
       nanoStatusBox.classList.add('ready');
       nanoStatusBox.innerHTML =
-        '<div class="nano-box-title">Gemini Nano (On-Device) is ready</div>' +
+        '<div class="nano-box-title">Gemma 4 E2B (On-Device) is ready</div>' +
         '<div>Meetings will be summarized locally on your device.</div>';
       return;
     }
@@ -829,7 +476,7 @@ ${chunks[i]}`;
     if (avail.status === 'downloadable' || avail.status === 'downloading') {
       nanoStatusBox.classList.add('download');
       nanoStatusBox.innerHTML =
-        '<button type="button" id="downloadNanoBtn" class="download-model-btn">Download On-Device Model</button>' +
+        '<button type="button" id="downloadNanoBtn" class="download-model-btn">Download Gemma 4 E2B (~2.3 GB)</button>' +
         '<div id="nanoDownloadProgressWrap" style="display: none; margin-top: 8px;">' +
         '  <div class="progress-track"><div id="nanoDownloadFill" class="progress-fill"></div></div>' +
         '  <div id="nanoDownloadLabel" style="font-size: 11.5px; color: var(--text-muted); margin-top: 5px;">Starting download...</div>' +
@@ -840,68 +487,62 @@ ${chunks[i]}`;
       const fill = document.getElementById('nanoDownloadFill');
       const label = document.getElementById('nanoDownloadLabel');
 
-      if (dlBtn) {
-        dlBtn.addEventListener('click', async () => {
+      const attachRealDownload = async () => {
+        if (dlBtn) {
           dlBtn.disabled = true;
           dlBtn.textContent = 'Downloading...';
-          if (wrap) wrap.style.display = 'block';
+        }
+        if (wrap) wrap.style.display = 'block';
+        try {
+          await downloadGemmaModel(({ loaded, total, pct }) => {
+            if (fill) fill.style.width = `${Math.max(4, pct)}%`;
+            if (label) {
+              label.style.color = 'var(--text-muted)';
+              label.textContent = `Downloading Gemma 4 E2B — ${formatBytesGB(loaded)} / ${formatBytesGB(total)} (${pct}%)`;
+            }
+          });
+          refreshNanoStatusBox();
+        } catch (err) {
+          if (dlBtn) {
+            dlBtn.disabled = false;
+            dlBtn.textContent = 'Retry Download';
+          }
+          if (label) {
+            label.style.color = '#d32f2f';
+            label.textContent = `Download failed: ${err.message || 'Check network or disk space.'}`;
+          }
+        }
+      };
 
+      if (avail.status === 'downloading') {
+        attachRealDownload();
+        return;
+      }
+
+      if (dlBtn) {
+        dlBtn.addEventListener('click', async () => {
           if (currentSimMode === 'downloadable') {
+            dlBtn.disabled = true;
+            dlBtn.textContent = 'Downloading...';
+            if (wrap) wrap.style.display = 'block';
             for (const pct of [5, 22, 46, 71, 90, 100]) {
               if (fill) fill.style.width = `${pct}%`;
-              if (label) label.textContent = `Downloading model (${pct}%)...`;
-              await new Promise((r) => setTimeout(r, 420));
+              if (label) label.textContent = `Downloading Gemma 4 E2B (${pct}%)...`;
+              await new Promise((r) => setTimeout(r, 380));
             }
             dlBtn.textContent = 'Downloaded (Simulated)';
             if (label) label.textContent = 'Simulated download complete.';
             return;
           }
-
-          const lm = getLanguageModelNamespace();
-          if (!lm || typeof lm.create !== 'function') {
-            refreshNanoStatusBox();
-            return;
-          }
-
-          try {
-            const session = await lm.create({
-              expectedInputs: [{ type: 'text', languages: ['en'] }],
-              expectedOutputs: [{ type: 'text', languages: ['en'] }],
-              monitor(m) {
-                m.addEventListener('downloadprogress', (e) => {
-                  const ratio =
-                    typeof e.loaded === 'number'
-                      ? e.total && e.total > 0
-                        ? e.loaded / e.total
-                        : e.loaded
-                      : 0;
-                  const pct = Math.min(100, Math.max(0, Math.round(ratio * 100)));
-                  if (fill) fill.style.width = `${Math.max(4, pct)}%`;
-                  if (label) label.textContent = `Downloading model (${pct}%)...`;
-                });
-              }
-            });
-            if (session && typeof session.destroy === 'function') {
-              session.destroy();
-            }
-            refreshNanoStatusBox();
-          } catch (err) {
-            dlBtn.disabled = false;
-            dlBtn.textContent = 'Retry Download';
-            if (label) {
-              label.style.color = '#d32f2f';
-              label.textContent = `Download failed: ${err.message || 'Check System Settings or disk space.'}`;
-            }
-          }
+          await attachRealDownload();
         });
       }
       return;
     }
 
     nanoStatusBox.classList.add('unavailable');
-    nanoStatusBox.innerHTML = getUnavailableCardMarkup(avail.reason);
+    nanoStatusBox.innerHTML = getUnavailableCardMarkup();
 
-    bindChromeUrls(nanoStatusBox);
     const recheckBtn = document.getElementById('recheckNanoSettingsBtn');
     if (recheckBtn) {
       recheckBtn.addEventListener('click', async () => {
@@ -914,19 +555,19 @@ ${chunks[i]}`;
   }
 
   window.addEventListener('focus', () => {
-    if (currentAiMode === 'nano') {
+    if (currentAiMode === 'gemma') {
       refreshNanoStatusBox();
     }
   });
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && currentAiMode === 'nano') {
+    if (!document.hidden && currentAiMode === 'gemma') {
       refreshNanoStatusBox();
     }
   });
 
   function getTopStableFlashModels(models) {
     const validModels = (models || []).filter(
-      m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent")
+      (m) => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent')
     );
 
     const familyMap = new Map();
@@ -954,7 +595,7 @@ ${chunks[i]}`;
       return b.minor - a.minor;
     });
 
-    return sorted.slice(0, 2).map(entry => entry.model);
+    return sorted.slice(0, 2).map((entry) => entry.model);
   }
 
   function updateHistoryRegenCardProgress(progressState) {
@@ -1092,7 +733,7 @@ ${chunks[i]}`;
                 statusEl.style.color = '#d32f2f';
               }
               if (res && res.errorCode === 'nano_unavailable') {
-                applyAiModeUI('nano');
+                applyAiModeUI('gemma');
               }
             }
           }
@@ -1211,7 +852,7 @@ ${chunks[i]}`;
       'devNanoSimMode'
     ],
     (result) => {
-      renderDevSimPills(result.devNanoSimMode || 'real');
+      renderDevSimPills(result.devNanoSimMode);
 
       const effectiveMode = getEffectiveAiMode(result);
 
@@ -1236,12 +877,11 @@ ${chunks[i]}`;
       if (recent.length === 0 && Array.isArray(result.savedTranscript) && result.savedTranscript.length > 0) {
         const ts = result.startTime || Date.now();
         const dateObj = new Date(ts);
-        const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
         const entry = {
           id: String(ts),
           title: result.meetingTitle || 'Meeting',
           teamsTitle: result.meetingTitle || 'Meeting',
-          shortDate: `${months[dateObj.getMonth()]}${dateObj.getDate()}-${dateObj.getFullYear()}`,
+          shortDate: formatShortDate(dateObj),
           displayDate: dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
           timestamp: ts,
           lines: result.savedTranscript
@@ -1261,12 +901,9 @@ ${chunks[i]}`;
     if (changes.historyRegenProgress && changes.historyRegenProgress.newValue) {
       updateHistoryRegenCardProgress(changes.historyRegenProgress.newValue);
     }
-    if (changes.devTranscriptTestProgress && changes.devTranscriptTestProgress.newValue) {
-      applyDevTranscriptProgress(changes.devTranscriptTestProgress.newValue);
-    }
     if (changes.devNanoSimMode) {
-      renderDevSimPills(changes.devNanoSimMode.newValue || 'real');
-      if (currentAiMode === 'nano') {
+      renderDevSimPills(changes.devNanoSimMode.newValue);
+      if (currentAiMode === 'gemma') {
         refreshNanoStatusBox();
       }
     }
@@ -1290,11 +927,11 @@ ${chunks[i]}`;
   });
 
   async function loadCloudModels(apiKey, selectedVal, userSelectedModel) {
-    statusEl.innerText = "Loading available cloud models...";
-    statusEl.style.color = "#5B5FC7";
+    statusEl.innerText = 'Loading available cloud models...';
+    statusEl.style.color = '#5B5FC7';
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-      if (!response.ok) throw new Error("Invalid API key or network error");
+      if (!response.ok) throw new Error('Invalid API key or network error');
       const data = await response.json();
 
       lastApiKeyInvalid = false;
@@ -1302,10 +939,10 @@ ${chunks[i]}`;
 
       modelSelect.innerHTML = '';
       const finalModels = getTopStableFlashModels(data.models);
-      const validIds = finalModels.map(m => m.name.replace('models/', ''));
+      const validIds = finalModels.map((m) => m.name.replace('models/', ''));
       const defaultModelId = validIds.length >= 2 ? validIds[1] : (validIds[0] || 'custom');
 
-      finalModels.forEach(m => {
+      finalModels.forEach((m) => {
         const modelId = m.name.replace('models/', '');
         const option = document.createElement('option');
         option.value = modelId;
@@ -1326,12 +963,12 @@ ${chunks[i]}`;
       }
 
       toggleCustomModelVisibility();
-      statusEl.innerText = "";
-    } catch (e) {
+      statusEl.innerText = '';
+    } catch (_) {
       lastApiKeyInvalid = true;
       updateNoKeyCalloutVisibility();
-      statusEl.innerText = "Invalid API key. Check your key or choose Gemini Nano (On-Device) above.";
-      statusEl.style.color = "#d32f2f";
+      statusEl.innerText = 'Invalid API key. Check your key or select Gemma On-Device above.';
+      statusEl.style.color = '#d32f2f';
       modelSelect.innerHTML = '<option value="">Invalid API key</option>';
     }
   }
@@ -1350,27 +987,27 @@ ${chunks[i]}`;
     const titleSource = titleSourceSelect ? titleSourceSelect.value : 'ai';
 
     if (currentAiMode === 'unconfigured') {
-      statusEl.innerText = "Please choose Gemini On-Device or Gemini Flash above.";
-      statusEl.style.color = "#d32f2f";
+      statusEl.innerText = 'Please choose Gemma On-Device or Gemini Flash above.';
+      statusEl.style.color = '#d32f2f';
       return;
     }
 
-    if (currentAiMode === 'nano') {
-      statusEl.innerText = "Saving settings...";
-      statusEl.style.color = "#5B5FC7";
+    if (currentAiMode === 'gemma') {
+      statusEl.innerText = 'Saving settings...';
+      statusEl.style.color = '#5B5FC7';
       chrome.storage.local.set(
         {
-          aiMode: 'nano',
-          selectedModel: GEMINI_NANO_MODEL_ID,
-          modelSelectVal: GEMINI_NANO_MODEL_ID,
+          aiMode: 'gemma',
+          selectedModel: GEMMA_MODEL_ID,
+          modelSelectVal: GEMMA_MODEL_ID,
           userSelectedModel: true,
           onboardingCompleted: true
         },
         () => {
-          statusEl.innerText = "Settings saved! Using Gemini On-Device.";
-          statusEl.style.color = "#2e7d32";
+          statusEl.innerText = 'Settings saved! Using Gemma On-Device.';
+          statusEl.style.color = '#2e7d32';
           setTimeout(() => {
-            statusEl.innerText = "";
+            statusEl.innerText = '';
           }, 3000);
         }
       );
@@ -1385,48 +1022,54 @@ ${chunks[i]}`;
     if (!apiKey) {
       updateNoKeyCalloutVisibility();
       statusEl.innerText =
-        "Please enter a Google AI Studio API key, or choose Gemini Nano (On-Device) if you don't have one.";
-      statusEl.style.color = "#d32f2f";
+        "Please enter a Google AI Studio API key, or select Gemma On-Device if you don't have one.";
+      statusEl.style.color = '#d32f2f';
       return;
     }
 
     if (!modelSelectVal) {
-      statusEl.innerText = "Please enter a valid API key to select a cloud model, or choose Gemini Nano (On-Device).";
-      statusEl.style.color = "#d32f2f";
+      statusEl.innerText = 'Please enter a valid API key to select a cloud model, or select Gemma On-Device.';
+      statusEl.style.color = '#d32f2f';
       return;
     }
 
     let selectedModel = modelSelectVal;
     if (modelSelectVal === 'custom') {
       if (!customModelVal) {
-        statusEl.innerText = "Error: Please enter a Custom Model ID.";
-        statusEl.style.color = "#d32f2f";
+        statusEl.innerText = 'Error: Please enter a Custom Model ID.';
+        statusEl.style.color = '#d32f2f';
         return;
       }
       selectedModel = customModelVal;
     }
 
-    statusEl.innerText = "Saving settings...";
-    statusEl.style.color = "#5B5FC7";
+    statusEl.innerText = 'Saving settings...';
+    statusEl.style.color = '#5B5FC7';
 
     chrome.storage.local.set(
       {
-        apiKey: apiKey,
+        apiKey,
         aiMode: 'cloud',
-        selectedModel: selectedModel,
-        modelSelectVal: modelSelectVal,
-        customModelVal: customModelVal,
+        selectedModel,
+        modelSelectVal,
+        customModelVal,
         userSelectedModel: true,
         onboardingCompleted: true,
-        titleSource: titleSource
+        titleSource
       },
       () => {
-        statusEl.innerText = "Settings saved successfully!";
-        statusEl.style.color = "#2e7d32";
+        statusEl.innerText = 'Settings saved successfully!';
+        statusEl.style.color = '#2e7d32';
         setTimeout(() => {
-          statusEl.innerText = "";
+          statusEl.innerText = '';
         }, 3000);
       }
     );
   });
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initOptionsPage);
+} else {
+  initOptionsPage();
+}

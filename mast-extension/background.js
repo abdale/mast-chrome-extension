@@ -1,7 +1,12 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9.3';
-const GEMINI_NANO_MODEL_ID = 'gemini-nano';
+const WORKER_BUILD_VERSION = '2.9.4';
+const GEMMA_MODEL_ID = 'gemma-4-e2b-it';
+const LEGACY_NANO_MODEL_ID = 'gemini-nano';
+const GEMMA_MODEL_URL =
+  'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q3_K_S.gguf';
+const MIN_FREE_DISK_BYTES = 3 * 1024 * 1024 * 1024; // 3 GB
+
 let isGeneratingInMemory = false;
 const activeBridgeProgressHandlers = new Map();
 
@@ -84,86 +89,57 @@ function getDefaultFlashModelId(topFlashModels) {
   return preferred.name.replace('models/', '');
 }
 
-function getLanguageModelNamespace() {
-  if (typeof LanguageModel !== 'undefined') return LanguageModel;
-  if (typeof self !== 'undefined' && self.LanguageModel) return self.LanguageModel;
-  if (typeof self !== 'undefined' && self.ai && self.ai.languageModel) return self.ai.languageModel;
-  return null;
+function normalizeSimMode(rawMode) {
+  if (rawMode === 'low_disk' || rawMode === 'downloadable') return rawMode;
+  return 'real';
 }
 
-async function diagnoseUnavailableReason(lm) {
-  if (!lm) return 'unsupported';
-
-  if (typeof lm.create === 'function') {
-    try {
-      const probeSession = await lm.create({
-        expectedInputs: [{ type: 'text', languages: ['en'] }],
-        expectedOutputs: [{ type: 'text', languages: ['en'] }]
-      }).catch(async (firstErr) => {
-        if (firstErr && firstErr.name === 'TypeError') {
-          return await lm.create();
-        }
-        throw firstErr;
-      });
-      if (probeSession && typeof probeSession.destroy === 'function') {
-        probeSession.destroy();
-      }
-    } catch (err) {
-      const msg = String((err && err.message) || '');
-      if (/enough\s+(disk\s+)?space|insufficient.*space|disk\s+space/i.test(msg)) {
-        return 'low_disk';
-      }
-      if (/disabled|not\s+enabled|feature\s+flag|service\s+is\s+not\s+running|required\s+configuration|on-device\s+ai|policy/i.test(msg)) {
-        return 'setting_off';
-      }
-      if (/gpu|not\s+eligible|unsupported/i.test(msg)) {
-        return 'unsupported';
-      }
-    }
-  }
-
+async function isGemmaCachedInOPFS() {
   try {
-    if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.estimate === 'function') {
-      const est = await navigator.storage.estimate();
-      if (est && typeof est.quota === 'number' && est.quota > 0) {
-        const remaining = est.quota - (est.usage || 0);
-        if (remaining < 22 * 1024 * 1024 * 1024) {
-          return 'low_disk';
-        }
-      }
+    if (typeof navigator === 'undefined' || !navigator.storage || typeof navigator.storage.getDirectory !== 'function') {
+      return false;
     }
-  } catch (_) {}
-
-  return 'unknown';
+    const root = await navigator.storage.getDirectory();
+    const cacheDir = await root.getDirectoryHandle('cache', { create: false });
+    const hashBuf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(GEMMA_MODEL_URL));
+    const hashHex = Array.from(new Uint8Array(hashBuf))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    const fileKey = `${hashHex}_gemma-4-E2B-it-Q3_K_S.gguf`;
+    const fileHandle = await cacheDir.getFileHandle(fileKey, { create: false });
+    const file = await fileHandle.getFile();
+    if (!file || file.size < 2000000000) return false;
+    try {
+      const metaHandle = await cacheDir.getFileHandle(`__metadata__${fileKey}`, { create: false });
+      const metaFile = await metaHandle.getFile();
+      const meta = JSON.parse(await metaFile.text());
+      if (meta && meta.originalSize && file.size !== meta.originalSize) return false;
+    } catch (_) {}
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
-function getNanoUnavailableErrorMessage(reason) {
-  if (reason === 'setting_off') {
-    return 'On-Device AI is turned off in Chrome System Settings.';
-  }
+function getGemmaUnavailableErrorMessage(reason) {
   if (reason === 'low_disk') {
-    return 'At least 22 GB of free disk space is required for Gemini On-Device.';
+    return 'At least 3 GB of free disk space is required for Gemma On-Device.';
   }
-  if (reason === 'unsupported') {
-    return 'Gemini On-Device is not supported on this device.';
-  }
-  return 'Gemini On-Device is unavailable. Check On-device AI in Chrome System Settings.';
+  return 'Gemma On-Device is unavailable in this browser.';
 }
 
-async function checkGeminiNanoAvailability(simModeOverride = null) {
-  let simMode = simModeOverride;
-  if (!simMode) {
+async function checkGemmaAvailability(simModeOverride = null) {
+  let rawMode = simModeOverride;
+  if (!rawMode) {
     try {
       const stored = await chrome.storage.local.get(['devNanoSimMode']);
-      simMode = stored.devNanoSimMode || 'real';
+      rawMode = stored.devNanoSimMode || 'real';
     } catch (_) {
-      simMode = 'real';
+      rawMode = 'real';
     }
   }
+  const simMode = normalizeSimMode(rawMode);
 
-  if (simMode === 'setting_off') {
-    return { status: 'unavailable', simulated: true, reason: 'setting_off' };
-  }
   if (simMode === 'low_disk') {
     return { status: 'unavailable', simulated: true, reason: 'low_disk' };
   }
@@ -171,77 +147,35 @@ async function checkGeminiNanoAvailability(simModeOverride = null) {
     return { status: 'downloadable', simulated: true, reason: 'simulated_download' };
   }
 
-  const lm = getLanguageModelNamespace();
-  if (!lm) {
-    const bridged = await new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage({ action: 'bridge_nano_check', simMode }, (res) => {
-          if (chrome.runtime.lastError || !res) {
-            resolve(null);
-          } else {
-            resolve(res);
-          }
-        });
-      } catch (_) {
-        resolve(null);
-      }
-    });
-    if (bridged && bridged.status) {
-      return bridged;
-    }
-    return { status: 'unavailable', simulated: false, reason: 'unsupported' };
+  if (await isGemmaCachedInOPFS()) {
+    return { status: 'available', simulated: false, reason: 'ok' };
   }
 
   try {
-    if (typeof lm.availability === 'function') {
-      let rawStatus;
-      try {
-        rawStatus = await lm.availability({
-          expectedInputs: [{ type: 'text', languages: ['en'] }],
-          expectedOutputs: [{ type: 'text', languages: ['en'] }]
-        });
-      } catch (_) {
-        rawStatus = await lm.availability();
-      }
-      if (rawStatus === 'available' || rawStatus === 'readily') {
-        return { status: 'available', simulated: false, reason: 'ok' };
-      }
-      if (rawStatus === 'downloadable' || rawStatus === 'after-download') {
-        return { status: 'downloadable', simulated: false, reason: 'needs_download' };
-      }
-      if (rawStatus === 'downloading') {
-        return { status: 'downloading', simulated: false, reason: 'downloading' };
-      }
-      const reason = await diagnoseUnavailableReason(lm);
-      return { status: 'unavailable', simulated: false, reason };
-    }
-
-    if (typeof lm.capabilities === 'function') {
-      const caps = await lm.capabilities();
-      const avail = caps && caps.available;
-      if (avail === 'readily') {
-        return { status: 'available', simulated: false, reason: 'ok' };
-      }
-      if (avail === 'after-download') {
-        return { status: 'downloadable', simulated: false, reason: 'needs_download' };
+    if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.estimate === 'function') {
+      const est = await navigator.storage.estimate();
+      if (est && typeof est.quota === 'number' && est.quota > 0) {
+        const remaining = est.quota - (est.usage || 0);
+        if (remaining < MIN_FREE_DISK_BYTES) {
+          return { status: 'unavailable', simulated: false, reason: 'low_disk' };
+        }
       }
     }
-  } catch (err) {
-    console.warn('mast: Gemini Nano availability check failed:', err);
-  }
+  } catch (_) {}
 
-  const reason = await diagnoseUnavailableReason(lm);
-  return { status: 'unavailable', simulated: false, reason };
+  return { status: 'downloadable', simulated: false, reason: 'needs_download' };
 }
 
 function getEffectiveAiMode(storedState = {}) {
-  if (storedState.aiMode === 'nano') return 'nano';
+  if (storedState.aiMode === 'gemma' || storedState.aiMode === 'nano') return 'gemma';
   if (storedState.aiMode === 'cloud') return 'cloud';
   if (
-    storedState.modelSelectVal === GEMINI_NANO_MODEL_ID ||
-    storedState.selectedModel === GEMINI_NANO_MODEL_ID
+    storedState.modelSelectVal === GEMMA_MODEL_ID ||
+    storedState.selectedModel === GEMMA_MODEL_ID ||
+    storedState.modelSelectVal === LEGACY_NANO_MODEL_ID ||
+    storedState.selectedModel === LEGACY_NANO_MODEL_ID
   ) {
-    return 'nano';
+    return 'gemma';
   }
   if (
     storedState.onboardingCompleted !== false &&
@@ -255,8 +189,8 @@ function getEffectiveAiMode(storedState = {}) {
 
 async function resolveActiveModel(apiKey, storedState = {}) {
   const mode = getEffectiveAiMode(storedState);
-  if (mode === 'nano') {
-    return GEMINI_NANO_MODEL_ID;
+  if (mode === 'gemma') {
+    return GEMMA_MODEL_ID;
   }
   if (mode === 'unconfigured') {
     return '';
@@ -421,27 +355,7 @@ async function downloadTranscriptIfNeeded(forceDownload = false) {
   return true;
 }
 
-const NANO_SYSTEM_PROMPT =
-  'You are an expert meeting minutes generator. Produce clear, accurate, concise Markdown meeting notes strictly grounded in the provided transcript. Never invent facts, attendees, or action items.';
-
-function buildMinutesPrompt(sourceText, dateFormatted, isFromChunkSummaries = false, includeAiTitle = true) {
-  const sourceLabel = isFromChunkSummaries ? 'Segment Summaries' : 'Transcript';
-  if (!includeAiTitle) {
-    return `Generate concise Markdown meeting minutes for a meeting on ${dateFormatted} using these exact top-level bullet headings (do not output a # Title section):
-*   **Date, time, and attendees:**
-    *   [Date], at [Time from transcript]
-    *   Attendees: [Name] ([Company if clear from transcript, else omit company])
-*   **Meeting purpose:** Brief goal of the meeting.
-*   **Agenda items:** Key agenda sections.
-*   **Key discussions:** Concise summary of main points discussed.
-*   **Decisions made:** State decisions clearly in **bold**.
-*   **Action items:** Owner, action, and deadline if stated.
-*   **Follow-ups:** Unresolved or deferred topics.
-
-${sourceLabel}:
-${sourceText}`;
-  }
-
+function buildMinutesPrompt(sourceText, dateFormatted) {
   return `## Role
 
 You are an expert meeting minutes generator. Your task is to process provided information about a meeting, such as a transcript, recording summary, or rough human notes, and generate crisp, well-structured meeting notes following a specific format.
@@ -466,220 +380,123 @@ Your output must be a well-structured set of meeting minutes that perfectly adhe
 
 Note: The meeting took place on ${dateFormatted}.
 
-${sourceLabel}:
+Transcript:
 ${sourceText}`;
 }
 
-async function createNanoSession(lm, systemPrompt, monitorCb = null) {
-  let temperature = 0.2;
-  let topK = 3;
+async function findOpenOptionsTabId() {
   try {
-    if (typeof lm.params === 'function') {
-      const params = await lm.params();
-      if (params) {
-        if (typeof params.maxTopK === 'number' && params.maxTopK >= 1) {
-          topK = Math.min(3, Math.max(1, Math.floor(params.maxTopK)));
-        }
-        if (typeof params.maxTemperature === 'number') {
-          temperature = Math.min(0.2, params.maxTemperature);
-        }
-      }
+    if (typeof chrome.runtime.getContexts === 'function') {
+      const optionsPrefix = chrome.runtime.getURL('options.html');
+      const contexts = await chrome.runtime.getContexts({ contextTypes: ['TAB'] });
+      const match = (contexts || []).find(
+        (c) =>
+          c.documentUrl &&
+          c.documentUrl.startsWith(optionsPrefix) &&
+          typeof c.tabId === 'number' &&
+          c.tabId >= 0
+      );
+      if (match) return match.tabId;
     }
   } catch (_) {}
-
-  const baseOpts = {
-    temperature,
-    topK,
-    initialPrompts: [{ role: 'system', content: systemPrompt }]
-  };
-  if (monitorCb) {
-    baseOpts.monitor = monitorCb;
-  }
-
-  try {
-    return await lm.create({
-      ...baseOpts,
-      expectedInputs: [{ type: 'text', languages: ['en'] }],
-      expectedOutputs: [{ type: 'text', languages: ['en'] }]
-    });
-  } catch (_) {
-    try {
-      return await lm.create(baseOpts);
-    } catch (_) {
-      const legacyOpts = { systemPrompt };
-      if (monitorCb) legacyOpts.monitor = monitorCb;
-      return await lm.create(legacyOpts);
-    }
-  }
+  return null;
 }
 
-async function promptNanoStreaming(session, promptText, onProgressText) {
-  if (typeof session.promptStreaming === 'function') {
-    const stream = session.promptStreaming(promptText);
-    let accumulated = '';
-    for await (const chunk of stream) {
-      const piece = typeof chunk === 'string' ? chunk : String(chunk || '');
-      if (!piece) continue;
-      if (accumulated.length > 10 && piece.startsWith(accumulated)) {
-        accumulated = piece;
-      } else {
-        accumulated += piece;
-      }
-      if (onProgressText) {
-        onProgressText(accumulated);
-      }
-    }
-    if (accumulated.trim()) {
-      return accumulated;
-    }
-  }
-  const full = await session.prompt(promptText);
-  if (onProgressText) {
-    onProgressText(full || '');
-  }
-  return full || '';
-}
-
-function splitTranscriptIntoChunks(lines, maxCharsPerChunk = 6500) {
-  const chunks = [];
-  let current = [];
-  let currentLen = 0;
-
-  for (const rawLine of lines) {
-    const line = String(rawLine || '');
-    if (line.length > maxCharsPerChunk) {
-      if (current.length > 0) {
-        chunks.push(current.join('\n'));
-        current = [];
-        currentLen = 0;
-      }
-      for (let i = 0; i < line.length; i += maxCharsPerChunk) {
-        chunks.push(line.slice(i, i + maxCharsPerChunk));
-      }
-      continue;
-    }
-    if (currentLen + line.length + 1 > maxCharsPerChunk && current.length > 0) {
-      chunks.push(current.join('\n'));
-      current = [line];
-      currentLen = line.length;
-    } else {
-      current.push(line);
-      currentLen += line.length + 1;
-    }
+async function generateNotesWithGemmaViaBridge(lines, dateFormatted, rawSimMode, onProgress) {
+  const simMode = normalizeSimMode(rawSimMode);
+  if (simMode === 'low_disk') {
+    const err = new Error(getGemmaUnavailableErrorMessage('low_disk'));
+    err.code = 'NANO_UNAVAILABLE';
+    err.reason = 'low_disk';
+    throw err;
   }
 
-  if (current.length > 0) {
-    chunks.push(current.join('\n'));
-  }
-  return chunks;
-}
-
-async function runSimulatedNanoFallback(lines, dateFormatted, onProgress) {
-  const speakers = new Set();
-  for (const line of lines) {
-    const match = String(line).match(/^\[([^\]]+)\]:/);
-    if (match && match[1] && match[1] !== 'Unknown') {
-      speakers.add(match[1].trim());
-    }
-  }
-  const attendeeList = speakers.size > 0 ? Array.from(speakers).join(', ') : 'Meeting Participants';
-  const samplePoints = lines
-    .slice(0, 5)
-    .map((l) => `    *   ${String(l).substring(0, 140)}`)
-    .join('\n');
-
-  const stages = [
-    [45, 'Analyzing transcript on-device...'],
-    [65, 'Extracting discussions and action items...'],
-    [85, 'Drafting meeting notes...'],
-    [94, 'Formatting Markdown output...']
-  ];
-  for (const [pct, label] of stages) {
-    await onProgress(pct, label);
-    await new Promise((r) => setTimeout(r, 550));
+  const avail = await checkGemmaAvailability('real');
+  if (avail.status === 'unavailable' && simMode !== 'downloadable') {
+    const err = new Error(getGemmaUnavailableErrorMessage(avail.reason || 'low_disk'));
+    err.code = 'NANO_UNAVAILABLE';
+    err.reason = avail.reason || 'low_disk';
+    throw err;
   }
 
-  return `*   **Date, time, and attendees:**
-    *   ${dateFormatted}
-    *   Attendees: ${attendeeList}
-*   **Meeting purpose:** Review captured Microsoft Teams discussion (generated via DEV simulation mode on a host where the hardware on-device model is not installed).
-*   **Agenda items:**
-    *   Captured transcript review (${lines.length} caption segments)
-*   **Key discussions:**
-${samplePoints || '    *   Discussion captured from live captions.'}
-*   **Decisions made:**
-    *   **Verified end-to-end download and generation progress bar in DEV simulation mode.**
-*   **Action items:**
-    *   Team - review generated notes in Downloads folder.
-*   **Follow-ups:**
-    *   Switch DEV Simulate toggle back to Real for hardware inference.`;
-}
-
-async function bridgeNanoGenerateViaWindow(lines, dateFormatted, simMode, onProgress) {
-  const channel = `nano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const channel = `gemma_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   activeBridgeProgressHandlers.set(channel, onProgress);
 
-  let spawnedTabId = null;
-  const invokeBridge = () =>
+  const payload = {
+    action: 'bridge_gemma_generate',
+    lines,
+    dateFormatted,
+    simMode,
+    channel
+  };
+
+  const sendToTab = (tabId) =>
     new Promise((resolve) => {
       try {
-        chrome.runtime.sendMessage(
-          {
-            action: 'bridge_nano_generate',
-            lines,
-            dateFormatted,
-            simMode,
-            channel
-          },
-          (res) => {
-            if (chrome.runtime.lastError || !res) {
-              resolve(null);
-            } else {
-              resolve(res);
-            }
+        chrome.tabs.sendMessage(tabId, payload, (res) => {
+          if (chrome.runtime.lastError || !res) {
+            resolve(null);
+          } else {
+            resolve(res);
           }
-        );
+        });
       } catch (_) {
         resolve(null);
       }
     });
 
-  try {
-    let res = await invokeBridge();
-    if (!res) {
+  const sendBroadcast = () =>
+    new Promise((resolve) => {
       try {
-        const createdTab = await new Promise((resolve) => {
-          chrome.tabs.create(
-            { url: chrome.runtime.getURL('options.html?bg_nano=1'), active: false },
-            (tab) => {
-              void chrome.runtime.lastError;
-              resolve(tab || null);
-            }
-          );
-        });
-        if (createdTab && createdTab.id) {
-          spawnedTabId = createdTab.id;
-          for (let attempt = 0; attempt < 12; attempt++) {
-            await new Promise((r) => setTimeout(r, 250));
-            res = await invokeBridge();
-            if (res) break;
+        chrome.runtime.sendMessage(payload, (res) => {
+          if (chrome.runtime.lastError || !res) {
+            resolve(null);
+          } else {
+            resolve(res);
           }
-        }
-      } catch (_) {}
+        });
+      } catch (_) {
+        resolve(null);
+      }
+    });
+
+  let spawnedTabId = null;
+
+  try {
+    let res = null;
+    const existingTabId = await findOpenOptionsTabId();
+    if (existingTabId !== null) {
+      res = await sendToTab(existingTabId);
+    } else {
+      res = await sendBroadcast();
     }
 
     if (!res) {
-      if (simMode === 'downloadable') {
-        return await runSimulatedNanoFallback(lines, dateFormatted, onProgress);
+      const createdTab = await new Promise((resolve) => {
+        chrome.tabs.create(
+          { url: chrome.runtime.getURL('options.html?bg_infer=1'), active: false },
+          (tab) => {
+            void chrome.runtime.lastError;
+            resolve(tab || null);
+          }
+        );
+      });
+      if (createdTab && createdTab.id) {
+        spawnedTabId = createdTab.id;
+        for (let attempt = 0; attempt < 24; attempt++) {
+          await new Promise((r) => setTimeout(r, 250));
+          res = await sendToTab(spawnedTabId);
+          if (res) break;
+        }
       }
-      const err = new Error(getNanoUnavailableErrorMessage('unsupported'));
-      err.code = 'NANO_UNAVAILABLE';
-      err.reason = 'unsupported';
-      throw err;
+    }
+
+    if (!res) {
+      throw new Error('Could not initialize local Gemma 4 E2B worker. Please click Retry.');
     }
 
     if (!res.ok) {
-      const err = new Error(res.error || getNanoUnavailableErrorMessage(res.reason || 'unknown'));
+      const err = new Error(res.error || getGemmaUnavailableErrorMessage(res.reason || 'unknown'));
       if (res.code) err.code = res.code;
       if (res.reason) err.reason = res.reason;
       throw err;
@@ -698,180 +515,6 @@ async function bridgeNanoGenerateViaWindow(lines, dateFormatted, simMode, onProg
   }
 }
 
-async function generateNotesWithGeminiNano(lines, dateFormatted, simMode, onProgress) {
-  if (simMode === 'setting_off' || simMode === 'low_disk') {
-    const err = new Error(getNanoUnavailableErrorMessage(simMode));
-    err.code = 'NANO_UNAVAILABLE';
-    err.reason = simMode;
-    throw err;
-  }
-
-  const lm = getLanguageModelNamespace();
-  if (!lm) {
-    return await bridgeNanoGenerateViaWindow(lines, dateFormatted, simMode, onProgress);
-  }
-
-  let baseStartPct = 12;
-  if (simMode === 'downloadable') {
-    const simSteps = [0, 14, 31, 52, 74, 91, 100];
-    for (const dlPct of simSteps) {
-      const mappedPct = 6 + Math.round(dlPct * 0.30);
-      await onProgress(mappedPct, `Downloading Gemini Nano (On-Device) (${dlPct}%)...`);
-      await new Promise((r) => setTimeout(r, 450));
-    }
-    baseStartPct = 38;
-  }
-
-  const realAvail = await checkGeminiNanoAvailability('real');
-  if (realAvail.status === 'unavailable') {
-    if (simMode === 'downloadable') {
-      return await runSimulatedNanoFallback(lines, dateFormatted, onProgress);
-    }
-    const err = new Error(getNanoUnavailableErrorMessage(realAvail.reason));
-    err.code = 'NANO_UNAVAILABLE';
-    err.reason = realAvail.reason || 'unknown';
-    throw err;
-  }
-
-  await onProgress(
-    baseStartPct,
-    realAvail.status === 'downloadable' || realAvail.status === 'downloading'
-      ? 'Downloading Gemini Nano (On-Device)...'
-      : 'Loading Gemini Nano (On-Device)...'
-  );
-
-  let session = null;
-  try {
-    session = await createNanoSession(lm, NANO_SYSTEM_PROMPT, (m) => {
-      try {
-        m.addEventListener('downloadprogress', (e) => {
-          const rawRatio =
-            typeof e.loaded === 'number'
-              ? e.total && e.total > 0
-                ? e.loaded / e.total
-                : e.loaded
-              : 0;
-          const dlPct = Math.min(100, Math.max(0, Math.round(rawRatio * 100)));
-          const overallPct = 6 + Math.round(dlPct * 0.30);
-          onProgress(overallPct, `Downloading Gemini Nano (On-Device) (${dlPct}%)...`);
-        });
-      } catch (_) {}
-    });
-
-    const fullTranscript = lines.join('\n');
-    const singlePassPrompt = buildMinutesPrompt(fullTranscript, dateFormatted, false, false);
-
-    let inputTokens = Math.ceil(singlePassPrompt.length / 3.5);
-    const inputQuota = session && typeof session.inputQuota === 'number' && session.inputQuota > 0
-      ? session.inputQuota
-      : 4096;
-
-    if (session && typeof session.measureInputUsage === 'function') {
-      try {
-        const measured = await session.measureInputUsage(singlePassPrompt);
-        if (typeof measured === 'number' && measured > 0) {
-          inputTokens = measured;
-        }
-      } catch (_) {}
-    }
-
-    const canSinglePass =
-      inputTokens <= Math.floor(inputQuota * 0.70) && fullTranscript.length <= 12000;
-
-    if (canSinglePass) {
-      await onProgress(42, 'Analyzing transcript on-device...');
-      try {
-        const minutesText = await promptNanoStreaming(session, singlePassPrompt, (partial) => {
-          const ratio = Math.min(1, partial.length / 1500);
-          const pct = 45 + Math.round(ratio * 49);
-          onProgress(pct, 'Drafting meeting notes...');
-        });
-        if (minutesText && minutesText.trim()) {
-          return minutesText;
-        }
-      } catch (singleErr) {
-        if (!singleErr || singleErr.name !== 'QuotaExceededError') {
-          throw singleErr;
-        }
-      }
-    }
-
-    // Multi-chunk map-reduce for longer meetings
-    if (session && typeof session.destroy === 'function') {
-      try {
-        session.destroy();
-      } catch (_) {}
-      session = null;
-    }
-
-    const chunks = splitTranscriptIntoChunks(lines, 6500);
-    const chunkSummaries = [];
-
-    for (let i = 0; i < chunks.length; i++) {
-      const chunkStartPct = 36 + Math.round((i / chunks.length) * 36);
-      const chunkEndPct = 36 + Math.round(((i + 1) / chunks.length) * 36);
-      await onProgress(
-        chunkStartPct,
-        `Summarizing transcript part ${i + 1} of ${chunks.length}...`
-      );
-
-      let chunkSession = null;
-      try {
-        chunkSession = await createNanoSession(lm, NANO_SYSTEM_PROMPT);
-        const chunkPrompt = `Extract concise bullet points from part ${i + 1} of ${chunks.length} of this meeting transcript. Include:
-- Attendees (and company if stated)
-- Key points discussed
-- Decisions made
-- Action items (owner and deadline)
-- Follow-ups
-
-Transcript Part ${i + 1}:
-${chunks[i]}`;
-        const summary = await promptNanoStreaming(chunkSession, chunkPrompt, (partial) => {
-          const ratio = Math.min(1, partial.length / 700);
-          const pct = chunkStartPct + Math.round(ratio * (chunkEndPct - chunkStartPct));
-          onProgress(pct, `Summarizing transcript part ${i + 1} of ${chunks.length}...`);
-        });
-        chunkSummaries.push(`### Segment ${i + 1}\n${summary.trim()}`);
-      } finally {
-        if (chunkSession && typeof chunkSession.destroy === 'function') {
-          try {
-            chunkSession.destroy();
-          } catch (_) {}
-        }
-      }
-    }
-
-    await onProgress(74, 'Synthesizing final meeting notes...');
-    let synthSession = null;
-    try {
-      synthSession = await createNanoSession(lm, NANO_SYSTEM_PROMPT);
-      const finalPrompt = buildMinutesPrompt(chunkSummaries.join('\n\n'), dateFormatted, true, false);
-      const finalMinutes = await promptNanoStreaming(synthSession, finalPrompt, (partial) => {
-        const ratio = Math.min(1, partial.length / 1500);
-        const pct = 76 + Math.round(ratio * 18);
-        onProgress(pct, 'Drafting final meeting notes...');
-      });
-      if (!finalMinutes || !finalMinutes.trim()) {
-        throw new Error('Empty response from Gemini Nano (On-Device).');
-      }
-      return finalMinutes;
-    } finally {
-      if (synthSession && typeof synthSession.destroy === 'function') {
-        try {
-          synthSession.destroy();
-        } catch (_) {}
-      }
-    }
-  } finally {
-    if (session && typeof session.destroy === 'function') {
-      try {
-        session.destroy();
-      } catch (_) {}
-    }
-  }
-}
-
 async function generateAndDownloadNotes(overrideMeeting = null) {
   const isHistoryRegen = !!overrideMeeting;
   if (!isHistoryRegen && isGeneratingInMemory) {
@@ -881,9 +524,17 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
     isGeneratingInMemory = true;
   }
 
-  // Keep MV3 service worker alive while waiting on local or cloud generation
+  // Keep MV3 service worker alive & refresh popup heartbeat during long local/cloud runs
   const keepAliveInterval = setInterval(() => {
-    chrome.storage.local.get(['notesStatus'], () => {});
+    if (!isHistoryRegen) {
+      chrome.storage.local.set({ generationHeartbeatAt: Date.now() }, () => {
+        void chrome.runtime.lastError;
+      });
+    } else {
+      chrome.storage.local.get(['notesStatus'], () => {
+        void chrome.runtime.lastError;
+      });
+    }
   }, 5000);
 
   let cloudTickerInterval = null;
@@ -948,7 +599,7 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
 
     const effectiveMode = getEffectiveAiMode(result);
     if (effectiveMode === 'unconfigured') {
-      const msg = 'Please choose Gemini Nano (On-Device) or Google AI Studio API Key in Settings first.';
+      const msg = 'Please choose Gemma On-Device or Gemini Flash in Settings first.';
       if (!isHistoryRegen) {
         await chrome.storage.local.set({
           notesStatus: 'error',
@@ -960,10 +611,10 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
     }
 
     const apiKey = result.apiKey ? result.apiKey.trim() : '';
-    const isNanoModel = effectiveMode === 'nano';
+    const isOnDeviceModel = effectiveMode === 'gemma';
 
-    if (!isNanoModel && !apiKey) {
-      const msg = 'API key missing. Enter a Google AI Studio API key or choose Gemini Nano (On-Device) in Settings.';
+    if (!isOnDeviceModel && !apiKey) {
+      const msg = 'API key missing. Enter a Google AI Studio API key or choose Gemma On-Device in Settings.';
       if (!isHistoryRegen) {
         await chrome.storage.local.set({
           notesStatus: 'error',
@@ -974,7 +625,7 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
       return { status: "error", error: msg };
     }
 
-    const model = isNanoModel ? GEMINI_NANO_MODEL_ID : await resolveActiveModel(apiKey, result);
+    const model = isOnDeviceModel ? GEMMA_MODEL_ID : await resolveActiveModel(apiKey, result);
 
     let savedEntry = null;
     const nowTs = Date.now();
@@ -986,8 +637,8 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
         notesErrorCode: '',
         notesErrorReason: '',
         notesProgress: 5,
-        notesStage: isNanoModel
-          ? 'Preparing Gemini Nano (On-Device)...'
+        notesStage: isOnDeviceModel
+          ? 'Preparing Gemma 4 E2B (On-Device)...'
           : 'Connecting to Gemini...',
         generationStartedAt: nowTs,
         generationHeartbeatAt: nowTs
@@ -995,7 +646,7 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
     } else {
       await reportProgress(
         5,
-        isNanoModel ? 'Preparing Gemini Nano (On-Device)...' : 'Connecting to Gemini...',
+        isOnDeviceModel ? 'Preparing Gemma 4 E2B (On-Device)...' : 'Connecting to Gemini...',
         true
       );
     }
@@ -1009,14 +660,14 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
 
     let minutesText = '';
 
-    if (isNanoModel) {
-      const simMode = result.devNanoSimMode || 'real';
-      minutesText = await generateNotesWithGeminiNano(lines, dateFormatted, simMode, (pct, stage) =>
+    if (isOnDeviceModel) {
+      const simMode = normalizeSimMode(result.devNanoSimMode || 'real');
+      minutesText = await generateNotesWithGemmaViaBridge(lines, dateFormatted, simMode, (pct, stage) =>
         reportProgress(pct, stage, false)
       );
     } else {
       const fullTranscript = lines.join('\n');
-      const prompt = buildMinutesPrompt(fullTranscript, dateFormatted, false);
+      const prompt = buildMinutesPrompt(fullTranscript, dateFormatted);
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const payload = {
         contents: [{ parts: [{ text: prompt }] }],
@@ -1073,7 +724,7 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
       rawTeamsTitle.trim().toLowerCase() !== 'meeting';
 
     let aiTitle = "meeting";
-    if (!isNanoModel) {
+    if (!isOnDeviceModel) {
       const outLines = minutesText.split('\n');
       for (let i = 0; i < outLines.length; i++) {
         if (outLines[i].toLowerCase().includes('# title') && i + 1 < outLines.length) {
@@ -1089,8 +740,8 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
       minutesText = `# ${headingTitle}\n\n${minutesText.trimStart()}`;
     }
 
-    const useTeamsTitle = isNanoModel || result.titleSource === 'teams';
-    const chosenTitle = isNanoModel
+    const useTeamsTitle = isOnDeviceModel || result.titleSource === 'teams';
+    const chosenTitle = isOnDeviceModel
       ? (hasTeamsTitle ? rawTeamsTitle.trim() : 'meeting')
       : (useTeamsTitle && hasTeamsTitle ? rawTeamsTitle.trim() : aiTitle);
     const sanitizedTitle = sanitizeFilenameTitle(chosenTitle, 'meeting');
@@ -1250,17 +901,17 @@ async function startFromToast(sender, meetingTitle, chosenMode = null) {
     'devNanoSimMode'
   ]);
 
-  if (chosenMode === 'nano') {
+  if (chosenMode === 'gemma' || chosenMode === 'nano') {
     await chrome.storage.local.set({
-      aiMode: 'nano',
-      selectedModel: GEMINI_NANO_MODEL_ID,
-      modelSelectVal: GEMINI_NANO_MODEL_ID,
+      aiMode: 'gemma',
+      selectedModel: GEMMA_MODEL_ID,
+      modelSelectVal: GEMMA_MODEL_ID,
       userSelectedModel: true,
       onboardingCompleted: true
     });
-    stored.aiMode = 'nano';
-    stored.selectedModel = GEMINI_NANO_MODEL_ID;
-    stored.modelSelectVal = GEMINI_NANO_MODEL_ID;
+    stored.aiMode = 'gemma';
+    stored.selectedModel = GEMMA_MODEL_ID;
+    stored.modelSelectVal = GEMMA_MODEL_ID;
     stored.onboardingCompleted = true;
   } else if (chosenMode === 'cloud') {
     await chrome.storage.local.set({ aiMode: 'cloud' });
@@ -1274,11 +925,11 @@ async function startFromToast(sender, meetingTitle, chosenMode = null) {
     return { status: "choose_mode" };
   }
 
-  if (effectiveMode === 'nano') {
-    const nanoAvail = await checkGeminiNanoAvailability(stored.devNanoSimMode || null);
-    if (nanoAvail.status === 'unavailable') {
+  if (effectiveMode === 'gemma') {
+    const gemmaAvail = await checkGemmaAvailability(stored.devNanoSimMode || null);
+    if (gemmaAvail.status === 'unavailable') {
       chrome.runtime.openOptionsPage();
-      return { status: "nano_unavailable", reason: nanoAvail.reason || 'unknown' };
+      return { status: "nano_unavailable", reason: gemmaAvail.reason || 'low_disk' };
     }
   } else if (!cleanKey) {
     chrome.runtime.openOptionsPage();
@@ -1447,8 +1098,8 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   }
 });
 
-// [DEV-ONLY] Test uploaded transcript on Gemini On-Device
-async function runDevTranscriptNanoTest(request) {
+// [DEV-ONLY] Test uploaded transcript on Gemma On-Device
+async function runDevTranscriptGemmaTest(request) {
   const lines = Array.isArray(request.lines) ? request.lines : [];
   if (lines.length === 0) {
     return { status: 'error', error: 'Uploaded transcript is empty.' };
@@ -1456,7 +1107,7 @@ async function runDevTranscriptNanoTest(request) {
 
   const startedAt = Date.now();
   const stored = await chrome.storage.local.get(['devNanoSimMode']);
-  const simMode = request.simMode || stored.devNanoSimMode || 'real';
+  const simMode = normalizeSimMode(request.simMode || stored.devNanoSimMode || 'real');
   const rawTitle = request.meetingTitle && String(request.meetingTitle).trim()
     ? String(request.meetingTitle).trim()
     : 'Meeting';
@@ -1488,7 +1139,7 @@ async function runDevTranscriptNanoTest(request) {
   };
 
   try {
-    await onProgress(5, 'Preparing Gemini On-Device...', true);
+    await onProgress(5, 'Preparing Gemma 4 E2B (On-Device)...', true);
     const dateObj = new Date();
     const dateFormatted =
       dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) +
@@ -1496,7 +1147,7 @@ async function runDevTranscriptNanoTest(request) {
       dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) +
       ' UTC';
 
-    let minutesText = await generateNotesWithGeminiNano(lines, dateFormatted, simMode, (pct, stage) =>
+    let minutesText = await generateNotesWithGemmaViaBridge(lines, dateFormatted, simMode, (pct, stage) =>
       onProgress(pct, stage, false)
     );
 
@@ -1542,18 +1193,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "get_worker_version") {
     sendResponse({ version: WORKER_BUILD_VERSION });
     return false;
-  } else if (request.action === "bridge_nano_progress") {
+  } else if (request.action === "bridge_gemma_progress" || request.action === "bridge_nano_progress") {
     const handler = request.channel && activeBridgeProgressHandlers.get(request.channel);
     if (handler) {
       handler(request.pct, request.stage);
     }
     sendResponse({ status: "ack" });
     return false;
-  } else if (request.action === "dev_test_nano_transcript") {
-    runDevTranscriptNanoTest(request).then(sendResponse);
+  } else if (request.action === "dev_test_gemma_transcript" || request.action === "dev_test_nano_transcript") {
+    runDevTranscriptGemmaTest(request).then(sendResponse);
     return true;
-  } else if (request.action === "get_nano_availability") {
-    checkGeminiNanoAvailability(request.simMode || null).then(sendResponse);
+  } else if (request.action === "get_gemma_availability" || request.action === "get_nano_availability") {
+    checkGemmaAvailability(request.simMode || null).then(sendResponse);
     return true;
   } else if (request.action === "open_chrome_url") {
     if (request.url && typeof request.url === "string" && request.url.startsWith("chrome://")) {
