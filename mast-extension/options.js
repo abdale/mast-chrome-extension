@@ -7,7 +7,7 @@ import {
   formatBytesGB
 } from './gemma-engine.js';
 
-const WORKER_BUILD_VERSION = '2.9.4';
+const WORKER_BUILD_VERSION = '2.9.5';
 const LEGACY_NANO_MODEL_ID = 'gemini-nano';
 const IS_BG_INFER_TAB = new URLSearchParams(window.location.search).get('bg_infer') === '1';
 

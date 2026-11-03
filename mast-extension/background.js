@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9.4';
+const WORKER_BUILD_VERSION = '2.9.5';
 const GEMMA_MODEL_ID = 'gemma-4-e2b-it';
 const LEGACY_NANO_MODEL_ID = 'gemini-nano';
 const GEMMA_MODEL_URL =

@@ -58,7 +58,7 @@ let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 let forceShowApiKeyEntry = false;
 
-const WORKER_BUILD_VERSION = '2.9.4';
+const WORKER_BUILD_VERSION = '2.9.5';
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
     chrome.runtime.reload();
