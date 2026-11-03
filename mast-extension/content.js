@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9.5';
+  const CONTENT_SCRIPT_VERSION = '2.9-dev';
   if (window.__mastContentScriptVersion === CONTENT_SCRIPT_VERSION) {
     return;
   }
