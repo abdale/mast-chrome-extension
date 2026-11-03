@@ -46,6 +46,7 @@ const dismissBtn = document.getElementById('dismissBtn');
 // [DEV-ONLY] Simulation elements
 const devSimPills = document.querySelectorAll('.dev-sim-pill[data-sim-mode]');
 const devActiveModelHint = document.getElementById('devActiveModelHint');
+const devOpenTranscriptTesterLink = document.getElementById('devOpenTranscriptTesterLink');
 const devResetOnboardingLink = document.getElementById('devResetOnboardingLink');
 
 let timerInterval = null;
@@ -53,7 +54,7 @@ let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 let forceShowApiKeyEntry = false;
 
-const WORKER_BUILD_VERSION = '2.9.2';
+const WORKER_BUILD_VERSION = '2.9.3';
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
     chrome.runtime.reload();
@@ -514,6 +515,13 @@ devSimPills.forEach((pill) => {
     });
   });
 });
+
+if (devOpenTranscriptTesterLink) {
+  devOpenTranscriptTesterLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.open(chrome.runtime.getURL('options.html#dev-transcript-test'));
+  });
+}
 
 if (devResetOnboardingLink) {
   devResetOnboardingLink.addEventListener('click', (e) => {

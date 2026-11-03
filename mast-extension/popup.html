@@ -247,8 +247,8 @@
     </div>
 
     <div class="alt-choice-box">
-      <div><strong>Don't have an API key?</strong> If you don't have an API key, you can go with <strong>Gemini Nano (On-Device)</strong> instead.</div>
-      <button type="button" id="useNanoInsteadBtn" class="outline-primary-btn">Use Gemini Nano (On-Device)</button>
+      <div><strong>Don't have an API key?</strong> If you don't have an API key, you can select <strong>Gemini On-Device</strong> instead - no API key required.</div>
+      <button type="button" id="useNanoInsteadBtn" class="outline-primary-btn">Use Gemini On-Device</button>
     </div>
   </div>
 
@@ -324,7 +324,11 @@
   <div id="devSimBar" class="dev-sim-bar">
     <div class="dev-sim-header">
       <span><strong style="color: #d32f2f;">DEV SIMULATE</strong> &middot; <span id="devActiveModelHint"></span></span>
-      <a href="#" id="devResetOnboardingLink" style="font-size: 10px; font-weight: 600;">Test Choice UI</a>
+      <span style="display: inline-flex; gap: 6px; align-items: center;">
+        <a href="#" id="devOpenTranscriptTesterLink" style="font-size: 10px; font-weight: 600;">Upload Transcript</a>
+        <span>&middot;</span>
+        <a href="#" id="devResetOnboardingLink" style="font-size: 10px; font-weight: 600;">Reset Choice</a>
+      </span>
     </div>
     <div class="dev-sim-pills">
       <button type="button" class="dev-sim-pill active" data-sim-mode="real">Real</button>

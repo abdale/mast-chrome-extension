@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9.2';
+  const CONTENT_SCRIPT_VERSION = '2.9.3';
   if (window.__mastContentScriptVersion === CONTENT_SCRIPT_VERSION) {
     return;
   }
@@ -482,14 +482,14 @@
       const hintEl = document.createElement('div');
       hintEl.style.cssText = 'font-size: 11.5px; color: #5f6368; line-height: 1.4;';
       hintEl.textContent =
-        "Enter your API key in Settings, or if you don't have an API key, go with Gemini Nano (On-Device).";
+        "If you don't have an API key, you can select Gemini On-Device instead - no API key required.";
       toast.appendChild(hintEl);
 
       const actionsRow = document.createElement('div');
       actionsRow.style.cssText = 'display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap;';
 
       const useNanoBtn = document.createElement('button');
-      useNanoBtn.textContent = 'Use Gemini Nano (On-Device)';
+      useNanoBtn.textContent = 'Use Gemini On-Device';
       useNanoBtn.style.cssText =
         'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;';
       useNanoBtn.addEventListener('click', () => {

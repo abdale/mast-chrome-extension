@@ -1,8 +1,9 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9.2';
+const WORKER_BUILD_VERSION = '2.9.3';
 const GEMINI_NANO_MODEL_ID = 'gemini-nano';
 let isGeneratingInMemory = false;
+const activeBridgeProgressHandlers = new Map();
 
 const TEAMS_URL_PATTERNS = [
   "https://teams.microsoft.com/*",
@@ -172,6 +173,22 @@ async function checkGeminiNanoAvailability(simModeOverride = null) {
 
   const lm = getLanguageModelNamespace();
   if (!lm) {
+    const bridged = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ action: 'bridge_nano_check', simMode }, (res) => {
+          if (chrome.runtime.lastError || !res) {
+            resolve(null);
+          } else {
+            resolve(res);
+          }
+        });
+      } catch (_) {
+        resolve(null);
+      }
+    });
+    if (bridged && bridged.status) {
+      return bridged;
+    }
     return { status: 'unavailable', simulated: false, reason: 'unsupported' };
   }
 
@@ -407,8 +424,24 @@ async function downloadTranscriptIfNeeded(forceDownload = false) {
 const NANO_SYSTEM_PROMPT =
   'You are an expert meeting minutes generator. Produce clear, accurate, concise Markdown meeting notes strictly grounded in the provided transcript. Never invent facts, attendees, or action items.';
 
-function buildMinutesPrompt(sourceText, dateFormatted, isFromChunkSummaries = false) {
+function buildMinutesPrompt(sourceText, dateFormatted, isFromChunkSummaries = false, includeAiTitle = true) {
   const sourceLabel = isFromChunkSummaries ? 'Segment Summaries' : 'Transcript';
+  if (!includeAiTitle) {
+    return `Generate concise Markdown meeting minutes for a meeting on ${dateFormatted} using these exact top-level bullet headings (do not output a # Title section):
+*   **Date, time, and attendees:**
+    *   [Date], at [Time from transcript]
+    *   Attendees: [Name] ([Company if clear from transcript, else omit company])
+*   **Meeting purpose:** Brief goal of the meeting.
+*   **Agenda items:** Key agenda sections.
+*   **Key discussions:** Concise summary of main points discussed.
+*   **Decisions made:** State decisions clearly in **bold**.
+*   **Action items:** Owner, action, and deadline if stated.
+*   **Follow-ups:** Unresolved or deferred topics.
+
+${sourceLabel}:
+${sourceText}`;
+  }
+
   return `## Role
 
 You are an expert meeting minutes generator. Your task is to process provided information about a meeting, such as a transcript, recording summary, or rough human notes, and generate crisp, well-structured meeting notes following a specific format.
@@ -566,10 +599,7 @@ async function runSimulatedNanoFallback(lines, dateFormatted, onProgress) {
     await new Promise((r) => setTimeout(r, 550));
   }
 
-  return `# Title
-Simulated On-Device Meeting Summary
-
-*   **Date, time, and attendees:**
+  return `*   **Date, time, and attendees:**
     *   ${dateFormatted}
     *   Attendees: ${attendeeList}
 *   **Meeting purpose:** Review captured Microsoft Teams discussion (generated via DEV simulation mode on a host where the hardware on-device model is not installed).
@@ -582,7 +612,90 @@ ${samplePoints || '    *   Discussion captured from live captions.'}
 *   **Action items:**
     *   Team - review generated notes in Downloads folder.
 *   **Follow-ups:**
-    *   Switch DEV Simulate toggle back to Real Device for hardware inference.`;
+    *   Switch DEV Simulate toggle back to Real for hardware inference.`;
+}
+
+async function bridgeNanoGenerateViaWindow(lines, dateFormatted, simMode, onProgress) {
+  const channel = `nano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  activeBridgeProgressHandlers.set(channel, onProgress);
+
+  let spawnedTabId = null;
+  const invokeBridge = () =>
+    new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          {
+            action: 'bridge_nano_generate',
+            lines,
+            dateFormatted,
+            simMode,
+            channel
+          },
+          (res) => {
+            if (chrome.runtime.lastError || !res) {
+              resolve(null);
+            } else {
+              resolve(res);
+            }
+          }
+        );
+      } catch (_) {
+        resolve(null);
+      }
+    });
+
+  try {
+    let res = await invokeBridge();
+    if (!res) {
+      try {
+        const createdTab = await new Promise((resolve) => {
+          chrome.tabs.create(
+            { url: chrome.runtime.getURL('options.html?bg_nano=1'), active: false },
+            (tab) => {
+              void chrome.runtime.lastError;
+              resolve(tab || null);
+            }
+          );
+        });
+        if (createdTab && createdTab.id) {
+          spawnedTabId = createdTab.id;
+          for (let attempt = 0; attempt < 12; attempt++) {
+            await new Promise((r) => setTimeout(r, 250));
+            res = await invokeBridge();
+            if (res) break;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!res) {
+      if (simMode === 'downloadable') {
+        return await runSimulatedNanoFallback(lines, dateFormatted, onProgress);
+      }
+      const err = new Error(getNanoUnavailableErrorMessage('unsupported'));
+      err.code = 'NANO_UNAVAILABLE';
+      err.reason = 'unsupported';
+      throw err;
+    }
+
+    if (!res.ok) {
+      const err = new Error(res.error || getNanoUnavailableErrorMessage(res.reason || 'unknown'));
+      if (res.code) err.code = res.code;
+      if (res.reason) err.reason = res.reason;
+      throw err;
+    }
+
+    return res.minutesText;
+  } finally {
+    activeBridgeProgressHandlers.delete(channel);
+    if (spawnedTabId) {
+      try {
+        chrome.tabs.remove(spawnedTabId, () => {
+          void chrome.runtime.lastError;
+        });
+      } catch (_) {}
+    }
+  }
 }
 
 async function generateNotesWithGeminiNano(lines, dateFormatted, simMode, onProgress) {
@@ -591,6 +704,11 @@ async function generateNotesWithGeminiNano(lines, dateFormatted, simMode, onProg
     err.code = 'NANO_UNAVAILABLE';
     err.reason = simMode;
     throw err;
+  }
+
+  const lm = getLanguageModelNamespace();
+  if (!lm) {
+    return await bridgeNanoGenerateViaWindow(lines, dateFormatted, simMode, onProgress);
   }
 
   let baseStartPct = 12;
@@ -612,14 +730,6 @@ async function generateNotesWithGeminiNano(lines, dateFormatted, simMode, onProg
     const err = new Error(getNanoUnavailableErrorMessage(realAvail.reason));
     err.code = 'NANO_UNAVAILABLE';
     err.reason = realAvail.reason || 'unknown';
-    throw err;
-  }
-
-  const lm = getLanguageModelNamespace();
-  if (!lm) {
-    const err = new Error(getNanoUnavailableErrorMessage('unsupported'));
-    err.code = 'NANO_UNAVAILABLE';
-    err.reason = 'unsupported';
     throw err;
   }
 
@@ -649,7 +759,7 @@ async function generateNotesWithGeminiNano(lines, dateFormatted, simMode, onProg
     });
 
     const fullTranscript = lines.join('\n');
-    const singlePassPrompt = buildMinutesPrompt(fullTranscript, dateFormatted, false);
+    const singlePassPrompt = buildMinutesPrompt(fullTranscript, dateFormatted, false, false);
 
     let inputTokens = Math.ceil(singlePassPrompt.length / 3.5);
     const inputQuota = session && typeof session.inputQuota === 'number' && session.inputQuota > 0
@@ -709,11 +819,11 @@ async function generateNotesWithGeminiNano(lines, dateFormatted, simMode, onProg
       try {
         chunkSession = await createNanoSession(lm, NANO_SYSTEM_PROMPT);
         const chunkPrompt = `Extract concise bullet points from part ${i + 1} of ${chunks.length} of this meeting transcript. Include:
-- Speakers/attendees mentioned (and company if stated)
-- Key topics and points discussed
-- Any decisions made
-- Any action items (owner and deadline if stated)
-- Any unresolved follow-ups
+- Attendees (and company if stated)
+- Key points discussed
+- Decisions made
+- Action items (owner and deadline)
+- Follow-ups
 
 Transcript Part ${i + 1}:
 ${chunks[i]}`;
@@ -736,7 +846,7 @@ ${chunks[i]}`;
     let synthSession = null;
     try {
       synthSession = await createNanoSession(lm, NANO_SYSTEM_PROMPT);
-      const finalPrompt = buildMinutesPrompt(chunkSummaries.join('\n\n'), dateFormatted, true);
+      const finalPrompt = buildMinutesPrompt(chunkSummaries.join('\n\n'), dateFormatted, true, false);
       const finalMinutes = await promptNanoStreaming(synthSession, finalPrompt, (partial) => {
         const ratio = Math.min(1, partial.length / 1500);
         const pct = 76 + Math.round(ratio * 18);
@@ -953,19 +1063,6 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
 
     await reportProgress(96, 'Saving Markdown file...', true);
 
-    let aiTitle = "meeting";
-    const outLines = minutesText.split('\n');
-    for (let i = 0; i < outLines.length; i++) {
-      if (outLines[i].toLowerCase().includes('# title') && i + 1 < outLines.length) {
-        aiTitle = outLines[i + 1].trim();
-        if (!aiTitle && i + 2 < outLines.length) {
-          aiTitle = outLines[i + 2].trim();
-        }
-        break;
-      }
-    }
-
-    const useTeamsTitle = result.titleSource === 'teams';
     const rawTeamsTitle = isHistoryRegen
       ? (overrideMeeting.teamsTitle || overrideMeeting.title)
       : result.meetingTitle;
@@ -975,7 +1072,27 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
       rawTeamsTitle.trim() &&
       rawTeamsTitle.trim().toLowerCase() !== 'meeting';
 
-    const chosenTitle = useTeamsTitle && hasTeamsTitle ? rawTeamsTitle.trim() : aiTitle;
+    let aiTitle = "meeting";
+    if (!isNanoModel) {
+      const outLines = minutesText.split('\n');
+      for (let i = 0; i < outLines.length; i++) {
+        if (outLines[i].toLowerCase().includes('# title') && i + 1 < outLines.length) {
+          aiTitle = outLines[i + 1].trim();
+          if (!aiTitle && i + 2 < outLines.length) {
+            aiTitle = outLines[i + 2].trim();
+          }
+          break;
+        }
+      }
+    } else if (!minutesText.trimStart().startsWith('#')) {
+      const headingTitle = hasTeamsTitle ? rawTeamsTitle.trim() : 'Meeting Notes';
+      minutesText = `# ${headingTitle}\n\n${minutesText.trimStart()}`;
+    }
+
+    const useTeamsTitle = isNanoModel || result.titleSource === 'teams';
+    const chosenTitle = isNanoModel
+      ? (hasTeamsTitle ? rawTeamsTitle.trim() : 'meeting')
+      : (useTeamsTitle && hasTeamsTitle ? rawTeamsTitle.trim() : aiTitle);
     const sanitizedTitle = sanitizeFilenameTitle(chosenTitle, 'meeting');
     const shortDate = isHistoryRegen && overrideMeeting.shortDate ? overrideMeeting.shortDate : formatShortDate(dateObj);
     const filename = `${sanitizedTitle}_${shortDate}.md`;
@@ -1330,10 +1447,111 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   }
 });
 
+// [DEV-ONLY] Test uploaded transcript on Gemini On-Device
+async function runDevTranscriptNanoTest(request) {
+  const lines = Array.isArray(request.lines) ? request.lines : [];
+  if (lines.length === 0) {
+    return { status: 'error', error: 'Uploaded transcript is empty.' };
+  }
+
+  const startedAt = Date.now();
+  const stored = await chrome.storage.local.get(['devNanoSimMode']);
+  const simMode = request.simMode || stored.devNanoSimMode || 'real';
+  const rawTitle = request.meetingTitle && String(request.meetingTitle).trim()
+    ? String(request.meetingTitle).trim()
+    : 'Meeting';
+  const hasTitle = rawTitle.toLowerCase() !== 'meeting';
+
+  const keepAliveInterval = setInterval(() => {
+    chrome.storage.local.get(['devNanoSimMode'], () => {});
+  }, 5000);
+
+  let lastWriteAt = 0;
+  let lastStage = '';
+  const onProgress = async (pct, stage, force = false) => {
+    const clamped = Math.max(0, Math.min(100, Math.round(pct || 0)));
+    const now = Date.now();
+    if (!force && stage === lastStage && clamped < 100 && now - lastWriteAt < 180) {
+      return;
+    }
+    lastWriteAt = now;
+    lastStage = stage || '';
+    try {
+      await chrome.storage.local.set({
+        devTranscriptTestProgress: {
+          active: clamped < 100,
+          progress: clamped,
+          stage: stage || ''
+        }
+      });
+    } catch (_) {}
+  };
+
+  try {
+    await onProgress(5, 'Preparing Gemini On-Device...', true);
+    const dateObj = new Date();
+    const dateFormatted =
+      dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }) +
+      ' at ' +
+      dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) +
+      ' UTC';
+
+    let minutesText = await generateNotesWithGeminiNano(lines, dateFormatted, simMode, (pct, stage) =>
+      onProgress(pct, stage, false)
+    );
+
+    if (!minutesText.trimStart().startsWith('#')) {
+      const headingTitle = hasTitle ? rawTitle : 'Meeting Notes';
+      minutesText = `# ${headingTitle}\n\n${minutesText.trimStart()}`;
+    }
+
+    await onProgress(96, 'Saving Markdown file...', true);
+    const sanitizedTitle = sanitizeFilenameTitle(hasTitle ? rawTitle : 'meeting', 'meeting');
+    const filename = `${sanitizedTitle}_${formatShortDate(dateObj)}.md`;
+    await downloadTextViaDataUrl(minutesText, 'text/markdown', filename);
+    await onProgress(100, 'Completed', true);
+
+    return {
+      status: 'done',
+      summary: minutesText,
+      filename,
+      elapsedMs: Date.now() - startedAt
+    };
+  } catch (error) {
+    try {
+      await chrome.storage.local.set({
+        devTranscriptTestProgress: {
+          active: false,
+          progress: 0,
+          stage: ''
+        }
+      });
+    } catch (_) {}
+    return {
+      status: 'error',
+      error: error.message || 'Failed to summarize uploaded transcript.',
+      errorCode: error && error.code === 'NANO_UNAVAILABLE' ? 'nano_unavailable' : '',
+      errorReason: error && error.reason ? error.reason : ''
+    };
+  } finally {
+    clearInterval(keepAliveInterval);
+  }
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "get_worker_version") {
     sendResponse({ version: WORKER_BUILD_VERSION });
     return false;
+  } else if (request.action === "bridge_nano_progress") {
+    const handler = request.channel && activeBridgeProgressHandlers.get(request.channel);
+    if (handler) {
+      handler(request.pct, request.stage);
+    }
+    sendResponse({ status: "ack" });
+    return false;
+  } else if (request.action === "dev_test_nano_transcript") {
+    runDevTranscriptNanoTest(request).then(sendResponse);
+    return true;
   } else if (request.action === "get_nano_availability") {
     checkGeminiNanoAvailability(request.simMode || null).then(sendResponse);
     return true;

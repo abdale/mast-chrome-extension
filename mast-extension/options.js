@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9.2';
+  const WORKER_BUILD_VERSION = '2.9.3';
   const GEMINI_NANO_MODEL_ID = 'gemini-nano';
 
   chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
@@ -29,6 +29,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const devSimPills = document.querySelectorAll('.dev-sim-pill[data-sim-mode]');
   const devResetChoiceSettingsLink = document.getElementById('devResetChoiceSettingsLink');
+  const devTranscriptInput = document.getElementById('devTranscriptInput');
+  const devUploadTranscriptBtn = document.getElementById('devUploadTranscriptBtn');
+  const devCopySummaryBtn = document.getElementById('devCopySummaryBtn');
+  const devClearSummaryBtn = document.getElementById('devClearSummaryBtn');
+  const devTranscriptMeta = document.getElementById('devTranscriptMeta');
+  const devTranscriptProgressWrap = document.getElementById('devTranscriptProgressWrap');
+  const devTranscriptProgressFill = document.getElementById('devTranscriptProgressFill');
+  const devTranscriptStage = document.getElementById('devTranscriptStage');
+  const devTranscriptPct = document.getElementById('devTranscriptPct');
+  const devTranscriptError = document.getElementById('devTranscriptError');
+  const devSummaryBox = document.getElementById('devSummaryBox');
+  const devSummaryHeader = document.getElementById('devSummaryHeader');
+  const devTranscriptOutput = document.getElementById('devTranscriptOutput');
 
   let currentSimMode = 'real';
   let currentAiMode = 'unconfigured'; // 'nano' | 'cloud' | 'unconfigured'
@@ -234,10 +247,10 @@ document.addEventListener('DOMContentLoaded', () => {
           onboardingCompleted: true
         },
         () => {
-          statusEl.innerText = 'Switched to Gemini Nano (On-Device)!';
+          statusEl.innerText = 'Switched to Gemini On-Device!';
           statusEl.style.color = '#2e7d32';
           setTimeout(() => {
-            if (statusEl.innerText === 'Switched to Gemini Nano (On-Device)!') {
+            if (statusEl.innerText === 'Switched to Gemini On-Device!') {
               statusEl.innerText = '';
             }
           }, 3000);
@@ -299,6 +312,462 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       );
     });
+  }
+
+  const NANO_SYSTEM_PROMPT =
+    'You are an expert meeting minutes generator. Produce clear, accurate, concise Markdown meeting notes strictly grounded in the provided transcript. Never invent facts, attendees, or action items.';
+
+  function buildNanoMinutesPrompt(sourceText, dateFormatted, isFromChunkSummaries = false) {
+    const sourceLabel = isFromChunkSummaries ? 'Segment Summaries' : 'Transcript';
+    return `Generate concise Markdown meeting minutes for a meeting on ${dateFormatted} using these exact top-level bullet headings (do not output a # Title section):
+*   **Date, time, and attendees:**
+    *   [Date], at [Time from transcript]
+    *   Attendees: [Name] ([Company if clear from transcript, else omit company])
+*   **Meeting purpose:** Brief goal of the meeting.
+*   **Agenda items:** Key agenda sections.
+*   **Key discussions:** Concise summary of main points discussed.
+*   **Decisions made:** State decisions clearly in **bold**.
+*   **Action items:** Owner, action, and deadline if stated.
+*   **Follow-ups:** Unresolved or deferred topics.
+
+${sourceLabel}:
+${sourceText}`;
+  }
+
+  async function createWindowNanoSession(lm, systemPrompt, monitorCb = null) {
+    let temperature = 0.2;
+    let topK = 3;
+    try {
+      if (typeof lm.params === 'function') {
+        const params = await lm.params();
+        if (params) {
+          if (typeof params.maxTopK === 'number' && params.maxTopK >= 1) {
+            topK = Math.min(3, Math.max(1, Math.floor(params.maxTopK)));
+          }
+          if (typeof params.maxTemperature === 'number') {
+            temperature = Math.min(0.2, params.maxTemperature);
+          }
+        }
+      }
+    } catch (_) {}
+
+    const baseOpts = {
+      temperature,
+      topK,
+      initialPrompts: [{ role: 'system', content: systemPrompt }]
+    };
+    if (monitorCb) baseOpts.monitor = monitorCb;
+
+    try {
+      return await lm.create({
+        ...baseOpts,
+        expectedInputs: [{ type: 'text', languages: ['en'] }],
+        expectedOutputs: [{ type: 'text', languages: ['en'] }]
+      });
+    } catch (_) {
+      try {
+        return await lm.create(baseOpts);
+      } catch (_) {
+        const legacyOpts = { systemPrompt };
+        if (monitorCb) legacyOpts.monitor = monitorCb;
+        return await lm.create(legacyOpts);
+      }
+    }
+  }
+
+  async function promptWindowNanoStreaming(session, promptText, onProgressText) {
+    if (typeof session.promptStreaming === 'function') {
+      const stream = session.promptStreaming(promptText);
+      let accumulated = '';
+      for await (const chunk of stream) {
+        const piece = typeof chunk === 'string' ? chunk : String(chunk || '');
+        if (!piece) continue;
+        if (accumulated.length > 10 && piece.startsWith(accumulated)) {
+          accumulated = piece;
+        } else {
+          accumulated += piece;
+        }
+        if (onProgressText) onProgressText(accumulated);
+      }
+      if (accumulated.trim()) return accumulated;
+    }
+    const full = await session.prompt(promptText);
+    if (onProgressText) onProgressText(full || '');
+    return full || '';
+  }
+
+  function splitTranscriptChunksLocal(lines, maxCharsPerChunk = 6500) {
+    const chunks = [];
+    let current = [];
+    let currentLen = 0;
+    for (const rawLine of lines) {
+      const line = String(rawLine || '');
+      if (line.length > maxCharsPerChunk) {
+        if (current.length > 0) {
+          chunks.push(current.join('\n'));
+          current = [];
+          currentLen = 0;
+        }
+        for (let i = 0; i < line.length; i += maxCharsPerChunk) {
+          chunks.push(line.slice(i, i + maxCharsPerChunk));
+        }
+        continue;
+      }
+      if (currentLen + line.length + 1 > maxCharsPerChunk && current.length > 0) {
+        chunks.push(current.join('\n'));
+        current = [line];
+        currentLen = line.length;
+      } else {
+        current.push(line);
+        currentLen += line.length + 1;
+      }
+    }
+    if (current.length > 0) chunks.push(current.join('\n'));
+    return chunks;
+  }
+
+  async function runWindowNanoBridgeGenerate(lines, dateFormatted, simMode, onProgress) {
+    let baseStartPct = 12;
+    if (simMode === 'downloadable') {
+      for (const dlPct of [0, 14, 31, 52, 74, 91, 100]) {
+        onProgress(6 + Math.round(dlPct * 0.30), `Downloading Gemini Nano (On-Device) (${dlPct}%)...`);
+        await new Promise((r) => setTimeout(r, 450));
+      }
+      baseStartPct = 38;
+    }
+
+    const realAvail = await checkNanoAvailabilityLocal('real');
+    if (realAvail.status === 'unavailable') {
+      if (simMode === 'downloadable') {
+        for (const [pct, label] of [
+          [45, 'Analyzing transcript on-device...'],
+          [70, 'Extracting discussions and action items...'],
+          [90, 'Formatting Markdown output...']
+        ]) {
+          onProgress(pct, label);
+          await new Promise((r) => setTimeout(r, 450));
+        }
+        const preview = lines
+          .slice(0, 5)
+          .map((l) => `    *   ${String(l).substring(0, 140)}`)
+          .join('\n');
+        return `*   **Date, time, and attendees:**\n    *   ${dateFormatted}\n    *   Attendees: Meeting Participants\n*   **Meeting purpose:** Simulated DEV On-Device summary.\n*   **Agenda items:**\n    *   Transcript review (${lines.length} lines)\n*   **Key discussions:**\n${preview || '    *   Discussion captured.'}\n*   **Decisions made:**\n    *   **Verified simulated On-Device pipeline.**\n*   **Action items:**\n    *   Review generated Markdown file.\n*   **Follow-ups:**\n    *   Switch DEV Simulate to Real for hardware inference.`;
+      }
+      const reason = realAvail.reason || 'unknown';
+      const msg =
+        reason === 'setting_off'
+          ? 'On-Device AI is turned off in Chrome System Settings.'
+          : reason === 'low_disk'
+            ? 'At least 22 GB of free disk space is required for Gemini On-Device.'
+            : 'Gemini On-Device is unavailable on this device.';
+      const err = new Error(msg);
+      err.code = 'NANO_UNAVAILABLE';
+      err.reason = reason;
+      throw err;
+    }
+
+    const lm = getLanguageModelNamespace();
+    if (!lm) {
+      const err = new Error('Gemini On-Device is not supported on this device.');
+      err.code = 'NANO_UNAVAILABLE';
+      err.reason = 'unsupported';
+      throw err;
+    }
+
+    onProgress(
+      baseStartPct,
+      realAvail.status === 'downloadable' || realAvail.status === 'downloading'
+        ? 'Downloading Gemini Nano (On-Device)...'
+        : 'Loading Gemini Nano (On-Device)...'
+    );
+
+    let session = null;
+    try {
+      session = await createWindowNanoSession(lm, NANO_SYSTEM_PROMPT, (m) => {
+        try {
+          m.addEventListener('downloadprogress', (e) => {
+            const rawRatio =
+              typeof e.loaded === 'number'
+                ? e.total && e.total > 0
+                  ? e.loaded / e.total
+                  : e.loaded
+                : 0;
+            const dlPct = Math.min(100, Math.max(0, Math.round(rawRatio * 100)));
+            onProgress(6 + Math.round(dlPct * 0.30), `Downloading Gemini Nano (On-Device) (${dlPct}%)...`);
+          });
+        } catch (_) {}
+      });
+
+      const fullTranscript = lines.join('\n');
+      const singlePassPrompt = buildNanoMinutesPrompt(fullTranscript, dateFormatted, false);
+
+      let inputTokens = Math.ceil(singlePassPrompt.length / 3.5);
+      const inputQuota =
+        session && typeof session.inputQuota === 'number' && session.inputQuota > 0
+          ? session.inputQuota
+          : 4096;
+      if (session && typeof session.measureInputUsage === 'function') {
+        try {
+          const measured = await session.measureInputUsage(singlePassPrompt);
+          if (typeof measured === 'number' && measured > 0) inputTokens = measured;
+        } catch (_) {}
+      }
+
+      if (inputTokens <= Math.floor(inputQuota * 0.70) && fullTranscript.length <= 12000) {
+        onProgress(42, 'Analyzing transcript on-device...');
+        try {
+          const minutesText = await promptWindowNanoStreaming(session, singlePassPrompt, (partial) => {
+            const ratio = Math.min(1, partial.length / 1500);
+            onProgress(45 + Math.round(ratio * 49), 'Drafting meeting notes...');
+          });
+          if (minutesText && minutesText.trim()) return minutesText;
+        } catch (singleErr) {
+          if (!singleErr || singleErr.name !== 'QuotaExceededError') throw singleErr;
+        }
+      }
+
+      if (session && typeof session.destroy === 'function') {
+        try { session.destroy(); } catch (_) {}
+        session = null;
+      }
+
+      const chunks = splitTranscriptChunksLocal(lines, 6500);
+      const chunkSummaries = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkStartPct = 36 + Math.round((i / chunks.length) * 36);
+        const chunkEndPct = 36 + Math.round(((i + 1) / chunks.length) * 36);
+        onProgress(chunkStartPct, `Summarizing transcript part ${i + 1} of ${chunks.length}...`);
+
+        let chunkSession = null;
+        try {
+          chunkSession = await createWindowNanoSession(lm, NANO_SYSTEM_PROMPT);
+          const chunkPrompt = `Extract concise bullet points from part ${i + 1} of ${chunks.length} of this meeting transcript. Include:
+- Attendees (and company if stated)
+- Key points discussed
+- Decisions made
+- Action items (owner and deadline)
+- Follow-ups
+
+Transcript Part ${i + 1}:
+${chunks[i]}`;
+          const summary = await promptWindowNanoStreaming(chunkSession, chunkPrompt, (partial) => {
+            const ratio = Math.min(1, partial.length / 700);
+            onProgress(
+              chunkStartPct + Math.round(ratio * (chunkEndPct - chunkStartPct)),
+              `Summarizing transcript part ${i + 1} of ${chunks.length}...`
+            );
+          });
+          chunkSummaries.push(`### Segment ${i + 1}\n${summary.trim()}`);
+        } finally {
+          if (chunkSession && typeof chunkSession.destroy === 'function') {
+            try { chunkSession.destroy(); } catch (_) {}
+          }
+        }
+      }
+
+      onProgress(74, 'Synthesizing final meeting notes...');
+      let synthSession = null;
+      try {
+        synthSession = await createWindowNanoSession(lm, NANO_SYSTEM_PROMPT);
+        const finalPrompt = buildNanoMinutesPrompt(chunkSummaries.join('\n\n'), dateFormatted, true);
+        const finalMinutes = await promptWindowNanoStreaming(synthSession, finalPrompt, (partial) => {
+          const ratio = Math.min(1, partial.length / 1500);
+          onProgress(76 + Math.round(ratio * 18), 'Drafting final meeting notes...');
+        });
+        if (!finalMinutes || !finalMinutes.trim()) {
+          throw new Error('Empty response from Gemini Nano (On-Device).');
+        }
+        return finalMinutes;
+      } finally {
+        if (synthSession && typeof synthSession.destroy === 'function') {
+          try { synthSession.destroy(); } catch (_) {}
+        }
+      }
+    } finally {
+      if (session && typeof session.destroy === 'function') {
+        try { session.destroy(); } catch (_) {}
+      }
+    }
+  }
+
+  chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    if (request.action === 'bridge_nano_check') {
+      checkNanoAvailabilityLocal(request.simMode || 'real').then(sendResponse);
+      return true;
+    }
+    if (request.action === 'bridge_nano_generate') {
+      runWindowNanoBridgeGenerate(
+        request.lines || [],
+        request.dateFormatted || '',
+        request.simMode || 'real',
+        (pct, stage) => {
+          if (request.channel) {
+            chrome.runtime.sendMessage(
+              { action: 'bridge_nano_progress', channel: request.channel, pct, stage },
+              () => {
+                void chrome.runtime.lastError;
+              }
+            );
+          }
+        }
+      )
+        .then((minutesText) => sendResponse({ ok: true, minutesText }))
+        .catch((err) =>
+          sendResponse({
+            ok: false,
+            error: err.message || 'Generation failed.',
+            code: err.code || '',
+            reason: err.reason || ''
+          })
+        );
+      return true;
+    }
+    return false;
+  });
+
+  // [DEV-ONLY] Transcript Upload & Summarize Tester
+  function applyDevTranscriptProgress(progressState) {
+    if (!devTranscriptProgressWrap || !progressState) return;
+    if (!progressState.active) {
+      if (progressState.progress === 100) {
+        if (devTranscriptProgressFill) devTranscriptProgressFill.style.width = '100%';
+        if (devTranscriptStage) devTranscriptStage.textContent = 'Completed';
+        if (devTranscriptPct) devTranscriptPct.textContent = '100%';
+      }
+      return;
+    }
+    const pct = Math.max(0, Math.min(100, Math.round(progressState.progress || 0)));
+    devTranscriptProgressWrap.style.display = 'block';
+    if (devTranscriptProgressFill) devTranscriptProgressFill.style.width = `${Math.max(4, pct)}%`;
+    if (devTranscriptStage) devTranscriptStage.textContent = progressState.stage || 'Summarizing...';
+    if (devTranscriptPct) devTranscriptPct.textContent = `${pct}%`;
+  }
+
+  function deriveTitleFromFilename(fileName) {
+    const base = String(fileName || 'Uploaded Transcript')
+      .replace(/\.[^.]+$/, '')
+      .replace(/^transcript[_-\s]*/i, '')
+      .replace(/[_-]+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\d{1,2}-\d{4}$/i, '')
+      .replace(/[_-]+/g, ' ')
+      .trim();
+    return base || 'Uploaded Transcript';
+  }
+
+  if (devUploadTranscriptBtn && devTranscriptInput) {
+    devUploadTranscriptBtn.addEventListener('click', () => {
+      devTranscriptInput.click();
+    });
+
+    devTranscriptInput.addEventListener('change', async () => {
+      const file = devTranscriptInput.files && devTranscriptInput.files[0];
+      devTranscriptInput.value = '';
+      if (!file) return;
+
+      const rawText = await file.text();
+      const lines = rawText
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l && l !== 'WEBVTT');
+
+      if (lines.length === 0) {
+        if (devTranscriptError) {
+          devTranscriptError.textContent = 'The selected file contains no transcript text.';
+          devTranscriptError.style.display = 'block';
+        }
+        return;
+      }
+
+      const kb = (rawText.length / 1024).toFixed(1);
+      const derivedTitle = deriveTitleFromFilename(file.name);
+      if (devTranscriptMeta) {
+        devTranscriptMeta.textContent = `${file.name} (${lines.length} lines, ${kb} KB)`;
+      }
+      if (devTranscriptError) devTranscriptError.style.display = 'none';
+      if (devSummaryBox) devSummaryBox.style.display = 'none';
+      if (devCopySummaryBtn) devCopySummaryBtn.style.display = 'none';
+      if (devClearSummaryBtn) devClearSummaryBtn.style.display = 'none';
+
+      devUploadTranscriptBtn.disabled = true;
+      devUploadTranscriptBtn.textContent = 'Summarizing...';
+      if (devTranscriptProgressWrap) devTranscriptProgressWrap.style.display = 'block';
+      if (devTranscriptProgressFill) devTranscriptProgressFill.style.width = '5%';
+      if (devTranscriptStage) devTranscriptStage.textContent = 'Preparing Gemini On-Device...';
+      if (devTranscriptPct) devTranscriptPct.textContent = '5%';
+
+      chrome.runtime.sendMessage(
+        {
+          action: 'dev_test_nano_transcript',
+          lines,
+          meetingTitle: derivedTitle,
+          simMode: currentSimMode
+        },
+        (res) => {
+          devUploadTranscriptBtn.disabled = false;
+          devUploadTranscriptBtn.textContent = 'Upload Transcript';
+          if (chrome.runtime.lastError || !res || res.status !== 'done') {
+            if (devTranscriptProgressWrap) devTranscriptProgressWrap.style.display = 'none';
+            const errMsg =
+              (res && res.error) ||
+              (chrome.runtime.lastError && chrome.runtime.lastError.message) ||
+              'Failed to generate summary.';
+            if (devTranscriptError) {
+              devTranscriptError.textContent = errMsg;
+              devTranscriptError.style.display = 'block';
+            }
+            if (res && res.errorCode === 'nano_unavailable') {
+              applyAiModeUI('nano');
+            }
+            return;
+          }
+
+          if (devTranscriptProgressWrap) devTranscriptProgressWrap.style.display = 'none';
+          const secs = ((res.elapsedMs || 0) / 1000).toFixed(1);
+          if (devSummaryHeader) {
+            devSummaryHeader.textContent = `Saved as ${res.filename} (${secs}s)`;
+          }
+          if (devTranscriptOutput) {
+            devTranscriptOutput.textContent = res.summary || '';
+          }
+          if (devSummaryBox) devSummaryBox.style.display = 'block';
+          if (devCopySummaryBtn) devCopySummaryBtn.style.display = 'inline-flex';
+          if (devClearSummaryBtn) devClearSummaryBtn.style.display = 'inline-flex';
+        }
+      );
+    });
+  }
+
+  if (devCopySummaryBtn) {
+    devCopySummaryBtn.addEventListener('click', async () => {
+      const text = devTranscriptOutput ? devTranscriptOutput.textContent : '';
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        devCopySummaryBtn.textContent = 'Copied';
+        setTimeout(() => {
+          devCopySummaryBtn.textContent = 'Copy Summary';
+        }, 2000);
+      } catch (_) {}
+    });
+  }
+
+  if (devClearSummaryBtn) {
+    devClearSummaryBtn.addEventListener('click', () => {
+      if (devSummaryBox) devSummaryBox.style.display = 'none';
+      if (devTranscriptOutput) devTranscriptOutput.textContent = '';
+      if (devTranscriptMeta) devTranscriptMeta.textContent = '';
+      if (devTranscriptError) devTranscriptError.style.display = 'none';
+      if (devCopySummaryBtn) devCopySummaryBtn.style.display = 'none';
+      devClearSummaryBtn.style.display = 'none';
+    });
+  }
+
+  if (window.location.hash === '#dev-transcript-test') {
+    const devCard = document.getElementById('dev-transcript-test');
+    if (devCard) {
+      setTimeout(() => {
+        devCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 150);
+    }
   }
 
   function getUnavailableCardMarkup(reason) {
@@ -792,6 +1261,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (changes.historyRegenProgress && changes.historyRegenProgress.newValue) {
       updateHistoryRegenCardProgress(changes.historyRegenProgress.newValue);
     }
+    if (changes.devTranscriptTestProgress && changes.devTranscriptTestProgress.newValue) {
+      applyDevTranscriptProgress(changes.devTranscriptTestProgress.newValue);
+    }
     if (changes.devNanoSimMode) {
       renderDevSimPills(changes.devNanoSimMode.newValue || 'real');
       if (currentAiMode === 'nano') {
@@ -892,11 +1364,10 @@ document.addEventListener('DOMContentLoaded', () => {
           selectedModel: GEMINI_NANO_MODEL_ID,
           modelSelectVal: GEMINI_NANO_MODEL_ID,
           userSelectedModel: true,
-          onboardingCompleted: true,
-          titleSource: titleSource
+          onboardingCompleted: true
         },
         () => {
-          statusEl.innerText = "Settings saved! Using Gemini Nano (On-Device).";
+          statusEl.innerText = "Settings saved! Using Gemini On-Device.";
           statusEl.style.color = "#2e7d32";
           setTimeout(() => {
             statusEl.innerText = "";
