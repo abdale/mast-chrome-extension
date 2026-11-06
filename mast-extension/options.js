@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9-dev';
+  const WORKER_BUILD_VERSION = '2.9-dev-2';
   chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
     if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
       chrome.storage.local.set({ reopenOptionsAfterReload: true }, () => {
@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const customModelContainer = document.getElementById('customModelContainer');
   const customModelInput = document.getElementById('customModel');
   const titleSourceSelect = document.getElementById('titleSource');
+  const hideCaptionBoxSelect = document.getElementById('hideCaptionBox');
   const saveBtn = document.getElementById('saveBtn');
   const statusEl = document.getElementById('status');
   const recentMeetingsList = document.getElementById('recentMeetingsList');
@@ -299,6 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'customModelVal',
       'userSelectedModel',
       'titleSource',
+      'hideCaptionBox',
       'recentMeetings',
       'savedTranscript',
       'meetingTitle',
@@ -318,6 +320,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (titleSourceSelect) {
         titleSourceSelect.value = result.titleSource === 'teams' ? 'teams' : 'ai';
+      }
+
+      if (hideCaptionBoxSelect) {
+        hideCaptionBoxSelect.value = result.hideCaptionBox ? 'hidden' : 'visible';
       }
 
       let recent = Array.isArray(result.recentMeetings) ? result.recentMeetings : [];
@@ -350,6 +356,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (changes.historyRegenProgress && changes.historyRegenProgress.newValue) {
       updateHistoryRegenCardProgress(changes.historyRegenProgress.newValue);
+    }
+    if (changes.hideCaptionBox && hideCaptionBoxSelect) {
+      hideCaptionBoxSelect.value = changes.hideCaptionBox.newValue ? 'hidden' : 'visible';
     }
   });
 
@@ -427,6 +436,7 @@ document.addEventListener('DOMContentLoaded', () => {
   saveBtn.addEventListener('click', async () => {
     const apiKey = apiKeyInput.value.trim();
     const titleSource = titleSourceSelect ? titleSourceSelect.value : 'ai';
+    const hideCaptionBox = hideCaptionBoxSelect ? hideCaptionBoxSelect.value === 'hidden' : false;
 
     if (!apiKey) {
       statusEl.innerText = 'Please enter your Google AI Studio API key.';
@@ -462,7 +472,8 @@ document.addEventListener('DOMContentLoaded', () => {
         modelSelectVal: modelSelectVal,
         customModelVal: customModelVal,
         userSelectedModel: true,
-        titleSource: titleSource
+        titleSource: titleSource,
+        hideCaptionBox: hideCaptionBox
       },
       () => {
         statusEl.innerText = 'Settings saved!';

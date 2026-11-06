@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev';
+const WORKER_BUILD_VERSION = '2.9-dev-2';
 let isGeneratingInMemory = false;
 
 const TEAMS_URL_PATTERNS = [

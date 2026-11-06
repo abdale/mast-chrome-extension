@@ -10,6 +10,7 @@ const apiError = document.getElementById('apiError');
 const startBtn = document.getElementById('startBtn');
 const captionHelperText = document.getElementById('captionHelperText');
 const enableCaptionsBtn = document.getElementById('enableCaptionsBtn');
+const hideCaptionBoxToggle = document.getElementById('hideCaptionBoxToggle');
 const issueBanner = document.getElementById('issueBanner');
 const stopLink = document.getElementById('stopLink');
 const statusEl = document.getElementById('status');
@@ -29,12 +30,20 @@ let timerInterval = null;
 let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 
-const WORKER_BUILD_VERSION = '2.9-dev';
+const WORKER_BUILD_VERSION = '2.9-dev-2';
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
     chrome.runtime.reload();
   }
 });
+
+if (hideCaptionBoxToggle) {
+  hideCaptionBoxToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ hideCaptionBox: !!hideCaptionBoxToggle.checked }, () => {
+      updateUI();
+    });
+  });
+}
 
 settingsLink.addEventListener('click', (e) => {
   e.preventDefault();
@@ -336,9 +345,13 @@ function updateUI() {
       'completionUnseen',
       'callEnded',
       'generationStartedAt',
-      'liveCaptionsOn'
+      'liveCaptionsOn',
+      'hideCaptionBox'
     ],
     async (result) => {
+      if (hideCaptionBoxToggle) {
+        hideCaptionBoxToggle.checked = !!result.hideCaptionBox;
+      }
       let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const targetTabId = result.isTranscribing && result.activeTabId ? result.activeTabId : (tab ? tab.id : null);
       const pageStatus = await checkPageStatus(targetTabId);
@@ -546,9 +559,15 @@ function updateUI() {
       if (captionHelperText) {
         captionHelperText.style.display = 'block';
         captionHelperText.style.color = '#5f6368';
-        captionHelperText.innerText = pageStatus.captionsOn
-          ? 'Captions enabled and ready. Do not disable live captions during the call.'
-          : 'Live captions will be automatically enabled upon capture. Do not disable live captions during the call.';
+        if (result.hideCaptionBox) {
+          captionHelperText.innerText = pageStatus.captionsOn
+            ? 'Captions enabled and ready. Caption box will be hidden during capture.'
+            : 'Live captions will be enabled and hidden in Teams during capture.';
+        } else {
+          captionHelperText.innerText = pageStatus.captionsOn
+            ? 'Captions enabled and ready. Do not disable live captions during the call.'
+            : 'Live captions will be automatically enabled upon capture. Do not disable live captions during the call.';
+        }
       }
       statusEl.style.color = '#333';
       statusEl.innerText = '';
@@ -565,7 +584,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
       }
     });
   }
-  if (changes.notesStatus || changes.apiKey) {
+  if (changes.notesStatus || changes.apiKey || changes.hideCaptionBox) {
     updateUI();
   }
 });

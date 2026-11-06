@@ -82,6 +82,63 @@
       font-size: 11px;
       color: #5f6368;
     }
+
+    .caption-box-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 10px;
+      padding: 7px 10px;
+      background: #f8f9fa;
+      border: 1px solid #e8eaed;
+      border-radius: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .caption-box-toggle-label {
+      font-size: 11.5px;
+      color: #3c4043;
+      font-weight: 500;
+    }
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 32px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+      margin: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background-color: #dadce0;
+      border-radius: 999px;
+      transition: background-color 0.2s ease;
+    }
+    .toggle-slider::before {
+      content: "";
+      position: absolute;
+      height: 14px;
+      width: 14px;
+      left: 2px;
+      bottom: 2px;
+      background-color: #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+      transition: transform 0.2s ease;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background-color: #5B5FC7;
+    }
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(14px);
+    }
   </style>
 </head>
 <body>
@@ -128,6 +185,13 @@
     <div id="captionHelperText">Live captions will be automatically enabled upon capture. Do not disable live captions during the call.</div>
     <div id="timer">00:00</div>
     <div id="status"></div>
+    <label class="caption-box-toggle" for="hideCaptionBoxToggle" title="Keep live captions active for mast while hiding the Teams caption overlay on screen">
+      <span class="caption-box-toggle-label">Hide caption box in Teams</span>
+      <span class="toggle-switch">
+        <input type="checkbox" id="hideCaptionBoxToggle">
+        <span class="toggle-slider"></span>
+      </span>
+    </label>
   </div>
 
   <div id="view-results" class="view-section">
