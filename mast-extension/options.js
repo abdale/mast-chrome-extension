@@ -1,11 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9-dev-2';
-  chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
-    if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
-      chrome.storage.local.set({ reopenOptionsAfterReload: true }, () => {
-        chrome.runtime.reload();
-      });
-    }
+  const WORKER_BUILD_VERSION = '2.9-dev-3';
+  chrome.runtime.sendMessage({ action: 'get_worker_version' }, () => {
+    void chrome.runtime.lastError;
   });
 
   if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.getDirectory === 'function') {

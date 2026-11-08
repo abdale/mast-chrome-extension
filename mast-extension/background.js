@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-2';
+const WORKER_BUILD_VERSION = '2.9-dev-3';
 let isGeneratingInMemory = false;
 
 const TEAMS_URL_PATTERNS = [
@@ -682,6 +682,7 @@ async function backfillRecentMeetingsIfNeeded() {
 }
 
 cleanupLegacyState();
+injectContentScriptIntoOpenTeamsTabs();
 
 // Auto-migrate model selection, inject content script, and recover any interrupted generation on install/reload
 chrome.runtime.onInstalled.addListener(async () => {
@@ -772,32 +773,50 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ version: WORKER_BUILD_VERSION });
     return false;
   } else if (request.action === "start_from_toast") {
-    startFromToast(sender, request.meetingTitle).then(sendResponse);
+    startFromToast(sender, request.meetingTitle)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed to start" }));
     return true;
   } else if (request.action === "open_options") {
-    chrome.runtime.openOptionsPage();
+    try {
+      chrome.runtime.openOptionsPage();
+    } catch (_) {}
     sendResponse({ status: "opened" });
     return false;
   } else if (request.action === "session_ended") {
-    handleSessionEnded().then(sendResponse);
+    handleSessionEnded()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "stop_and_finalize") {
-    stopTabAndFinalize(request.tabId).then(sendResponse);
+    stopTabAndFinalize(request.tabId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "check_generation_status") {
-    recoverStuckGenerationIfNeeded().then(sendResponse);
+    recoverStuckGenerationIfNeeded()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "generate_notes") {
-    generateAndDownloadNotes().then(sendResponse);
+    generateAndDownloadNotes()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "regenerate_meeting_notes") {
-    regenerateMeetingFromHistory(request.meetingId).then(sendResponse);
+    regenerateMeetingFromHistory(request.meetingId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "download_history_transcript") {
-    downloadHistoryTranscript(request.meetingId).then(sendResponse);
+    downloadHistoryTranscript(request.meetingId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "delete_recent_meeting") {
-    deleteRecentMeeting(request.meetingId).then(sendResponse);
+    deleteRecentMeeting(request.meetingId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "download_transcript") {
     downloadTranscriptIfNeeded(true)

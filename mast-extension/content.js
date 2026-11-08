@@ -1,6 +1,15 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9-dev-2';
-  if (window.__mastContentScriptVersion === CONTENT_SCRIPT_VERSION) {
+  const CONTENT_SCRIPT_VERSION = '2.9-dev-3';
+
+  function isExtensionContextValid() {
+    try {
+      return !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  if (window.__mastContentScriptVersion === CONTENT_SCRIPT_VERSION && isExtensionContextValid()) {
     return;
   }
   if (typeof window.__mastContentScriptCleanup === 'function') {
@@ -8,8 +17,25 @@
       window.__mastContentScriptCleanup();
     } catch (_) {}
   }
+  try {
+    document.dispatchEvent(new CustomEvent('__mast_cleanup_previous_instance'));
+  } catch (_) {}
+  ['mast-status-toast', 'mast-captions-alert', 'mast-captions-alert-style', 'mast-hide-captions-style'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.remove();
+  });
+
   window.__mastContentScriptVersion = CONTENT_SCRIPT_VERSION;
   window.__mastContentScriptLoaded = true;
+
+  function onCrossWorldCleanup() {
+    if (typeof window.__mastContentScriptCleanup === 'function') {
+      try {
+        window.__mastContentScriptCleanup();
+      } catch (_) {}
+    }
+  }
+  document.addEventListener('__mast_cleanup_previous_instance', onCrossWorldCleanup);
 
   let isTranscribing = false;
   let observer = null;
@@ -648,26 +674,70 @@
       captureBtn.style.cssText =
         'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer; font-weight: 500;';
       captureBtn.addEventListener('click', () => {
+        if (!isExtensionContextValid()) {
+          removeStatusToast();
+          return;
+        }
         captureBtn.disabled = true;
         captureBtn.textContent = 'Starting...';
         const title = extractTeamsMeetingTitle();
-        chrome.runtime.sendMessage({ action: 'start_from_toast', meetingTitle: title }, (res) => {
-          void chrome.runtime.lastError;
-          if (res && res.status === 'no_api_key') {
+
+        let settled = false;
+        const safetyTimer = setTimeout(() => {
+          if (!settled && currentToastState === 'meeting_detected') {
+            settled = true;
             renderStatusToast('api_key_needed');
-            return;
           }
-          isTranscribing = true;
-          transcriptionStartedAt = (res && res.startTime) || Date.now();
-          sawCaptionsActive = areCaptionsVisible();
-          captionsOffDismissed = false;
-          captionsAlertMinimized = false;
-          removeCaptionsAlert();
-          syncHideCaptionsStyle();
-          triggerEnableCaptionsAllFrames();
-          startObserving();
-          renderStatusToast('capturing_started');
-        });
+        }, 2500);
+
+        try {
+          chrome.storage.local.get(['apiKey'], (stored) => {
+            if (settled) return;
+            if (chrome.runtime.lastError) {
+              settled = true;
+              clearTimeout(safetyTimer);
+              renderStatusToast('api_key_needed');
+              return;
+            }
+            const hasKey = !!(stored && typeof stored.apiKey === 'string' && stored.apiKey.trim());
+            if (!hasKey) {
+              settled = true;
+              clearTimeout(safetyTimer);
+              renderStatusToast('api_key_needed');
+              try {
+                chrome.runtime.sendMessage({ action: 'open_options' }, () => {
+                  void chrome.runtime.lastError;
+                });
+              } catch (_) {}
+              return;
+            }
+
+            chrome.runtime.sendMessage({ action: 'start_from_toast', meetingTitle: title }, (res) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(safetyTimer);
+              void chrome.runtime.lastError;
+              if (!res || res.status === 'no_api_key' || res.status === 'error') {
+                renderStatusToast('api_key_needed');
+                return;
+              }
+              isTranscribing = true;
+              transcriptionStartedAt = (res && res.startTime) || Date.now();
+              sawCaptionsActive = areCaptionsVisible();
+              captionsOffDismissed = false;
+              captionsAlertMinimized = false;
+              removeCaptionsAlert();
+              syncHideCaptionsStyle();
+              triggerEnableCaptionsAllFrames();
+              startObserving();
+              renderStatusToast('capturing_started');
+            });
+          });
+        } catch (_) {
+          settled = true;
+          clearTimeout(safetyTimer);
+          removeStatusToast();
+        }
       });
 
       const dismissBtn = document.createElement('button');
@@ -715,11 +785,44 @@
       toast.style.borderLeftColor = '#d9534f';
       messageEl.textContent = 'mast: Please save your Google AI Studio API key in Settings first.';
       toast.appendChild(messageEl);
+
+      const subEl = document.createElement('div');
+      subEl.style.cssText = 'font-size: 12px; color: #5f6368; font-weight: 400;';
+      subEl.textContent = 'Enter your API key in the mast popup or Settings to start capturing.';
+      toast.appendChild(subEl);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
+
+      const settingsBtn = document.createElement('button');
+      settingsBtn.textContent = 'Open Settings';
+      settingsBtn.style.cssText =
+        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
+      settingsBtn.addEventListener('click', () => {
+        try {
+          chrome.runtime.sendMessage({ action: 'open_options' }, () => {
+            void chrome.runtime.lastError;
+          });
+        } catch (_) {}
+      });
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.style.cssText =
+        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer;';
+      dismissBtn.addEventListener('click', () => {
+        removeStatusToast();
+      });
+
+      actionsRow.appendChild(settingsBtn);
+      actionsRow.appendChild(dismissBtn);
+      toast.appendChild(actionsRow);
+
       statusToastTimer = setTimeout(() => {
         if (currentToastState === 'api_key_needed') {
           removeStatusToast();
         }
-      }, 6000);
+      }, 8000);
     } else if (state === 'generating') {
       toast.style.borderLeftColor = '#5B5FC7';
       messageEl.textContent = 'mast: Transcript saved. Generating AI notes...';
@@ -841,6 +944,12 @@
     syncMeetingTitleToStorage();
 
     callCheckInterval = setInterval(() => {
+      if (!isExtensionContextValid()) {
+        if (typeof window.__mastContentScriptCleanup === 'function') {
+          window.__mastContentScriptCleanup();
+        }
+        return;
+      }
       if (!isTranscribing) {
         clearInterval(callCheckInterval);
         callCheckInterval = null;
@@ -893,10 +1002,10 @@
 
   async function startObserving() {
     if (observer) return;
-    await fetchRemoteConfig();
     console.log("mast: startObserving() called. Looking for captions...");
     syncMeetingTitleToStorage();
     syncHideCaptionsStyle();
+    fetchRemoteConfig();
 
     chrome.storage.local.set({ issueDetected: false });
     if (issueTimer) clearTimeout(issueTimer);
@@ -1038,6 +1147,12 @@
     if (meetingDetectInterval) clearInterval(meetingDetectInterval);
 
     const checkMeetingPresence = () => {
+      if (!isExtensionContextValid()) {
+        if (typeof window.__mastContentScriptCleanup === 'function') {
+          window.__mastContentScriptCleanup();
+        }
+        return;
+      }
       try {
         const localActive = isTeamsMeetingActiveLocal();
         if (window !== window.top) {
@@ -1104,6 +1219,13 @@
   // React to background generation and transcription status updates
   function onStorageChanged(changes, area) {
     if (area !== 'local') return;
+
+    if (changes.apiKey) {
+      const hasNewKey = !!(changes.apiKey.newValue && String(changes.apiKey.newValue).trim());
+      if (hasNewKey && currentToastState === 'api_key_needed' && isTeamsMeetingActive() && !isTranscribing) {
+        renderStatusToast('meeting_detected');
+      }
+    }
 
     if (changes.hideCaptionBox) {
       hideCaptionBox = !!changes.hideCaptionBox.newValue;
@@ -1232,6 +1354,7 @@
     if (alertStyle) alertStyle.remove();
     window.removeEventListener('beforeunload', onBeforeUnload);
     window.removeEventListener('message', onWindowMessage);
+    document.removeEventListener('__mast_cleanup_previous_instance', onCrossWorldCleanup);
     try {
       chrome.storage.onChanged.removeListener(onStorageChanged);
       chrome.runtime.onMessage.removeListener(onRuntimeMessage);

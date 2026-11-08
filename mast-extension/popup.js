@@ -30,7 +30,7 @@ let timerInterval = null;
 let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 
-const WORKER_BUILD_VERSION = '2.9-dev-2';
+const WORKER_BUILD_VERSION = '2.9-dev-3';
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
     chrome.runtime.reload();
@@ -205,6 +205,19 @@ async function checkPageStatus(preferredTabId = null) {
     tabUrl.includes('teams.cloud.microsoft');
   if (!isTeamsTab && !msgStatus) {
     return { captionsOn: false, inActiveCall: false, meetingTitle: 'Meeting' };
+  }
+  if (isTeamsTab && !msgStatus && tab.id) {
+    try {
+      chrome.scripting.executeScript(
+        {
+          target: { tabId: tab.id, allFrames: true },
+          files: ['content.js']
+        },
+        () => {
+          void chrome.runtime.lastError;
+        }
+      );
+    } catch (_) {}
   }
 
   let captionsOn = !!(msgStatus && msgStatus.captionsOn);
