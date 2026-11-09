@@ -30,11 +30,9 @@ let timerInterval = null;
 let pollInterval = null;
 let sawSessionTransitionInPopup = false;
 
-const WORKER_BUILD_VERSION = '2.9-dev-3';
-chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
-  if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
-    chrome.runtime.reload();
-  }
+const WORKER_BUILD_VERSION = '2.9-dev-4';
+chrome.runtime.sendMessage({ action: 'get_worker_version' }, () => {
+  void chrome.runtime.lastError;
 });
 
 if (hideCaptionBoxToggle) {
