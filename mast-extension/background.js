@@ -1,7 +1,51 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-3';
+const WORKER_BUILD_VERSION = '2.9-dev-4';
 let isGeneratingInMemory = false;
+
+async function syncToolbarBadge() {
+  try {
+    if (typeof chrome === 'undefined' || !chrome.action || typeof chrome.action.setBadgeText !== 'function') {
+      return;
+    }
+    const stored = await chrome.storage.local.get([
+      'isTranscribing',
+      'liveCaptionsOn',
+      'notesStatus',
+      'completionUnseen'
+    ]);
+
+    let text = '';
+    let bgColor = '#5B5FC7';
+
+    if (stored.isTranscribing) {
+      if (stored.liveCaptionsOn === false) {
+        text = 'OFF';
+        bgColor = '#FF9F0A';
+      } else {
+        text = 'ON';
+        bgColor = '#1E8E3E';
+      }
+    } else if (stored.notesStatus === 'generating') {
+      text = 'AI';
+      bgColor = '#5B5FC7';
+    } else if (stored.notesStatus === 'error') {
+      text = '!';
+      bgColor = '#D93025';
+    } else if (stored.notesStatus === 'done' && stored.completionUnseen) {
+      text = '\u2713';
+      bgColor = '#1E8E3E';
+    }
+
+    await chrome.action.setBadgeText({ text });
+    if (text) {
+      await chrome.action.setBadgeBackgroundColor({ color: bgColor });
+      if (typeof chrome.action.setBadgeTextColor === 'function') {
+        await chrome.action.setBadgeTextColor({ color: '#FFFFFF' });
+      }
+    }
+  } catch (_) {}
+}
 
 const TEAMS_URL_PATTERNS = [
   "https://teams.microsoft.com/*",
@@ -623,6 +667,7 @@ async function startFromToast(sender, meetingTitle) {
     completionUnseen: false,
     transcriptDownloaded: false,
     callEnded: false,
+    liveCaptionsOn: true,
     meetingTitle: initialTitle
   });
 
@@ -683,6 +728,19 @@ async function backfillRecentMeetingsIfNeeded() {
 
 cleanupLegacyState();
 injectContentScriptIntoOpenTeamsTabs();
+syncToolbarBadge();
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (
+    changes.isTranscribing ||
+    changes.liveCaptionsOn ||
+    changes.notesStatus ||
+    changes.completionUnseen
+  ) {
+    syncToolbarBadge();
+  }
+});
 
 // Auto-migrate model selection, inject content script, and recover any interrupted generation on install/reload
 chrome.runtime.onInstalled.addListener(async () => {

@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9-dev-3';
+  const CONTENT_SCRIPT_VERSION = '2.9-dev-4';
 
   function isExtensionContextValid() {
     try {
@@ -20,7 +20,7 @@
   try {
     document.dispatchEvent(new CustomEvent('__mast_cleanup_previous_instance'));
   } catch (_) {}
-  ['mast-status-toast', 'mast-captions-alert', 'mast-captions-alert-style', 'mast-hide-captions-style'].forEach((id) => {
+  ['mast-status-toast', 'mast-captions-alert', 'mast-captions-alert-style', 'mast-pill-style', 'mast-hide-captions-style'].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.remove();
   });
@@ -340,24 +340,33 @@
     }
   }
 
-  function ensureCaptionsAlertStyles() {
-    if (document.getElementById('mast-captions-alert-style')) return;
+  function ensureDynamicPillStyles() {
+    if (document.getElementById('mast-pill-style')) return;
     const styleEl = document.createElement('style');
-    styleEl.id = 'mast-captions-alert-style';
+    styleEl.id = 'mast-pill-style';
     styleEl.textContent = `
-      @keyframes mastPulseDot {
-        0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(255, 69, 58, 0.65); }
-        50% { transform: scale(1.12); opacity: 0.85; box-shadow: 0 0 0 6px rgba(255, 69, 58, 0); }
-      }
       @keyframes mastSlideInTop {
         from { opacity: 0; transform: translate(-50%, -10px) scale(0.96); }
         to { opacity: 1; transform: translate(-50%, 0) scale(1); }
       }
-      #mast-captions-alert {
+      @keyframes mastWaveBar {
+        0%, 100% { transform: scaleY(0.38); opacity: 0.75; }
+        50% { transform: scaleY(1); opacity: 1; }
+      }
+      @keyframes mastAmberPulse {
+        0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(255, 159, 10, 0)); }
+        50% { transform: scale(1.08); filter: drop-shadow(0 0 5px rgba(255, 159, 10, 0.55)); }
+      }
+      @keyframes mastSpinRing {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      #mast-status-toast {
         position: fixed;
         top: 16px;
         left: 50%;
         transform: translateX(-50%);
+        max-width: min(92vw, 580px);
         z-index: 2147483647;
         background: rgba(28, 28, 30, 0.94);
         backdrop-filter: blur(16px);
@@ -365,47 +374,93 @@
         color: #ffffff;
         border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 999px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.22);
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         font-size: 13px;
         line-height: 1.3;
         display: inline-flex;
         align-items: center;
         gap: 10px;
-        padding: 7px 10px 7px 14px;
+        padding: 6px 10px 6px 13px;
         white-space: nowrap;
         user-select: none;
+        box-sizing: border-box;
         animation: mastSlideInTop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-        transition: all 0.2s ease;
+        transition: background 0.2s ease, border-color 0.2s ease, padding 0.2s ease, box-shadow 0.2s ease;
       }
-      #mast-captions-alert[data-mode="badge"] {
+      #mast-status-toast[data-tone="indigo"] {
+        border-color: rgba(139, 143, 248, 0.34);
+      }
+      #mast-status-toast[data-tone="green"] {
+        border-color: rgba(48, 209, 88, 0.36);
+      }
+      #mast-status-toast[data-tone="amber"] {
+        border-color: rgba(255, 159, 10, 0.52);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38), 0 0 0 1px rgba(255, 159, 10, 0.16);
+      }
+      #mast-status-toast[data-tone="red"] {
+        border-color: rgba(255, 69, 58, 0.52);
+      }
+      #mast-status-toast[data-mode="micro"] {
+        padding: 5px 12px;
+        gap: 6px;
+        cursor: pointer;
+        font-size: 12.5px;
+      }
+      #mast-status-toast[data-mode="micro"]:hover,
+      #mast-status-toast[data-mode="badge"]:hover {
+        background: rgba(44, 44, 46, 0.96);
+        border-color: rgba(255, 255, 255, 0.3);
+      }
+      #mast-status-toast[data-mode="badge"] {
         padding: 6px 13px;
         gap: 8px;
         cursor: pointer;
         font-size: 12px;
       }
-      #mast-captions-alert[data-mode="badge"]:hover {
-        background: rgba(44, 44, 46, 0.96);
-        border-color: rgba(255, 255, 255, 0.28);
+      #mast-status-toast[data-mode="restored"] {
+        padding: 6px 14px;
+        gap: 9px;
       }
-      #mast-captions-alert[data-mode="restored"] {
-        padding: 7px 14px;
-        gap: 8px;
-      }
-      .mast-alert-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: #ff453a;
+      .mast-pill-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 700;
+        font-size: 13px;
+        letter-spacing: -0.02em;
+        color: #ffffff;
         flex-shrink: 0;
-        animation: mastPulseDot 1.8s infinite ease-in-out;
       }
-      .mast-alert-dot.mast-dot-green {
-        background: #30d158;
-        animation: none;
-        box-shadow: 0 0 8px rgba(48, 209, 88, 0.6);
+      .mast-pill-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
       }
-      .mast-alert-enable-btn {
+      .mast-pill-sep {
+        width: 1px;
+        height: 14px;
+        background: rgba(255, 255, 255, 0.16);
+        flex-shrink: 0;
+      }
+      .mast-pill-text {
+        font-weight: 500;
+        letter-spacing: -0.01em;
+        color: rgba(255, 255, 255, 0.94);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .mast-pill-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      .mast-pill-btn-primary {
         background: #5B5FC7;
         color: #ffffff;
         border: none;
@@ -415,15 +470,56 @@
         font-weight: 600;
         cursor: pointer;
         font-family: inherit;
+        line-height: 1.2;
         transition: background 0.15s ease, transform 0.1s ease;
       }
-      .mast-alert-enable-btn:hover {
+      .mast-pill-btn-primary:hover {
         background: #6b6fd6;
       }
-      .mast-alert-enable-btn:active {
+      .mast-pill-btn-primary:active {
         transform: scale(0.97);
       }
-      .mast-alert-min-btn {
+      .mast-pill-btn-primary:disabled {
+        opacity: 0.7;
+        cursor: default;
+      }
+      .mast-pill-btn-amber {
+        background: #FF9F0A;
+        color: #1c1c1e;
+        border: none;
+        border-radius: 999px;
+        padding: 5px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        font-family: inherit;
+        line-height: 1.2;
+        transition: background 0.15s ease, transform 0.1s ease;
+      }
+      .mast-pill-btn-amber:hover {
+        background: #ffb340;
+      }
+      .mast-pill-btn-amber:active {
+        transform: scale(0.97);
+      }
+      .mast-pill-btn-subtle {
+        background: rgba(255, 255, 255, 0.12);
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 999px;
+        padding: 4px 11px;
+        font-size: 11.5px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: inherit;
+        line-height: 1.2;
+        transition: background 0.15s ease, border-color 0.15s ease;
+      }
+      .mast-pill-btn-subtle:hover {
+        background: rgba(255, 255, 255, 0.2);
+        border-color: rgba(255, 255, 255, 0.28);
+      }
+      .mast-pill-btn-icon {
         background: rgba(255, 255, 255, 0.1);
         color: rgba(255, 255, 255, 0.78);
         border: none;
@@ -438,14 +534,124 @@
         line-height: 1;
         cursor: pointer;
         padding: 0;
+        flex-shrink: 0;
         transition: background 0.15s ease, color 0.15s ease;
       }
-      .mast-alert-min-btn:hover {
+      .mast-pill-btn-icon:hover {
         background: rgba(255, 255, 255, 0.22);
         color: #ffffff;
       }
+      .mast-wave-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        width: 14px;
+        height: 14px;
+      }
+      .mast-wave-bar {
+        width: 2.5px;
+        height: 12px;
+        background: #30D158;
+        border-radius: 2px;
+        transform-origin: center;
+        animation: mastWaveBar 1.1s infinite ease-in-out;
+      }
+      .mast-wave-bar-1 { animation-delay: 0s; }
+      .mast-wave-bar-2 { animation-delay: 0.22s; }
+      .mast-wave-bar-3 { animation-delay: 0.44s; }
+      .mast-pause-svg {
+        animation: mastAmberPulse 2s infinite ease-in-out;
+      }
+      .mast-spin-svg {
+        animation: mastSpinRing 0.95s linear infinite;
+      }
+      .mast-pill-progress-wrap {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 210px;
+        max-width: 340px;
+      }
+      .mast-pill-progress-track {
+        width: 72px;
+        height: 5px;
+        background: rgba(255, 255, 255, 0.16);
+        border-radius: 999px;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
     `;
     (document.head || document.documentElement).appendChild(styleEl);
+  }
+
+  function createPillIconEl(iconType) {
+    const wrap = document.createElement('span');
+    wrap.className = 'mast-pill-icon';
+    wrap.setAttribute('data-icon', iconType);
+    if (iconType === 'waveform') {
+      wrap.innerHTML =
+        '<span class="mast-wave-icon" aria-hidden="true">' +
+        '<span class="mast-wave-bar mast-wave-bar-1"></span>' +
+        '<span class="mast-wave-bar mast-wave-bar-2"></span>' +
+        '<span class="mast-wave-bar mast-wave-bar-3"></span>' +
+        '</span>';
+    } else if (iconType === 'pause_amber') {
+      wrap.innerHTML =
+        '<svg class="mast-pause-svg" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="7" fill="rgba(255, 159, 10, 0.18)" stroke="#FF9F0A" stroke-width="1.4"/>' +
+        '<rect x="5.3" y="5" width="1.8" height="6" rx="0.8" fill="#FF9F0A"/>' +
+        '<rect x="8.9" y="5" width="1.8" height="6" rx="0.8" fill="#FF9F0A"/>' +
+        '</svg>';
+    } else if (iconType === 'warning_amber') {
+      wrap.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<path d="M8 2L14.5 13.5H1.5L8 2Z" fill="rgba(255, 159, 10, 0.18)" stroke="#FF9F0A" stroke-width="1.4" stroke-linejoin="round"/>' +
+        '<rect x="7.3" y="6" width="1.4" height="4" rx="0.7" fill="#FF9F0A"/>' +
+        '<circle cx="8" cy="11.6" r="0.8" fill="#FF9F0A"/>' +
+        '</svg>';
+    } else if (iconType === 'spinner') {
+      wrap.innerHTML =
+        '<svg class="mast-spin-svg" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="6" stroke="rgba(139, 143, 248, 0.25)" stroke-width="2"/>' +
+        '<path d="M14 8A6 6 0 0 0 8 2" stroke="#8B8FF8" stroke-width="2" stroke-linecap="round"/>' +
+        '</svg>';
+    } else if (iconType === 'check_green') {
+      wrap.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="7" fill="rgba(48, 209, 88, 0.18)" stroke="#30D158" stroke-width="1.4"/>' +
+        '<path d="M5 8.2L7.1 10.3L11.2 6" stroke="#30D158" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+        '</svg>';
+    } else if (iconType === 'error_red') {
+      wrap.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="7" fill="rgba(255, 69, 58, 0.18)" stroke="#FF453A" stroke-width="1.4"/>' +
+        '<rect x="7.25" y="4.5" width="1.5" height="4.5" rx="0.75" fill="#FF453A"/>' +
+        '<circle cx="8" cy="11.2" r="0.85" fill="#FF453A"/>' +
+        '</svg>';
+    } else {
+      wrap.innerHTML =
+        '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<path d="M8 1.5L9.65 6.35L14.5 8L9.65 9.65L8 14.5L6.35 9.65L1.5 8L6.35 6.35L8 1.5Z" fill="#8B8FF8"/>' +
+        '</svg>';
+    }
+    return wrap;
+  }
+
+  function createPillBrandEl(iconType, brandText = 'mast') {
+    const brand = document.createElement('span');
+    brand.className = 'mast-pill-brand';
+    brand.appendChild(createPillIconEl(iconType));
+    const label = document.createElement('span');
+    label.textContent = brandText;
+    brand.appendChild(label);
+    return brand;
+  }
+
+  function createPillSepEl() {
+    const sep = document.createElement('span');
+    sep.className = 'mast-pill-sep';
+    return sep;
   }
 
   function removeCaptionsAlert() {
@@ -454,9 +660,16 @@
       captionsAlertTimer = null;
     }
     captionsAlertMode = null;
-    const existing = document.getElementById('mast-captions-alert');
-    if (existing) {
-      existing.remove();
+    const legacyAlert = document.getElementById('mast-captions-alert');
+    if (legacyAlert) {
+      legacyAlert.remove();
+    }
+    if (
+      currentToastState === 'captions_off' ||
+      currentToastState === 'captions_off_badge' ||
+      currentToastState === 'restored'
+    ) {
+      removeStatusToast();
     }
   }
 
@@ -475,114 +688,12 @@
 
   function renderCaptionsAlert(mode = 'alert') {
     if (window !== window.top || !document.body) return;
-
-    if (captionsAlertTimer) {
-      clearTimeout(captionsAlertTimer);
-      captionsAlertTimer = null;
-    }
-
-    ensureCaptionsAlertStyles();
-    captionsAlertMode = mode;
-
-    let pill = document.getElementById('mast-captions-alert');
-    if (!pill) {
-      pill = document.createElement('div');
-      pill.id = 'mast-captions-alert';
-      document.body.appendChild(pill);
-    }
-
-    pill.setAttribute('data-mode', mode);
-    pill.innerHTML = '';
-    pill.onclick = null;
-    pill.title = '';
-
-    if (mode === 'alert') {
-      const dot = document.createElement('span');
-      dot.className = 'mast-alert-dot';
-
-      const textEl = document.createElement('span');
-      textEl.style.cssText = 'font-weight: 500; letter-spacing: -0.01em;';
-      textEl.textContent = 'Captions off \u2014 mast is paused';
-
-      const enableBtn = document.createElement('button');
-      enableBtn.id = 'mast-alert-enable-btn';
-      enableBtn.className = 'mast-alert-enable-btn';
-      enableBtn.textContent = 'Enable Captions';
-      enableBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        enableBtn.textContent = 'Enabling...';
-        triggerEnableCaptionsAllFrames();
-        setTimeout(() => {
-          if (captionsAlertMode === 'alert' && document.body.contains(enableBtn)) {
-            enableBtn.textContent = 'Enable Captions';
-          }
-        }, 1200);
-      });
-
-      const minBtn = document.createElement('button');
-      minBtn.id = 'mast-alert-minimize-btn';
-      minBtn.className = 'mast-alert-min-btn';
-      minBtn.title = 'Minimize to badge';
-      minBtn.setAttribute('aria-label', 'Minimize to badge');
-      minBtn.textContent = '\u2013';
-      minBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        captionsAlertMinimized = true;
-        renderCaptionsAlert('badge');
-      });
-
-      pill.appendChild(dot);
-      pill.appendChild(textEl);
-      pill.appendChild(enableBtn);
-      pill.appendChild(minBtn);
-    } else if (mode === 'badge') {
-      pill.title = 'Click to re-enable live captions';
-      const dot = document.createElement('span');
-      dot.className = 'mast-alert-dot';
-
-      const pausedLabel = document.createElement('span');
-      pausedLabel.style.cssText = 'font-weight: 500; color: rgba(255, 255, 255, 0.92);';
-      pausedLabel.textContent = 'mast Paused';
-
-      const sep = document.createElement('span');
-      sep.style.cssText = 'color: rgba(255, 255, 255, 0.4);';
-      sep.textContent = '\u00B7';
-
-      const actionLabel = document.createElement('span');
-      actionLabel.id = 'mast-badge-enable-label';
-      actionLabel.style.cssText = 'font-weight: 600; color: #a5a9ff;';
-      actionLabel.textContent = 'Enable Captions';
-
-      pill.appendChild(dot);
-      pill.appendChild(pausedLabel);
-      pill.appendChild(sep);
-      pill.appendChild(actionLabel);
-
-      pill.onclick = () => {
-        actionLabel.textContent = 'Enabling...';
-        triggerEnableCaptionsAllFrames();
-        setTimeout(() => {
-          if (captionsAlertMode === 'badge' && document.body.contains(actionLabel)) {
-            actionLabel.textContent = 'Enable Captions';
-          }
-        }, 1200);
-      };
+    if (mode === 'badge') {
+      renderStatusToast('captions_off_badge');
     } else if (mode === 'restored') {
-      const dot = document.createElement('span');
-      dot.className = 'mast-alert-dot mast-dot-green';
-
-      const textEl = document.createElement('span');
-      textEl.style.cssText = 'font-weight: 500; letter-spacing: -0.01em;';
-      textEl.textContent = 'Captions active \u2014 mast recording';
-
-      pill.appendChild(dot);
-      pill.appendChild(textEl);
-
-      captionsAlertTimer = setTimeout(() => {
-        if (captionsAlertMode === 'restored') {
-          removeCaptionsAlert();
-        }
-      }, 2200);
+      renderStatusToast('restored');
+    } else {
+      renderStatusToast('captions_off');
     }
   }
 
@@ -591,7 +702,12 @@
       clearTimeout(statusToastTimer);
       statusToastTimer = null;
     }
+    if (captionsAlertTimer) {
+      clearTimeout(captionsAlertTimer);
+      captionsAlertTimer = null;
+    }
     currentToastState = null;
+    captionsAlertMode = null;
     const existing = document.getElementById('mast-status-toast');
     if (existing) {
       existing.remove();
@@ -609,71 +725,73 @@
     stageSpan.style.cssText = 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
     stageSpan.textContent = stage || 'Generating meeting notes...';
     const pctEl = document.createElement('strong');
-    pctEl.style.cssText = 'color: #5B5FC7; flex-shrink: 0;';
+    pctEl.style.cssText = 'color: #a5a9ff; flex-shrink: 0; margin-left: 6px;';
     pctEl.textContent = `${pct}%`;
     label.appendChild(stageSpan);
     label.appendChild(pctEl);
   }
 
   function renderStatusToast(state, errorMessage) {
-    if (window !== window.top) return;
+    if (window !== window.top || !document.body) return;
 
     if (statusToastTimer) {
       clearTimeout(statusToastTimer);
       statusToastTimer = null;
     }
+    if (captionsAlertTimer) {
+      clearTimeout(captionsAlertTimer);
+      captionsAlertTimer = null;
+    }
+
+    if (state === 'captions_off' && captionsAlertMinimized) {
+      state = 'captions_off_badge';
+    }
+
+    ensureDynamicPillStyles();
     currentToastState = state;
+    if (state === 'captions_off') {
+      captionsAlertMode = 'alert';
+    } else if (state === 'captions_off_badge') {
+      captionsAlertMode = 'badge';
+    } else if (state === 'restored') {
+      captionsAlertMode = 'restored';
+    } else {
+      captionsAlertMode = null;
+    }
 
     let toast = document.getElementById('mast-status-toast');
     if (!toast) {
       toast = document.createElement('div');
       toast.id = 'mast-status-toast';
-      toast.style.cssText = [
-        'position: fixed',
-        'bottom: 24px',
-        'left: 24px',
-        'z-index: 2147483647',
-        'background: #ffffff',
-        'color: #202124',
-        'border: 1px solid #dadce0',
-        'border-left: 4px solid #5B5FC7',
-        'border-radius: 6px',
-        'box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14)',
-        'padding: 12px 16px',
-        'font-family: Segoe UI, Tahoma, sans-serif',
-        'font-size: 13px',
-        'line-height: 1.4',
-        'max-width: 340px',
-        'display: flex',
-        'flex-direction: column',
-        'gap: 8px'
-      ].join('; ');
       document.body.appendChild(toast);
     }
 
     toast.innerHTML = '';
-
-    const messageEl = document.createElement('div');
-    messageEl.style.fontWeight = '500';
+    toast.onclick = null;
+    toast.title = '';
+    toast.setAttribute('data-state', state);
+    toast.removeAttribute('data-mode');
+    toast.removeAttribute('data-tone');
 
     if (state === 'meeting_detected') {
-      toast.style.borderLeftColor = '#5B5FC7';
-      messageEl.textContent = 'mast: Teams meeting detected.';
-      toast.appendChild(messageEl);
+      toast.setAttribute('data-tone', 'indigo');
+      toast.appendChild(createPillBrandEl('sparkle', 'mast'));
+      toast.appendChild(createPillSepEl());
 
-      const subEl = document.createElement('div');
-      subEl.style.cssText = 'font-size: 12px; color: #5f6368; font-weight: 400;';
-      subEl.textContent = 'Capture live captions and generate AI meeting notes.';
-      toast.appendChild(subEl);
+      const textEl = document.createElement('span');
+      textEl.className = 'mast-pill-text';
+      textEl.textContent = 'Teams meeting detected';
+      toast.appendChild(textEl);
 
       const actionsRow = document.createElement('div');
-      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
+      actionsRow.className = 'mast-pill-actions';
 
       const captureBtn = document.createElement('button');
+      captureBtn.id = 'mast-toast-capture-btn';
+      captureBtn.className = 'mast-pill-btn-primary';
       captureBtn.textContent = 'Capture Meeting Notes';
-      captureBtn.style.cssText =
-        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer; font-weight: 500;';
-      captureBtn.addEventListener('click', () => {
+      captureBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         if (!isExtensionContextValid()) {
           removeStatusToast();
           return;
@@ -726,7 +844,6 @@
               sawCaptionsActive = areCaptionsVisible();
               captionsOffDismissed = false;
               captionsAlertMinimized = false;
-              removeCaptionsAlert();
               syncHideCaptionsStyle();
               triggerEnableCaptionsAllFrames();
               startObserving();
@@ -741,10 +858,13 @@
       });
 
       const dismissBtn = document.createElement('button');
-      dismissBtn.textContent = 'Dismiss';
-      dismissBtn.style.cssText =
-        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 6px 10px; font-size: 12px; cursor: pointer;';
-      dismissBtn.addEventListener('click', () => {
+      dismissBtn.id = 'mast-toast-dismiss-btn';
+      dismissBtn.className = 'mast-pill-btn-icon';
+      dismissBtn.title = 'Dismiss';
+      dismissBtn.setAttribute('aria-label', 'Dismiss');
+      dismissBtn.textContent = '\u00D7';
+      dismissBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         meetingDetectedToastDismissed = true;
         removeStatusToast();
       });
@@ -753,19 +873,24 @@
       actionsRow.appendChild(dismissBtn);
       toast.appendChild(actionsRow);
     } else if (state === 'capturing_started') {
-      toast.style.borderLeftColor = '#2e7d32';
-      messageEl.textContent = 'mast: Capturing meeting notes...';
-      toast.appendChild(messageEl);
+      toast.setAttribute('data-tone', 'green');
+      toast.appendChild(createPillBrandEl('waveform', 'mast'));
+      toast.appendChild(createPillSepEl());
+
+      const textEl = document.createElement('span');
+      textEl.className = 'mast-pill-text';
+      textEl.textContent = 'Capturing meeting notes...';
+      toast.appendChild(textEl);
 
       const actionsRow = document.createElement('div');
-      actionsRow.style.cssText = 'display: flex; align-items: center; gap: 8px; margin-top: 2px;';
+      actionsRow.className = 'mast-pill-actions';
 
       const hideBtn = document.createElement('button');
       hideBtn.id = 'mast-toast-hide-captions-btn';
+      hideBtn.className = 'mast-pill-btn-subtle';
       hideBtn.textContent = hideCaptionBox ? 'Show Caption Box' : 'Hide Caption Box';
-      hideBtn.style.cssText =
-        'background: #f8f9fa; color: #5B5FC7; border: 1px solid rgba(91, 95, 199, 0.35); border-radius: 4px; padding: 4px 10px; font-size: 11.5px; cursor: pointer; font-weight: 600;';
-      hideBtn.addEventListener('click', () => {
+      hideBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         hideCaptionBox = !hideCaptionBox;
         hideBtn.textContent = hideCaptionBox ? 'Show Caption Box' : 'Hide Caption Box';
         syncHideCaptionsStyle();
@@ -773,32 +898,148 @@
           chrome.storage.local.set({ hideCaptionBox });
         } catch (_) {}
       });
+
+      const minBtn = document.createElement('button');
+      minBtn.id = 'mast-toast-minimize-btn';
+      minBtn.className = 'mast-pill-btn-icon';
+      minBtn.title = 'Collapse to micro-badge';
+      minBtn.setAttribute('aria-label', 'Collapse to micro-badge');
+      minBtn.textContent = '\u2013';
+      minBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        renderStatusToast('capturing_badge');
+      });
+
       actionsRow.appendChild(hideBtn);
+      actionsRow.appendChild(minBtn);
       toast.appendChild(actionsRow);
 
       statusToastTimer = setTimeout(() => {
         if (currentToastState === 'capturing_started') {
-          removeStatusToast();
+          if (isTranscribing) {
+            renderStatusToast('capturing_badge');
+          } else {
+            removeStatusToast();
+          }
         }
       }, 4500);
-    } else if (state === 'api_key_needed') {
-      toast.style.borderLeftColor = '#d9534f';
-      messageEl.textContent = 'mast: Please save your Google AI Studio API key in Settings first.';
-      toast.appendChild(messageEl);
+    } else if (state === 'capturing_badge') {
+      toast.setAttribute('data-tone', 'green');
+      toast.setAttribute('data-mode', 'micro');
+      toast.title = 'mast is capturing live captions \u2014 click for options';
+      toast.appendChild(createPillBrandEl('waveform', 'mast'));
+      toast.onclick = () => {
+        renderStatusToast('capturing_started');
+      };
+    } else if (state === 'captions_off') {
+      toast.setAttribute('data-tone', 'amber');
+      toast.setAttribute('data-mode', 'alert');
+      toast.appendChild(createPillBrandEl('pause_amber', 'mast'));
+      toast.appendChild(createPillSepEl());
 
-      const subEl = document.createElement('div');
-      subEl.style.cssText = 'font-size: 12px; color: #5f6368; font-weight: 400;';
-      subEl.textContent = 'Enter your API key in the mast popup or Settings to start capturing.';
-      toast.appendChild(subEl);
+      const textEl = document.createElement('span');
+      textEl.className = 'mast-pill-text';
+      textEl.textContent = 'Captions off \u2014 mast is paused';
+      toast.appendChild(textEl);
 
       const actionsRow = document.createElement('div');
-      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
+      actionsRow.className = 'mast-pill-actions';
+
+      const enableBtn = document.createElement('button');
+      enableBtn.id = 'mast-alert-enable-btn';
+      enableBtn.className = 'mast-pill-btn-amber';
+      enableBtn.textContent = 'Enable Captions';
+      enableBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        enableBtn.textContent = 'Enabling...';
+        triggerEnableCaptionsAllFrames();
+        setTimeout(() => {
+          if (currentToastState === 'captions_off' && document.body.contains(enableBtn)) {
+            enableBtn.textContent = 'Enable Captions';
+          }
+        }, 1200);
+      });
+
+      const minBtn = document.createElement('button');
+      minBtn.id = 'mast-alert-minimize-btn';
+      minBtn.className = 'mast-pill-btn-icon';
+      minBtn.title = 'Minimize to badge';
+      minBtn.setAttribute('aria-label', 'Minimize to badge');
+      minBtn.textContent = '\u2013';
+      minBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        captionsAlertMinimized = true;
+        renderStatusToast('captions_off_badge');
+      });
+
+      actionsRow.appendChild(enableBtn);
+      actionsRow.appendChild(minBtn);
+      toast.appendChild(actionsRow);
+    } else if (state === 'captions_off_badge') {
+      toast.setAttribute('data-tone', 'amber');
+      toast.setAttribute('data-mode', 'badge');
+      toast.title = 'Click to re-enable live captions';
+      toast.appendChild(createPillBrandEl('pause_amber', 'mast Paused'));
+
+      const sep = document.createElement('span');
+      sep.style.cssText = 'color: rgba(255, 255, 255, 0.4);';
+      sep.textContent = '\u00B7';
+      toast.appendChild(sep);
+
+      const actionLabel = document.createElement('span');
+      actionLabel.id = 'mast-badge-enable-label';
+      actionLabel.style.cssText = 'font-weight: 700; color: #FF9F0A;';
+      actionLabel.textContent = 'Enable Captions';
+      toast.appendChild(actionLabel);
+
+      toast.onclick = () => {
+        actionLabel.textContent = 'Enabling...';
+        triggerEnableCaptionsAllFrames();
+        setTimeout(() => {
+          if (currentToastState === 'captions_off_badge' && document.body.contains(actionLabel)) {
+            actionLabel.textContent = 'Enable Captions';
+          }
+        }, 1200);
+      };
+    } else if (state === 'restored') {
+      toast.setAttribute('data-tone', 'green');
+      toast.setAttribute('data-mode', 'restored');
+      toast.appendChild(createPillBrandEl('waveform', 'mast'));
+      toast.appendChild(createPillSepEl());
+
+      const textEl = document.createElement('span');
+      textEl.className = 'mast-pill-text';
+      textEl.textContent = 'Captions active \u2014 mast recording';
+      toast.appendChild(textEl);
+
+      captionsAlertTimer = setTimeout(() => {
+        if (currentToastState === 'restored') {
+          if (isTranscribing) {
+            renderStatusToast('capturing_badge');
+          } else {
+            removeStatusToast();
+          }
+        }
+      }, 2200);
+    } else if (state === 'api_key_needed') {
+      toast.setAttribute('data-tone', 'amber');
+      toast.appendChild(createPillBrandEl('warning_amber', 'mast'));
+      toast.appendChild(createPillSepEl());
+
+      const textEl = document.createElement('span');
+      textEl.className = 'mast-pill-text';
+      textEl.textContent = 'Please save your Google AI Studio API key in Settings first.';
+      toast.appendChild(textEl);
+
+      const actionsRow = document.createElement('div');
+      actionsRow.className = 'mast-pill-actions';
 
       const settingsBtn = document.createElement('button');
+      settingsBtn.id = 'mast-toast-settings-btn';
+      settingsBtn.className = 'mast-pill-btn-amber';
       settingsBtn.textContent = 'Open Settings';
-      settingsBtn.style.cssText =
-        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
-      settingsBtn.addEventListener('click', () => {
+      settingsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         try {
           chrome.runtime.sendMessage({ action: 'open_options' }, () => {
             void chrome.runtime.lastError;
@@ -807,10 +1048,13 @@
       });
 
       const dismissBtn = document.createElement('button');
-      dismissBtn.textContent = 'Dismiss';
-      dismissBtn.style.cssText =
-        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer;';
-      dismissBtn.addEventListener('click', () => {
+      dismissBtn.id = 'mast-toast-dismiss-btn';
+      dismissBtn.className = 'mast-pill-btn-icon';
+      dismissBtn.title = 'Dismiss';
+      dismissBtn.setAttribute('aria-label', 'Dismiss');
+      dismissBtn.textContent = '\u00D7';
+      dismissBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         removeStatusToast();
       });
 
@@ -824,27 +1068,33 @@
         }
       }, 8000);
     } else if (state === 'generating') {
-      toast.style.borderLeftColor = '#5B5FC7';
-      messageEl.textContent = 'mast: Transcript saved. Generating AI notes...';
-      toast.appendChild(messageEl);
+      toast.setAttribute('data-tone', 'indigo');
+      toast.appendChild(createPillBrandEl('spinner', 'mast'));
+      toast.appendChild(createPillSepEl());
 
-      const barTrack = document.createElement('div');
-      barTrack.style.cssText =
-        'width: 100%; height: 6px; background: #e8eaed; border-radius: 999px; overflow: hidden; margin-top: 2px;';
-
-      const barFill = document.createElement('div');
-      barFill.id = 'mast-toast-progress-fill';
-      barFill.style.cssText =
-        'height: 100%; width: 5%; background: linear-gradient(90deg, #5B5FC7 0%, #7b7fe0 100%); border-radius: 999px; transition: width 0.3s ease;';
-      barTrack.appendChild(barFill);
-      toast.appendChild(barTrack);
+      const progressWrap = document.createElement('div');
+      progressWrap.className = 'mast-pill-progress-wrap';
 
       const stageRow = document.createElement('div');
       stageRow.id = 'mast-toast-progress-label';
       stageRow.style.cssText =
-        'display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11.5px; color: #5f6368;';
-      stageRow.innerHTML = '<span>Preparing meeting notes...</span><strong style="color: #5B5FC7;">5%</strong>';
-      toast.appendChild(stageRow);
+        'display: inline-flex; align-items: center; font-size: 12.5px; color: rgba(255, 255, 255, 0.92); overflow: hidden;';
+      stageRow.innerHTML =
+        '<span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Preparing meeting notes...</span>' +
+        '<strong style="color: #a5a9ff; flex-shrink: 0; margin-left: 6px;">5%</strong>';
+
+      const barTrack = document.createElement('div');
+      barTrack.className = 'mast-pill-progress-track';
+
+      const barFill = document.createElement('div');
+      barFill.id = 'mast-toast-progress-fill';
+      barFill.style.cssText =
+        'height: 100%; width: 5%; background: linear-gradient(90deg, #5B5FC7 0%, #8B8FF8 100%); border-radius: 999px; transition: width 0.3s ease;';
+      barTrack.appendChild(barFill);
+
+      progressWrap.appendChild(stageRow);
+      progressWrap.appendChild(barTrack);
+      toast.appendChild(progressWrap);
 
       try {
         chrome.storage.local.get(['notesProgress', 'notesStage'], (s) => {
@@ -853,35 +1103,64 @@
         });
       } catch (_) {}
     } else if (state === 'done') {
-      toast.style.borderLeftColor = '#2e7d32';
-      messageEl.textContent = 'mast: AI notes and transcript downloaded.';
-      toast.appendChild(messageEl);
-      statusToastTimer = setTimeout(() => {
+      toast.setAttribute('data-tone', 'green');
+      toast.appendChild(createPillBrandEl('check_green', 'mast'));
+      toast.appendChild(createPillSepEl());
+
+      const textEl = document.createElement('span');
+      textEl.className = 'mast-pill-text';
+      textEl.textContent = 'AI notes and transcript downloaded.';
+      toast.appendChild(textEl);
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.id = 'mast-toast-dismiss-btn';
+      dismissBtn.className = 'mast-pill-btn-icon';
+      dismissBtn.title = 'Dismiss';
+      dismissBtn.setAttribute('aria-label', 'Dismiss');
+      dismissBtn.textContent = '\u00D7';
+      dismissBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         removeStatusToast();
-      }, 8000);
+      });
+      toast.appendChild(dismissBtn);
+
+      statusToastTimer = setTimeout(() => {
+        if (currentToastState === 'done') {
+          removeStatusToast();
+        }
+      }, 6500);
     } else if (state === 'error') {
-      toast.style.borderLeftColor = '#d32f2f';
-      messageEl.textContent = errorMessage
-        ? `mast: AI notes failed (${errorMessage}).`
-        : 'mast: Transcript downloaded, but AI notes failed.';
-      toast.appendChild(messageEl);
+      toast.setAttribute('data-tone', 'red');
+      toast.appendChild(createPillBrandEl('error_red', 'mast'));
+      toast.appendChild(createPillSepEl());
+
+      const textEl = document.createElement('span');
+      textEl.className = 'mast-pill-text';
+      textEl.textContent = errorMessage
+        ? `AI notes failed (${errorMessage}).`
+        : 'Transcript downloaded, but AI notes failed.';
+      toast.appendChild(textEl);
 
       const actionsRow = document.createElement('div');
-      actionsRow.style.cssText = 'display: flex; gap: 8px; margin-top: 4px;';
+      actionsRow.className = 'mast-pill-actions';
 
       const retryBtn = document.createElement('button');
+      retryBtn.id = 'mast-toast-retry-btn';
+      retryBtn.className = 'mast-pill-btn-primary';
       retryBtn.textContent = 'Retry';
-      retryBtn.style.cssText =
-        'background: #5B5FC7; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; font-weight: 500;';
-      retryBtn.addEventListener('click', () => {
+      retryBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         chrome.runtime.sendMessage({ action: 'generate_notes' });
       });
 
       const dismissBtn = document.createElement('button');
-      dismissBtn.textContent = 'Dismiss';
-      dismissBtn.style.cssText =
-        'background: transparent; color: #5f6368; border: 1px solid #dadce0; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer;';
-      dismissBtn.addEventListener('click', () => {
+      dismissBtn.id = 'mast-toast-dismiss-btn';
+      dismissBtn.className = 'mast-pill-btn-icon';
+      dismissBtn.title = 'Dismiss';
+      dismissBtn.setAttribute('aria-label', 'Dismiss');
+      dismissBtn.textContent = '\u00D7';
+      dismissBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         shouldGuardUnload = false;
         removeStatusToast();
       });
@@ -889,9 +1168,6 @@
       actionsRow.appendChild(retryBtn);
       actionsRow.appendChild(dismissBtn);
       toast.appendChild(actionsRow);
-    } else if (state === 'captions_off') {
-      removeStatusToast();
-      renderCaptionsAlert(captionsAlertMinimized ? 'badge' : 'alert');
     }
   }
 
@@ -926,7 +1202,13 @@
       observer.disconnect();
       observer = null;
     }
-    if (currentToastState === 'captions_off' || currentToastState === 'capturing_started') {
+    if (
+      currentToastState === 'captions_off' ||
+      currentToastState === 'captions_off_badge' ||
+      currentToastState === 'capturing_started' ||
+      currentToastState === 'capturing_badge' ||
+      currentToastState === 'restored'
+    ) {
       removeStatusToast();
     }
     sawActiveMeeting = false;
@@ -971,10 +1253,12 @@
           sawCaptionsActive = true;
           captionsOffDismissed = false;
           captionsAlertMinimized = false;
-          if (currentToastState === 'captions_off') {
-            removeStatusToast();
-          }
-          if (captionsAlertMode === 'alert' || captionsAlertMode === 'badge') {
+          if (
+            captionsAlertMode === 'alert' ||
+            captionsAlertMode === 'badge' ||
+            currentToastState === 'captions_off' ||
+            currentToastState === 'captions_off_badge'
+          ) {
             renderCaptionsAlert('restored');
           }
         } else if (sawCaptionsActive || (transcriptionStartedAt && Date.now() - transcriptionStartedAt >= 5000)) {
@@ -1118,21 +1402,44 @@
       console.log("mast: Captions already active.");
       return;
     }
-    console.log("mast: Attempting to enable captions via Alt+Shift+C");
-    const eventOpts = {
+    const isMac = /Mac|iPod|iPhone|iPad/i.test(
+      (typeof navigator !== 'undefined' && (navigator.platform || navigator.userAgent)) || ''
+    );
+    const primaryOpts = {
       key: 'c',
       code: 'KeyC',
       keyCode: 67,
       which: 67,
-      altKey: true,
+      altKey: !isMac,
+      metaKey: isMac,
       shiftKey: true,
       bubbles: true,
       cancelable: true
     };
-    document.dispatchEvent(new KeyboardEvent('keydown', eventOpts));
+    const fallbackOpts = {
+      key: 'c',
+      code: 'KeyC',
+      keyCode: 67,
+      which: 67,
+      altKey: isMac,
+      metaKey: !isMac,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true
+    };
+    console.log("mast: Attempting to enable captions via keyboard shortcut and menu trigger");
+    document.dispatchEvent(new KeyboardEvent('keydown', primaryOpts));
     if (document.body) {
-      document.body.dispatchEvent(new KeyboardEvent('keydown', eventOpts));
+      document.body.dispatchEvent(new KeyboardEvent('keydown', primaryOpts));
     }
+    setTimeout(() => {
+      if (!areCaptionsVisibleLocal()) {
+        document.dispatchEvent(new KeyboardEvent('keydown', fallbackOpts));
+        if (document.body) {
+          document.body.dispatchEvent(new KeyboardEvent('keydown', fallbackOpts));
+        }
+      }
+    }, 220);
     try {
       const explicitTurnOnBtn = document.querySelector(
         'button[aria-label*="Turn on live captions" i], [role="menuitem"][aria-label*="Turn on live captions" i], [data-tid="turn-on-captions"]'
@@ -1183,7 +1490,7 @@
 
         if (isTranscribing) {
           if (currentToastState === 'meeting_detected') {
-            removeStatusToast();
+            renderStatusToast('capturing_badge');
           }
           return;
         }
@@ -1192,7 +1499,7 @@
           if (chrome.runtime.lastError) return;
           if (res.isTranscribing) {
             if (currentToastState === 'meeting_detected') {
-              removeStatusToast();
+              renderStatusToast('capturing_badge');
             }
             return;
           }
@@ -1201,6 +1508,10 @@
           if (
             currentToastState !== 'meeting_detected' &&
             currentToastState !== 'capturing_started' &&
+            currentToastState !== 'capturing_badge' &&
+            currentToastState !== 'captions_off' &&
+            currentToastState !== 'captions_off_badge' &&
+            currentToastState !== 'restored' &&
             currentToastState !== 'api_key_needed' &&
             currentToastState !== 'generating' &&
             currentToastState !== 'done' &&
@@ -1238,12 +1549,15 @@
 
     if (changes.isTranscribing) {
       if (changes.isTranscribing.newValue === true && currentToastState === 'meeting_detected') {
-        removeStatusToast();
+        renderStatusToast('capturing_started');
       } else if (changes.isTranscribing.newValue === false) {
         isTranscribing = false;
         meetingDetectedToastDismissed = true;
         removeCaptionsAlert();
         removeHideCaptionsStyle();
+        if (currentToastState === 'capturing_started' || currentToastState === 'capturing_badge') {
+          removeStatusToast();
+        }
       }
       syncHideCaptionsStyle();
     }
@@ -1253,7 +1567,12 @@
         sawCaptionsActive = true;
         captionsOffDismissed = false;
         captionsAlertMinimized = false;
-        if (captionsAlertMode === 'alert' || captionsAlertMode === 'badge') {
+        if (
+          captionsAlertMode === 'alert' ||
+          captionsAlertMode === 'badge' ||
+          currentToastState === 'captions_off' ||
+          currentToastState === 'captions_off_badge'
+        ) {
           renderCaptionsAlert('restored');
         }
       } else if (
@@ -1313,9 +1632,6 @@
       return false;
     } else if (request.action === "start") {
       shouldGuardUnload = false;
-      if (currentToastState !== 'capturing_started') {
-        removeStatusToast();
-      }
       isTranscribing = true;
       transcriptionStartedAt = Date.now();
       sawCaptionsActive = areCaptionsVisible();
@@ -1352,6 +1668,8 @@
     removeHideCaptionsStyle();
     const alertStyle = document.getElementById('mast-captions-alert-style');
     if (alertStyle) alertStyle.remove();
+    const pillStyle = document.getElementById('mast-pill-style');
+    if (pillStyle) pillStyle.remove();
     window.removeEventListener('beforeunload', onBeforeUnload);
     window.removeEventListener('message', onWindowMessage);
     document.removeEventListener('__mast_cleanup_previous_instance', onCrossWorldCleanup);
@@ -1371,6 +1689,9 @@
         sawCaptionsActive = areCaptionsVisible();
         syncHideCaptionsStyle();
         startObserving();
+        if (window === window.top) {
+          renderStatusToast('capturing_badge');
+        }
       }
     });
   } catch (_) {}
