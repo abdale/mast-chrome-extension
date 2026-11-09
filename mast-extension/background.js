@@ -1,11 +1,51 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-4';
+const WORKER_BUILD_VERSION = '2.9-dev-5';
 let isGeneratingInMemory = false;
+let cachedBaseIconBitmap = null;
+
+async function getBaseIconBitmap() {
+  if (cachedBaseIconBitmap) return cachedBaseIconBitmap;
+  try {
+    if (typeof fetch !== 'function' || typeof createImageBitmap !== 'function') return null;
+    const res = await fetch(chrome.runtime.getURL('icons/icon48.png'));
+    const blob = await res.blob();
+    cachedBaseIconBitmap = await createImageBitmap(blob);
+    return cachedBaseIconBitmap;
+  } catch (_) {
+    return null;
+  }
+}
+
+function renderIconWithDot(bitmap, size, dotColor) {
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
+  if (bitmap) {
+    ctx.drawImage(bitmap, 0, 0, size, size);
+  }
+  if (dotColor) {
+    const r = Math.max(2.3, size * 0.155);
+    const ring = Math.max(1.0, size * 0.05);
+    const cx = size - r - ring * 0.6;
+    const cy = size - r - ring * 0.6;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + ring, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(24, 24, 27, 0.92)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = dotColor;
+    ctx.fill();
+  }
+  return ctx.getImageData(0, 0, size, size);
+}
 
 async function syncToolbarBadge() {
   try {
-    if (typeof chrome === 'undefined' || !chrome.action || typeof chrome.action.setBadgeText !== 'function') {
+    if (typeof chrome === 'undefined' || !chrome.action) {
       return;
     }
     const stored = await chrome.storage.local.get([
@@ -15,33 +55,41 @@ async function syncToolbarBadge() {
       'completionUnseen'
     ]);
 
-    let text = '';
-    let bgColor = '#5B5FC7';
+    let dotColor = null;
 
     if (stored.isTranscribing) {
-      if (stored.liveCaptionsOn === false) {
-        text = 'OFF';
-        bgColor = '#FF9F0A';
-      } else {
-        text = 'ON';
-        bgColor = '#1E8E3E';
-      }
+      dotColor = stored.liveCaptionsOn === false ? '#FF9F0A' : '#30D158';
     } else if (stored.notesStatus === 'generating') {
-      text = 'AI';
-      bgColor = '#5B5FC7';
+      dotColor = '#5B5FC7';
     } else if (stored.notesStatus === 'error') {
-      text = '!';
-      bgColor = '#D93025';
+      dotColor = '#FF453A';
     } else if (stored.notesStatus === 'done' && stored.completionUnseen) {
-      text = '\u2713';
-      bgColor = '#1E8E3E';
+      dotColor = '#30D158';
     }
 
-    await chrome.action.setBadgeText({ text });
-    if (text) {
-      await chrome.action.setBadgeBackgroundColor({ color: bgColor });
-      if (typeof chrome.action.setBadgeTextColor === 'function') {
-        await chrome.action.setBadgeTextColor({ color: '#FFFFFF' });
+    self.__mastToolbarDotColor = dotColor;
+
+    if (typeof chrome.action.setBadgeText === 'function') {
+      await chrome.action.setBadgeText({ text: '' });
+    }
+
+    if (typeof chrome.action.setIcon === 'function') {
+      if (!dotColor) {
+        await chrome.action.setIcon({
+          path: {
+            16: 'icons/icon16.png',
+            48: 'icons/icon48.png',
+            128: 'icons/icon128.png'
+          }
+        });
+      } else if (typeof OffscreenCanvas !== 'undefined') {
+        const bitmap = await getBaseIconBitmap();
+        const imageData = {
+          16: renderIconWithDot(bitmap, 16, dotColor),
+          32: renderIconWithDot(bitmap, 32, dotColor),
+          48: renderIconWithDot(bitmap, 48, dotColor)
+        };
+        await chrome.action.setIcon({ imageData });
       }
     }
   } catch (_) {}

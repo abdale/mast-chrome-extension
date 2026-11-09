@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9-dev-4';
+  const WORKER_BUILD_VERSION = '2.9-dev-5';
   chrome.runtime.sendMessage({ action: 'get_worker_version' }, () => {
     void chrome.runtime.lastError;
   });

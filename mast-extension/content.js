@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9-dev-4';
+  const CONTENT_SCRIPT_VERSION = '2.9-dev-5';
 
   function isExtensionContextValid() {
     try {
@@ -60,6 +60,7 @@
   let captionsAlertTimer = null;
   let captionsAlertMode = null;
   let captionsAlertMinimized = false;
+  let capturingPillMinimized = false;
   let hideCaptionBox = false;
   let meetingDetectedToastDismissed = false;
   let transcriptionStartedAt = 0;
@@ -83,6 +84,11 @@
     if (!data) return;
     if (data.type === 'MAST_ENABLE_CAPTIONS') {
       ensureCaptionsEnabled();
+      return;
+    }
+    if (data.type === 'MAST_STOP_OBSERVATION') {
+      meetingDetectedToastDismissed = true;
+      stopLocalObservation();
       return;
     }
     if (window !== window.top) return;
@@ -349,13 +355,9 @@
         from { opacity: 0; transform: translate(-50%, -10px) scale(0.96); }
         to { opacity: 1; transform: translate(-50%, 0) scale(1); }
       }
-      @keyframes mastWaveBar {
-        0%, 100% { transform: scaleY(0.38); opacity: 0.75; }
-        50% { transform: scaleY(1); opacity: 1; }
-      }
       @keyframes mastAmberPulse {
-        0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(255, 159, 10, 0)); }
-        50% { transform: scale(1.08); filter: drop-shadow(0 0 5px rgba(255, 159, 10, 0.55)); }
+        0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(255, 159, 10, 0.45); }
+        50% { transform: scale(1.1); opacity: 0.88; box-shadow: 0 0 0 4px rgba(255, 159, 10, 0); }
       }
       @keyframes mastSpinRing {
         from { transform: rotate(0deg); }
@@ -366,22 +368,26 @@
         top: 16px;
         left: 50%;
         transform: translateX(-50%);
-        max-width: min(92vw, 580px);
+        max-width: min(94vw, 660px);
         z-index: 2147483647;
-        background: rgba(28, 28, 30, 0.94);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
+        background: linear-gradient(180deg, rgba(44, 44, 48, 0.96) 0%, rgba(28, 28, 32, 0.96) 100%);
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
         color: #ffffff;
-        border: 1px solid rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.24);
         border-radius: 999px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.22);
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.7),
+          inset 0 1px 0 rgba(255, 255, 255, 0.18),
+          0 12px 32px rgba(0, 0, 0, 0.55),
+          0 2px 8px rgba(0, 0, 0, 0.35);
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         font-size: 13px;
-        line-height: 1.3;
+        line-height: 1.35;
         display: inline-flex;
         align-items: center;
-        gap: 10px;
-        padding: 6px 10px 6px 13px;
+        gap: 12px;
+        padding: 9px 14px 9px 16px;
         white-space: nowrap;
         user-select: none;
         box-sizing: border-box;
@@ -389,43 +395,62 @@
         transition: background 0.2s ease, border-color 0.2s ease, padding 0.2s ease, box-shadow 0.2s ease;
       }
       #mast-status-toast[data-tone="indigo"] {
-        border-color: rgba(139, 143, 248, 0.34);
+        border-color: rgba(139, 143, 248, 0.48);
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.7),
+          inset 0 1px 0 rgba(255, 255, 255, 0.18),
+          0 12px 32px rgba(0, 0, 0, 0.55),
+          0 0 16px rgba(139, 143, 248, 0.16);
       }
       #mast-status-toast[data-tone="green"] {
-        border-color: rgba(48, 209, 88, 0.36);
+        border-color: rgba(48, 209, 88, 0.48);
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.7),
+          inset 0 1px 0 rgba(255, 255, 255, 0.18),
+          0 12px 32px rgba(0, 0, 0, 0.55),
+          0 0 16px rgba(48, 209, 88, 0.16);
       }
       #mast-status-toast[data-tone="amber"] {
-        border-color: rgba(255, 159, 10, 0.52);
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38), 0 0 0 1px rgba(255, 159, 10, 0.16);
+        border-color: rgba(255, 159, 10, 0.62);
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.7),
+          inset 0 1px 0 rgba(255, 255, 255, 0.18),
+          0 12px 32px rgba(0, 0, 0, 0.55),
+          0 0 18px rgba(255, 159, 10, 0.22);
       }
       #mast-status-toast[data-tone="red"] {
-        border-color: rgba(255, 69, 58, 0.52);
+        border-color: rgba(255, 69, 58, 0.62);
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.7),
+          inset 0 1px 0 rgba(255, 255, 255, 0.18),
+          0 12px 32px rgba(0, 0, 0, 0.55),
+          0 0 18px rgba(255, 69, 58, 0.22);
       }
       #mast-status-toast[data-mode="micro"] {
-        padding: 5px 12px;
-        gap: 6px;
+        padding: 7px 15px;
+        gap: 8px;
         cursor: pointer;
-        font-size: 12.5px;
+        font-size: 13px;
       }
       #mast-status-toast[data-mode="micro"]:hover,
       #mast-status-toast[data-mode="badge"]:hover {
-        background: rgba(44, 44, 46, 0.96);
-        border-color: rgba(255, 255, 255, 0.3);
+        background: linear-gradient(180deg, rgba(56, 56, 62, 0.98) 0%, rgba(36, 36, 40, 0.98) 100%);
+        border-color: rgba(255, 255, 255, 0.42);
       }
       #mast-status-toast[data-mode="badge"] {
-        padding: 6px 13px;
-        gap: 8px;
+        padding: 8px 16px;
+        gap: 10px;
         cursor: pointer;
-        font-size: 12px;
+        font-size: 12.5px;
       }
       #mast-status-toast[data-mode="restored"] {
-        padding: 6px 14px;
-        gap: 9px;
+        padding: 8px 16px;
+        gap: 10px;
       }
       .mast-pill-brand {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 7px;
         font-weight: 700;
         font-size: 13px;
         letter-spacing: -0.02em;
@@ -436,20 +461,37 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 16px;
-        height: 16px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
         flex-shrink: 0;
+      }
+      .mast-pill-icon[data-dot-color="green"] {
+        background: #30D158;
+        box-shadow: 0 0 6px rgba(48, 209, 88, 0.55);
+      }
+      .mast-pill-icon[data-dot-color="amber"] {
+        background: #FF9F0A;
+        animation: mastAmberPulse 2s infinite ease-in-out;
+      }
+      .mast-pill-icon[data-dot-color="indigo"] {
+        background: #8B8FF8;
+        box-shadow: 0 0 6px rgba(139, 143, 248, 0.5);
+      }
+      .mast-pill-icon[data-dot-color="red"] {
+        background: #FF453A;
+        box-shadow: 0 0 6px rgba(255, 69, 58, 0.55);
       }
       .mast-pill-sep {
         width: 1px;
-        height: 14px;
-        background: rgba(255, 255, 255, 0.16);
+        height: 15px;
+        background: rgba(255, 255, 255, 0.18);
         flex-shrink: 0;
       }
       .mast-pill-text {
         font-weight: 500;
         letter-spacing: -0.01em;
-        color: rgba(255, 255, 255, 0.94);
+        color: rgba(255, 255, 255, 0.95);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -457,7 +499,7 @@
       .mast-pill-actions {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
         flex-shrink: 0;
       }
       .mast-pill-btn-primary {
@@ -465,7 +507,7 @@
         color: #ffffff;
         border: none;
         border-radius: 999px;
-        padding: 5px 12px;
+        padding: 6px 13px;
         font-size: 12px;
         font-weight: 600;
         cursor: pointer;
@@ -488,7 +530,7 @@
         color: #1c1c1e;
         border: none;
         border-radius: 999px;
-        padding: 5px 12px;
+        padding: 6px 13px;
         font-size: 12px;
         font-weight: 700;
         cursor: pointer;
@@ -505,10 +547,10 @@
       .mast-pill-btn-subtle {
         background: rgba(255, 255, 255, 0.12);
         color: #ffffff;
-        border: 1px solid rgba(255, 255, 255, 0.16);
+        border: 1px solid rgba(255, 255, 255, 0.18);
         border-radius: 999px;
-        padding: 4px 11px;
-        font-size: 11.5px;
+        padding: 5px 12px;
+        font-size: 12px;
         font-weight: 600;
         cursor: pointer;
         font-family: inherit;
@@ -517,19 +559,37 @@
       }
       .mast-pill-btn-subtle:hover {
         background: rgba(255, 255, 255, 0.2);
-        border-color: rgba(255, 255, 255, 0.28);
+        border-color: rgba(255, 255, 255, 0.32);
+      }
+      .mast-pill-btn-stop {
+        background: rgba(255, 69, 58, 0.18);
+        color: #ff6961;
+        border: 1px solid rgba(255, 69, 58, 0.38);
+        border-radius: 999px;
+        padding: 5px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: inherit;
+        line-height: 1.2;
+        transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+      }
+      .mast-pill-btn-stop:hover {
+        background: rgba(255, 69, 58, 0.3);
+        border-color: rgba(255, 69, 58, 0.55);
+        color: #ffffff;
       }
       .mast-pill-btn-icon {
-        background: rgba(255, 255, 255, 0.1);
-        color: rgba(255, 255, 255, 0.78);
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.82);
         border: none;
         border-radius: 50%;
-        width: 22px;
-        height: 22px;
+        width: 25px;
+        height: 25px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 13px;
+        font-size: 14px;
         font-weight: 600;
         line-height: 1;
         cursor: pointer;
@@ -538,33 +598,8 @@
         transition: background 0.15s ease, color 0.15s ease;
       }
       .mast-pill-btn-icon:hover {
-        background: rgba(255, 255, 255, 0.22);
+        background: rgba(255, 255, 255, 0.24);
         color: #ffffff;
-      }
-      .mast-wave-icon {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 2px;
-        width: 14px;
-        height: 14px;
-      }
-      .mast-wave-bar {
-        width: 2.5px;
-        height: 12px;
-        background: #30D158;
-        border-radius: 2px;
-        transform-origin: center;
-        animation: mastWaveBar 1.1s infinite ease-in-out;
-      }
-      .mast-wave-bar-1 { animation-delay: 0s; }
-      .mast-wave-bar-2 { animation-delay: 0.22s; }
-      .mast-wave-bar-3 { animation-delay: 0.44s; }
-      .mast-pause-svg {
-        animation: mastAmberPulse 2s infinite ease-in-out;
-      }
-      .mast-spin-svg {
-        animation: mastSpinRing 0.95s linear infinite;
       }
       .mast-pill-progress-wrap {
         display: inline-flex;
@@ -576,7 +611,7 @@
       .mast-pill-progress-track {
         width: 72px;
         height: 5px;
-        background: rgba(255, 255, 255, 0.16);
+        background: rgba(255, 255, 255, 0.18);
         border-radius: 999px;
         overflow: hidden;
         flex-shrink: 0;
@@ -589,53 +624,77 @@
     const wrap = document.createElement('span');
     wrap.className = 'mast-pill-icon';
     wrap.setAttribute('data-icon', iconType);
-    if (iconType === 'waveform') {
-      wrap.innerHTML =
-        '<span class="mast-wave-icon" aria-hidden="true">' +
-        '<span class="mast-wave-bar mast-wave-bar-1"></span>' +
-        '<span class="mast-wave-bar mast-wave-bar-2"></span>' +
-        '<span class="mast-wave-bar mast-wave-bar-3"></span>' +
-        '</span>';
-    } else if (iconType === 'pause_amber') {
-      wrap.innerHTML =
-        '<svg class="mast-pause-svg" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<circle cx="8" cy="8" r="7" fill="rgba(255, 159, 10, 0.18)" stroke="#FF9F0A" stroke-width="1.4"/>' +
-        '<rect x="5.3" y="5" width="1.8" height="6" rx="0.8" fill="#FF9F0A"/>' +
-        '<rect x="8.9" y="5" width="1.8" height="6" rx="0.8" fill="#FF9F0A"/>' +
-        '</svg>';
-    } else if (iconType === 'warning_amber') {
-      wrap.innerHTML =
-        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<path d="M8 2L14.5 13.5H1.5L8 2Z" fill="rgba(255, 159, 10, 0.18)" stroke="#FF9F0A" stroke-width="1.4" stroke-linejoin="round"/>' +
-        '<rect x="7.3" y="6" width="1.4" height="4" rx="0.7" fill="#FF9F0A"/>' +
-        '<circle cx="8" cy="11.6" r="0.8" fill="#FF9F0A"/>' +
-        '</svg>';
-    } else if (iconType === 'spinner') {
-      wrap.innerHTML =
-        '<svg class="mast-spin-svg" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<circle cx="8" cy="8" r="6" stroke="rgba(139, 143, 248, 0.25)" stroke-width="2"/>' +
-        '<path d="M14 8A6 6 0 0 0 8 2" stroke="#8B8FF8" stroke-width="2" stroke-linecap="round"/>' +
-        '</svg>';
-    } else if (iconType === 'check_green') {
-      wrap.innerHTML =
-        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<circle cx="8" cy="8" r="7" fill="rgba(48, 209, 88, 0.18)" stroke="#30D158" stroke-width="1.4"/>' +
-        '<path d="M5 8.2L7.1 10.3L11.2 6" stroke="#30D158" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
-        '</svg>';
+    wrap.setAttribute('aria-hidden', 'true');
+    if (iconType === 'waveform' || iconType === 'check_green') {
+      wrap.setAttribute('data-dot-color', 'green');
+    } else if (iconType === 'pause_amber' || iconType === 'warning_amber') {
+      wrap.setAttribute('data-dot-color', 'amber');
     } else if (iconType === 'error_red') {
-      wrap.innerHTML =
-        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<circle cx="8" cy="8" r="7" fill="rgba(255, 69, 58, 0.18)" stroke="#FF453A" stroke-width="1.4"/>' +
-        '<rect x="7.25" y="4.5" width="1.5" height="4.5" rx="0.75" fill="#FF453A"/>' +
-        '<circle cx="8" cy="11.2" r="0.85" fill="#FF453A"/>' +
-        '</svg>';
+      wrap.setAttribute('data-dot-color', 'red');
     } else {
-      wrap.innerHTML =
-        '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<path d="M8 1.5L9.65 6.35L14.5 8L9.65 9.65L8 14.5L6.35 9.65L1.5 8L6.35 6.35L8 1.5Z" fill="#8B8FF8"/>' +
-        '</svg>';
+      wrap.setAttribute('data-dot-color', 'indigo');
     }
     return wrap;
+  }
+
+  function handlePillStopClick(e) {
+    if (e) e.stopPropagation();
+    if (!isExtensionContextValid()) {
+      removeStatusToast();
+      return;
+    }
+    meetingDetectedToastDismissed = true;
+    try {
+      if (window === window.top && window.frames) {
+        for (let i = 0; i < window.frames.length; i++) {
+          try {
+            window.frames[i].postMessage({ type: 'MAST_STOP_OBSERVATION' }, '*');
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    stopLocalObservation();
+
+    setTimeout(() => {
+      try {
+        chrome.storage.local.get(['savedTranscript', 'activeTabId'], (stored) => {
+          if (chrome.runtime.lastError) return;
+          const hasLines = Array.isArray(stored && stored.savedTranscript) && stored.savedTranscript.length > 0;
+          if (hasLines) {
+            chrome.storage.local.set(
+              {
+                isTranscribing: false,
+                notesStatus: 'generating',
+                notesProgress: 5,
+                notesStage: 'Connecting to Gemini...',
+                generationStartedAt: Date.now()
+              },
+              () => {
+                chrome.runtime.sendMessage(
+                  { action: 'stop_and_finalize', tabId: (stored && stored.activeTabId) || null },
+                  () => {
+                    void chrome.runtime.lastError;
+                  }
+                );
+              }
+            );
+          } else {
+            chrome.storage.local.set(
+              {
+                isTranscribing: false,
+                notesStatus: 'idle',
+                notesError: '',
+                notesProgress: 0,
+                notesStage: ''
+              },
+              () => {
+                removeStatusToast();
+              }
+            );
+          }
+        });
+      } catch (_) {}
+    }, 80);
   }
 
   function createPillBrandEl(iconType, brandText = 'mast') {
@@ -844,6 +903,7 @@
               sawCaptionsActive = areCaptionsVisible();
               captionsOffDismissed = false;
               captionsAlertMinimized = false;
+              capturingPillMinimized = false;
               syncHideCaptionsStyle();
               triggerEnableCaptionsAllFrames();
               startObserving();
@@ -879,7 +939,7 @@
 
       const textEl = document.createElement('span');
       textEl.className = 'mast-pill-text';
-      textEl.textContent = 'Capturing meeting notes...';
+      textEl.textContent = 'Capturing meeting notes';
       toast.appendChild(textEl);
 
       const actionsRow = document.createElement('div');
@@ -899,6 +959,12 @@
         } catch (_) {}
       });
 
+      const stopBtn = document.createElement('button');
+      stopBtn.id = 'mast-toast-stop-btn';
+      stopBtn.className = 'mast-pill-btn-stop';
+      stopBtn.textContent = 'Stop';
+      stopBtn.addEventListener('click', handlePillStopClick);
+
       const minBtn = document.createElement('button');
       minBtn.id = 'mast-toast-minimize-btn';
       minBtn.className = 'mast-pill-btn-icon';
@@ -907,28 +973,21 @@
       minBtn.textContent = '\u2013';
       minBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        capturingPillMinimized = true;
         renderStatusToast('capturing_badge');
       });
 
       actionsRow.appendChild(hideBtn);
+      actionsRow.appendChild(stopBtn);
       actionsRow.appendChild(minBtn);
       toast.appendChild(actionsRow);
-
-      statusToastTimer = setTimeout(() => {
-        if (currentToastState === 'capturing_started') {
-          if (isTranscribing) {
-            renderStatusToast('capturing_badge');
-          } else {
-            removeStatusToast();
-          }
-        }
-      }, 4500);
     } else if (state === 'capturing_badge') {
       toast.setAttribute('data-tone', 'green');
       toast.setAttribute('data-mode', 'micro');
-      toast.title = 'mast is capturing live captions \u2014 click for options';
+      toast.title = 'mast is capturing live captions \u2014 click to expand';
       toast.appendChild(createPillBrandEl('waveform', 'mast'));
       toast.onclick = () => {
+        capturingPillMinimized = false;
         renderStatusToast('capturing_started');
       };
     } else if (state === 'captions_off') {
@@ -960,6 +1019,12 @@
         }, 1200);
       });
 
+      const stopBtn = document.createElement('button');
+      stopBtn.id = 'mast-toast-stop-btn';
+      stopBtn.className = 'mast-pill-btn-stop';
+      stopBtn.textContent = 'Stop';
+      stopBtn.addEventListener('click', handlePillStopClick);
+
       const minBtn = document.createElement('button');
       minBtn.id = 'mast-alert-minimize-btn';
       minBtn.className = 'mast-pill-btn-icon';
@@ -973,6 +1038,7 @@
       });
 
       actionsRow.appendChild(enableBtn);
+      actionsRow.appendChild(stopBtn);
       actionsRow.appendChild(minBtn);
       toast.appendChild(actionsRow);
     } else if (state === 'captions_off_badge') {
@@ -1015,7 +1081,7 @@
       captionsAlertTimer = setTimeout(() => {
         if (currentToastState === 'restored') {
           if (isTranscribing) {
-            renderStatusToast('capturing_badge');
+            renderStatusToast(capturingPillMinimized ? 'capturing_badge' : 'capturing_started');
           } else {
             removeStatusToast();
           }
@@ -1028,7 +1094,7 @@
 
       const textEl = document.createElement('span');
       textEl.className = 'mast-pill-text';
-      textEl.textContent = 'Please save your Google AI Studio API key in Settings first.';
+      textEl.textContent = 'Please save your Google AI Studio API key in Settings first';
       toast.appendChild(textEl);
 
       const actionsRow = document.createElement('div');
@@ -1109,7 +1175,7 @@
 
       const textEl = document.createElement('span');
       textEl.className = 'mast-pill-text';
-      textEl.textContent = 'AI notes and transcript downloaded.';
+      textEl.textContent = 'AI notes and transcript downloaded';
       toast.appendChild(textEl);
 
       const dismissBtn = document.createElement('button');
@@ -1137,8 +1203,8 @@
       const textEl = document.createElement('span');
       textEl.className = 'mast-pill-text';
       textEl.textContent = errorMessage
-        ? `AI notes failed (${errorMessage}).`
-        : 'Transcript downloaded, but AI notes failed.';
+        ? `AI notes failed (${errorMessage})`
+        : 'Transcript downloaded, but AI notes failed';
       toast.appendChild(textEl);
 
       const actionsRow = document.createElement('div');
@@ -1216,6 +1282,7 @@
     sawCaptionsActive = false;
     captionsOffDismissed = false;
     captionsAlertMinimized = false;
+    capturingPillMinimized = false;
     transcriptionStartedAt = 0;
   }
 
@@ -1490,7 +1557,7 @@
 
         if (isTranscribing) {
           if (currentToastState === 'meeting_detected') {
-            renderStatusToast('capturing_badge');
+            renderStatusToast(capturingPillMinimized ? 'capturing_badge' : 'capturing_started');
           }
           return;
         }
@@ -1499,7 +1566,7 @@
           if (chrome.runtime.lastError) return;
           if (res.isTranscribing) {
             if (currentToastState === 'meeting_detected') {
-              renderStatusToast('capturing_badge');
+              renderStatusToast(capturingPillMinimized ? 'capturing_badge' : 'capturing_started');
             }
             return;
           }
@@ -1637,6 +1704,7 @@
       sawCaptionsActive = areCaptionsVisible();
       captionsOffDismissed = false;
       captionsAlertMinimized = false;
+      capturingPillMinimized = false;
       removeCaptionsAlert();
       syncHideCaptionsStyle();
       triggerEnableCaptionsAllFrames();
@@ -1690,7 +1758,7 @@
         syncHideCaptionsStyle();
         startObserving();
         if (window === window.top) {
-          renderStatusToast('capturing_badge');
+          renderStatusToast(capturingPillMinimized ? 'capturing_badge' : 'capturing_started');
         }
       }
     });
