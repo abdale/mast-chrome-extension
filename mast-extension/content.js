@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9-dev-5';
+  const CONTENT_SCRIPT_VERSION = '2.9-dev-6';
 
   function isExtensionContextValid() {
     try {
@@ -61,6 +61,8 @@
   let captionsAlertMode = null;
   let captionsAlertMinimized = false;
   let capturingPillMinimized = false;
+  let customPillPos = null;
+  let didJustDragPill = false;
   let hideCaptionBox = false;
   let meetingDetectedToastDismissed = false;
   let transcriptionStartedAt = 0;
@@ -355,9 +357,13 @@
         from { opacity: 0; transform: translate(-50%, -10px) scale(0.96); }
         to { opacity: 1; transform: translate(-50%, 0) scale(1); }
       }
+      @keyframes mastWaveBar {
+        0%, 100% { transform: scaleY(0.38); opacity: 0.75; }
+        50% { transform: scaleY(1); opacity: 1; }
+      }
       @keyframes mastAmberPulse {
-        0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(255, 159, 10, 0.45); }
-        50% { transform: scale(1.1); opacity: 0.88; box-shadow: 0 0 0 4px rgba(255, 159, 10, 0); }
+        0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(255, 159, 10, 0)); }
+        50% { transform: scale(1.08); filter: drop-shadow(0 0 5px rgba(255, 159, 10, 0.55)); }
       }
       @keyframes mastSpinRing {
         from { transform: rotate(0deg); }
@@ -390,9 +396,14 @@
         padding: 9px 14px 9px 16px;
         white-space: nowrap;
         user-select: none;
+        cursor: grab;
         box-sizing: border-box;
         animation: mastSlideInTop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
         transition: background 0.2s ease, border-color 0.2s ease, padding 0.2s ease, box-shadow 0.2s ease;
+      }
+      #mast-status-toast[data-dragging="true"] {
+        cursor: grabbing !important;
+        transition: none !important;
       }
       #mast-status-toast[data-tone="indigo"] {
         border-color: rgba(139, 143, 248, 0.48);
@@ -461,26 +472,34 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
+        width: 16px;
+        height: 16px;
         flex-shrink: 0;
       }
-      .mast-pill-icon[data-dot-color="green"] {
-        background: #30D158;
-        box-shadow: 0 0 6px rgba(48, 209, 88, 0.55);
+      .mast-wave-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        width: 14px;
+        height: 14px;
       }
-      .mast-pill-icon[data-dot-color="amber"] {
-        background: #FF9F0A;
+      .mast-wave-bar {
+        width: 2.5px;
+        height: 12px;
+        background: #30D158;
+        border-radius: 2px;
+        transform-origin: center;
+        animation: mastWaveBar 1.1s infinite ease-in-out;
+      }
+      .mast-wave-bar-1 { animation-delay: 0s; }
+      .mast-wave-bar-2 { animation-delay: 0.22s; }
+      .mast-wave-bar-3 { animation-delay: 0.44s; }
+      .mast-pause-svg {
         animation: mastAmberPulse 2s infinite ease-in-out;
       }
-      .mast-pill-icon[data-dot-color="indigo"] {
-        background: #8B8FF8;
-        box-shadow: 0 0 6px rgba(139, 143, 248, 0.5);
-      }
-      .mast-pill-icon[data-dot-color="red"] {
-        background: #FF453A;
-        box-shadow: 0 0 6px rgba(255, 69, 58, 0.55);
+      .mast-spin-svg {
+        animation: mastSpinRing 0.95s linear infinite;
       }
       .mast-pill-sep {
         width: 1px;
@@ -624,18 +643,160 @@
     const wrap = document.createElement('span');
     wrap.className = 'mast-pill-icon';
     wrap.setAttribute('data-icon', iconType);
-    wrap.setAttribute('aria-hidden', 'true');
-    if (iconType === 'waveform' || iconType === 'check_green') {
-      wrap.setAttribute('data-dot-color', 'green');
-    } else if (iconType === 'pause_amber' || iconType === 'warning_amber') {
-      wrap.setAttribute('data-dot-color', 'amber');
+    if (iconType === 'waveform') {
+      wrap.innerHTML =
+        '<span class="mast-wave-icon" aria-hidden="true">' +
+        '<span class="mast-wave-bar mast-wave-bar-1"></span>' +
+        '<span class="mast-wave-bar mast-wave-bar-2"></span>' +
+        '<span class="mast-wave-bar mast-wave-bar-3"></span>' +
+        '</span>';
+    } else if (iconType === 'pause_amber') {
+      wrap.innerHTML =
+        '<svg class="mast-pause-svg" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="7" fill="rgba(255, 159, 10, 0.18)" stroke="#FF9F0A" stroke-width="1.4"/>' +
+        '<rect x="5.3" y="5" width="1.8" height="6" rx="0.8" fill="#FF9F0A"/>' +
+        '<rect x="8.9" y="5" width="1.8" height="6" rx="0.8" fill="#FF9F0A"/>' +
+        '</svg>';
+    } else if (iconType === 'warning_amber') {
+      wrap.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<path d="M8 2L14.5 13.5H1.5L8 2Z" fill="rgba(255, 159, 10, 0.18)" stroke="#FF9F0A" stroke-width="1.4" stroke-linejoin="round"/>' +
+        '<rect x="7.3" y="6" width="1.4" height="4" rx="0.7" fill="#FF9F0A"/>' +
+        '<circle cx="8" cy="11.6" r="0.8" fill="#FF9F0A"/>' +
+        '</svg>';
+    } else if (iconType === 'spinner') {
+      wrap.innerHTML =
+        '<svg class="mast-spin-svg" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="6" stroke="rgba(139, 143, 248, 0.25)" stroke-width="2"/>' +
+        '<path d="M14 8A6 6 0 0 0 8 2" stroke="#8B8FF8" stroke-width="2" stroke-linecap="round"/>' +
+        '</svg>';
+    } else if (iconType === 'check_green') {
+      wrap.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="7" fill="rgba(48, 209, 88, 0.18)" stroke="#30D158" stroke-width="1.4"/>' +
+        '<path d="M5 8.2L7.1 10.3L11.2 6" stroke="#30D158" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+        '</svg>';
     } else if (iconType === 'error_red') {
-      wrap.setAttribute('data-dot-color', 'red');
+      wrap.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="7" fill="rgba(255, 69, 58, 0.18)" stroke="#FF453A" stroke-width="1.4"/>' +
+        '<rect x="7.25" y="4.5" width="1.5" height="4.5" rx="0.75" fill="#FF453A"/>' +
+        '<circle cx="8" cy="11.2" r="0.85" fill="#FF453A"/>' +
+        '</svg>';
     } else {
-      wrap.setAttribute('data-dot-color', 'indigo');
+      wrap.innerHTML =
+        '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<path d="M8 1.5L9.65 6.35L14.5 8L9.65 9.65L8 14.5L6.35 9.65L1.5 8L6.35 6.35L8 1.5Z" fill="#8B8FF8"/>' +
+        '</svg>';
     }
     return wrap;
   }
+
+  function clampAndApplyPillPosition(toast) {
+    if (!toast) return;
+    if (!customPillPos) {
+      toast.style.left = '50%';
+      toast.style.top = '16px';
+      toast.style.transform = 'translateX(-50%)';
+      return;
+    }
+    const vw = window.innerWidth || document.documentElement.clientWidth || 1024;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 768;
+    const rect = toast.getBoundingClientRect();
+    const halfW = Math.max(24, (rect.width || 120) / 2);
+    const height = Math.max(28, rect.height || 38);
+    const margin = 8;
+
+    const clampedCenterX = Math.max(halfW + margin, Math.min(vw - halfW - margin, customPillPos.centerX));
+    const clampedTopY = Math.max(margin, Math.min(vh - height - margin, customPillPos.topY));
+
+    toast.style.left = `${Math.round(clampedCenterX)}px`;
+    toast.style.top = `${Math.round(clampedTopY)}px`;
+    toast.style.transform = 'translateX(-50%)';
+  }
+
+  function scheduleCapturingAutoShrink() {
+    if (statusToastTimer) {
+      clearTimeout(statusToastTimer);
+      statusToastTimer = null;
+    }
+    statusToastTimer = setTimeout(() => {
+      if (currentToastState === 'capturing_started') {
+        if (isTranscribing) {
+          renderStatusToast('capturing_badge');
+        } else {
+          removeStatusToast();
+        }
+      }
+    }, 9000);
+  }
+
+  function ensurePillDraggable(toast) {
+    if (!toast || toast.__mastDragBound) return;
+    toast.__mastDragBound = true;
+
+    toast.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target && typeof e.target.closest === 'function' && e.target.closest('button')) {
+        return;
+      }
+      const rect = toast.getBoundingClientRect();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const initCenterX = rect.left + rect.width / 2;
+      const initTopY = rect.top;
+      let moved = false;
+      didJustDragPill = false;
+
+      const onMouseMove = (moveEvent) => {
+        const dx = moveEvent.clientX - startX;
+        const dy = moveEvent.clientY - startY;
+        if (!moved && Math.hypot(dx, dy) > 4) {
+          moved = true;
+          didJustDragPill = true;
+          toast.setAttribute('data-dragging', 'true');
+          if (statusToastTimer && currentToastState === 'capturing_started') {
+            clearTimeout(statusToastTimer);
+            statusToastTimer = null;
+          }
+        }
+        if (moved) {
+          moveEvent.preventDefault();
+          customPillPos = {
+            centerX: initCenterX + dx,
+            topY: initTopY + dy
+          };
+          clampAndApplyPillPosition(toast);
+        }
+      };
+
+      const onMouseUp = () => {
+        window.removeEventListener('mousemove', onMouseMove, true);
+        window.removeEventListener('mouseup', onMouseUp, true);
+        if (moved) {
+          toast.removeAttribute('data-dragging');
+          if (currentToastState === 'capturing_started') {
+            scheduleCapturingAutoShrink();
+          }
+          setTimeout(() => {
+            didJustDragPill = false;
+          }, 60);
+        }
+      };
+
+      window.addEventListener('mousemove', onMouseMove, true);
+      window.addEventListener('mouseup', onMouseUp, true);
+    });
+  }
+
+  function onWindowResize() {
+    if (!customPillPos) return;
+    const toast = document.getElementById('mast-status-toast');
+    if (toast) {
+      clampAndApplyPillPosition(toast);
+    }
+  }
+  window.addEventListener('resize', onWindowResize);
 
   function handlePillStopClick(e) {
     if (e) e.stopPropagation();
@@ -824,6 +985,7 @@
       toast.id = 'mast-status-toast';
       document.body.appendChild(toast);
     }
+    ensurePillDraggable(toast);
 
     toast.innerHTML = '';
     toast.onclick = null;
@@ -981,12 +1143,18 @@
       actionsRow.appendChild(stopBtn);
       actionsRow.appendChild(minBtn);
       toast.appendChild(actionsRow);
+
+      scheduleCapturingAutoShrink();
     } else if (state === 'capturing_badge') {
       toast.setAttribute('data-tone', 'green');
       toast.setAttribute('data-mode', 'micro');
-      toast.title = 'mast is capturing live captions \u2014 click to expand';
+      toast.title = 'mast is capturing live captions \u2014 click to expand (drag to move)';
       toast.appendChild(createPillBrandEl('waveform', 'mast'));
       toast.onclick = () => {
+        if (didJustDragPill) {
+          didJustDragPill = false;
+          return;
+        }
         capturingPillMinimized = false;
         renderStatusToast('capturing_started');
       };
@@ -1059,6 +1227,10 @@
       toast.appendChild(actionLabel);
 
       toast.onclick = () => {
+        if (didJustDragPill) {
+          didJustDragPill = false;
+          return;
+        }
         actionLabel.textContent = 'Enabling...';
         triggerEnableCaptionsAllFrames();
         setTimeout(() => {
@@ -1081,7 +1253,7 @@
       captionsAlertTimer = setTimeout(() => {
         if (currentToastState === 'restored') {
           if (isTranscribing) {
-            renderStatusToast(capturingPillMinimized ? 'capturing_badge' : 'capturing_started');
+            renderStatusToast('capturing_badge');
           } else {
             removeStatusToast();
           }
@@ -1235,6 +1407,8 @@
       actionsRow.appendChild(dismissBtn);
       toast.appendChild(actionsRow);
     }
+
+    clampAndApplyPillPosition(toast);
   }
 
   function flushCaptionsToStorage() {
@@ -1740,6 +1914,7 @@
     if (pillStyle) pillStyle.remove();
     window.removeEventListener('beforeunload', onBeforeUnload);
     window.removeEventListener('message', onWindowMessage);
+    window.removeEventListener('resize', onWindowResize);
     document.removeEventListener('__mast_cleanup_previous_instance', onCrossWorldCleanup);
     try {
       chrome.storage.onChanged.removeListener(onStorageChanged);

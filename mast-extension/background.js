@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-5';
+const WORKER_BUILD_VERSION = '2.9-dev-6';
 let isGeneratingInMemory = false;
 let cachedBaseIconBitmap = null;
 
@@ -25,8 +25,8 @@ function renderIconWithDot(bitmap, size, dotColor) {
     ctx.drawImage(bitmap, 0, 0, size, size);
   }
   if (dotColor) {
-    const r = Math.max(2.3, size * 0.155);
-    const ring = Math.max(1.0, size * 0.05);
+    const r = Math.max(2.0, size * 0.135);
+    const ring = Math.max(0.9, size * 0.045);
     const cx = size - r - ring * 0.6;
     const cy = size - r - ring * 0.6;
 
@@ -51,8 +51,7 @@ async function syncToolbarBadge() {
     const stored = await chrome.storage.local.get([
       'isTranscribing',
       'liveCaptionsOn',
-      'notesStatus',
-      'completionUnseen'
+      'notesStatus'
     ]);
 
     let dotColor = null;
@@ -63,8 +62,6 @@ async function syncToolbarBadge() {
       dotColor = '#5B5FC7';
     } else if (stored.notesStatus === 'error') {
       dotColor = '#FF453A';
-    } else if (stored.notesStatus === 'done' && stored.completionUnseen) {
-      dotColor = '#30D158';
     }
 
     self.__mastToolbarDotColor = dotColor;
