@@ -202,7 +202,7 @@ function toggleCustomModelVisibility() {
   customModelContainer.style.display = modelSelect.value === 'custom' ? 'flex' : 'none';
 }
 
-function setModelSelectLockedState(label = 'Enter API key first') {
+function setModelSelectLockedState(label = 'Enter API Key') {
   if (!modelSelect) return;
   modelSelect.innerHTML = '';
   const opt = document.createElement('option');
@@ -586,7 +586,7 @@ async function updateUI() {
         }
       } else {
         initializedModelsForKey = '';
-        setModelSelectLockedState('Enter API key first');
+        setModelSelectLockedState('Enter API Key');
       }
 
       if (customModelInput && document.activeElement !== customModelInput && result.customModelVal) {

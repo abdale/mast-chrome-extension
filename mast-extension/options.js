@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
     statusEl.style.color = isError ? '#ff6961' : '#30D158';
   }
 
-  function setModelSelectLockedState(label = 'Enter API key first') {
+  function setModelSelectLockedState(label = 'Enter API Key') {
     if (!modelSelect) return;
     modelSelect.innerHTML = '';
     const opt = document.createElement('option');
@@ -260,7 +260,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return true;
     } catch (_) {
       showStatus('Invalid API key. Please check and try again.', true);
-      setModelSelectLockedState('Enter API key first');
+      setModelSelectLockedState('Enter API Key');
       return false;
     }
   }
@@ -284,7 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
         apiKeyInput.value = result.apiKey;
         loadModels(result.apiKey, result.modelSelectVal, result.userSelectedModel);
       } else {
-        setModelSelectLockedState('Enter API key first');
+        setModelSelectLockedState('Enter API Key');
       }
 
       if (result.customModelVal && customModelInput) {
@@ -396,7 +396,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (!apiKey) {
       showStatus('Please enter your Google AI Studio API key.', true);
-      setModelSelectLockedState('Enter API key first');
+      setModelSelectLockedState('Enter API Key');
       return;
     }
 
