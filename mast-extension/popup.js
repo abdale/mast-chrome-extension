@@ -1,52 +1,168 @@
-const viewApiKey = document.getElementById('view-api-key');
-const viewNoCall = document.getElementById('view-no-call');
-const viewMain = document.getElementById('view-main');
-const viewResults = document.getElementById('view-results');
+const mainStatusDot = document.getElementById('mainStatusDot');
+const settingsLink = document.getElementById('settingsLink');
 
 const apiKeyInput = document.getElementById('apiKeyInput');
 const validateBtn = document.getElementById('validateBtn');
 const apiError = document.getElementById('apiError');
-
-const startBtn = document.getElementById('startBtn');
-const captionHelperText = document.getElementById('captionHelperText');
-const enableCaptionsBtn = document.getElementById('enableCaptionsBtn');
-const hideCaptionBoxToggle = document.getElementById('hideCaptionBoxToggle');
-const issueBanner = document.getElementById('issueBanner');
-const stopLink = document.getElementById('stopLink');
 const statusEl = document.getElementById('status');
-const timerEl = document.getElementById('timer');
-const settingsLink = document.getElementById('settingsLink');
 
-const resultsHeading = document.getElementById('resultsHeading');
-const resultsStatus = document.getElementById('resultsStatus');
+const modelSelect = document.getElementById('modelSelect');
+const customModelContainer = document.getElementById('customModelContainer');
+const customModelInput = document.getElementById('customModelInput');
+const titleSourceSelect = document.getElementById('titleSourceSelect');
+const hideCaptionBoxToggle = document.getElementById('hideCaptionBoxToggle');
+
+const viewResults = document.getElementById('view-results');
 const progressContainer = document.getElementById('progressContainer');
 const progressBarFill = document.getElementById('progressBarFill');
 const progressStageText = document.getElementById('progressStageText');
 const progressPercentText = document.getElementById('progressPercentText');
+const resultsErrorBox = document.getElementById('resultsErrorBox');
+const resultsStatus = document.getElementById('resultsStatus');
 const retryBtn = document.getElementById('retryBtn');
 const dismissBtn = document.getElementById('dismissBtn');
 
-let timerInterval = null;
-let pollInterval = null;
-let sawSessionTransitionInPopup = false;
+const recentMeetingsList = document.getElementById('recentMeetingsList');
 
-const WORKER_BUILD_VERSION = '2.9-dev-6';
+const WORKER_BUILD_VERSION = '2.9-dev-7';
+
+let cachedPopupBaseBitmap = null;
+
+async function getPopupBaseBitmap() {
+  if (cachedPopupBaseBitmap) return cachedPopupBaseBitmap;
+  try {
+    if (typeof fetch !== 'function' || typeof createImageBitmap !== 'function') return null;
+    const res = await fetch(chrome.runtime.getURL('icons/icon48.png'));
+    const blob = await res.blob();
+    cachedPopupBaseBitmap = await createImageBitmap(blob);
+    return cachedPopupBaseBitmap;
+  } catch (_) {
+    return null;
+  }
+}
+
+function renderPopupIconWithDot(bitmap, size, dotColor) {
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
+  if (bitmap) {
+    ctx.drawImage(bitmap, 0, 0, size, size);
+  }
+  if (dotColor) {
+    const r = Math.max(1.75, size * 0.105);
+    const ring = Math.max(0.8, size * 0.04);
+    const cx = size - r - ring * 0.7;
+    const cy = size - r - ring * 0.7;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + ring, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(20, 20, 24, 0.94)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = dotColor;
+    ctx.fill();
+  }
+  return ctx.getImageData(0, 0, size, size);
+}
+
+async function syncToolbarAndHeaderDot(stored, inActiveCallFallback = false) {
+  const isTranscribing = !!(stored && stored.isTranscribing);
+  const liveCaptionsOn = stored ? stored.liveCaptionsOn : true;
+  const notesStatus = (stored && stored.notesStatus) || 'idle';
+  const inActiveCall = !!(stored && stored.inActiveCall) || inActiveCallFallback;
+
+  let dotColor = null;
+  let tone = '';
+
+  if (isTranscribing) {
+    if (liveCaptionsOn === false) {
+      dotColor = '#FF9F0A';
+      tone = 'amber';
+    } else {
+      dotColor = '#30D158';
+      tone = 'green';
+    }
+  } else if (notesStatus === 'generating') {
+    dotColor = '#8B8FF8';
+    tone = 'indigo';
+  } else if (notesStatus === 'error') {
+    dotColor = '#FF453A';
+    tone = 'red';
+  } else if (inActiveCall) {
+    dotColor = '#8B8FF8';
+    tone = 'indigo';
+  }
+
+  if (mainStatusDot) {
+    if (tone) {
+      mainStatusDot.setAttribute('data-tone', tone);
+    } else {
+      mainStatusDot.removeAttribute('data-tone');
+    }
+  }
+
+  try {
+    if (typeof chrome !== 'undefined' && chrome.action) {
+      if (typeof chrome.action.setBadgeText === 'function') {
+        await chrome.action.setBadgeText({ text: '' });
+      }
+      if (typeof chrome.action.setIcon === 'function') {
+        if (!dotColor) {
+          await chrome.action.setIcon({
+            path: {
+              16: 'icons/icon16.png',
+              48: 'icons/icon48.png',
+              128: 'icons/icon128.png'
+            }
+          });
+        } else if (typeof OffscreenCanvas !== 'undefined') {
+          const bitmap = await getPopupBaseBitmap();
+          const imageData = {
+            16: renderPopupIconWithDot(bitmap, 16, dotColor),
+            32: renderPopupIconWithDot(bitmap, 32, dotColor),
+            48: renderPopupIconWithDot(bitmap, 48, dotColor)
+          };
+          await chrome.action.setIcon({ imageData });
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+// Clear any legacy text badge immediately on popup open
+try {
+  if (typeof chrome !== 'undefined' && chrome.action && typeof chrome.action.setBadgeText === 'function') {
+    chrome.action.setBadgeText({ text: '' });
+  }
+} catch (_) {}
+
 chrome.runtime.sendMessage({ action: 'get_worker_version' }, () => {
   void chrome.runtime.lastError;
 });
 
-if (hideCaptionBoxToggle) {
-  hideCaptionBoxToggle.addEventListener('change', () => {
-    chrome.storage.local.set({ hideCaptionBox: !!hideCaptionBoxToggle.checked }, () => {
-      updateUI();
-    });
+if (settingsLink) {
+  settingsLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.open(chrome.runtime.getURL('options.html'));
   });
 }
 
-settingsLink.addEventListener('click', (e) => {
-  e.preventDefault();
-  window.open(chrome.runtime.getURL('options.html'));
-});
+function showTransientStatus(msg, isError = false) {
+  if (!statusEl) return;
+  statusEl.innerText = msg;
+  statusEl.style.color = isError ? '#ff6961' : '#30D158';
+  statusEl.style.display = msg ? 'block' : 'none';
+  if (msg && !isError) {
+    setTimeout(() => {
+      if (statusEl.innerText === msg) {
+        statusEl.innerText = '';
+        statusEl.style.display = 'none';
+      }
+    }, 2200);
+  }
+}
 
 function getTopStableFlashModels(models) {
   const validModels = (models || []).filter(
@@ -81,55 +197,144 @@ function getTopStableFlashModels(models) {
   return sorted.slice(0, 2).map((entry) => entry.model);
 }
 
-async function validateApiKey(key) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${key}`;
-  try {
-    const response = await fetch(url);
-    if (!response.ok) return { valid: false, latestFlashModel: null };
-    const data = await response.json();
-    const topFlash = getTopStableFlashModels(data.models);
-    const preferredModel = topFlash.length >= 2 ? topFlash[1] : topFlash[0];
-    const defaultModel = preferredModel ? preferredModel.name.replace('models/', '') : 'gemini-2.5-flash';
+function toggleCustomModelVisibility() {
+  if (!customModelContainer || !modelSelect) return;
+  customModelContainer.style.display = modelSelect.value === 'custom' ? 'flex' : 'none';
+}
 
-    return { valid: true, latestFlashModel: defaultModel };
+async function loadModelsForPopup(apiKey, selectedVal, userSelectedModel) {
+  if (!modelSelect) return { valid: false, defaultModelId: 'gemini-2.5-flash' };
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    if (!response.ok) return { valid: false, defaultModelId: null };
+    const data = await response.json();
+
+    modelSelect.innerHTML = '';
+    const finalModels = getTopStableFlashModels(data.models);
+    const validIds = finalModels.map((m) => m.name.replace('models/', ''));
+    const defaultModelId = validIds.length >= 2 ? validIds[1] : (validIds[0] || 'gemini-2.5-flash');
+
+    finalModels.forEach((m) => {
+      const modelId = m.name.replace('models/', '');
+      const option = document.createElement('option');
+      option.value = modelId;
+      option.textContent = m.displayName || modelId;
+      modelSelect.appendChild(option);
+    });
+
+    const customOpt = document.createElement('option');
+    customOpt.value = 'custom';
+    customOpt.textContent = 'Custom...';
+    modelSelect.appendChild(customOpt);
+
+    if (userSelectedModel && selectedVal && (validIds.includes(selectedVal) || selectedVal === 'custom')) {
+      modelSelect.value = selectedVal;
+    } else {
+      modelSelect.value = defaultModelId;
+      if (defaultModelId !== 'custom') {
+        chrome.storage.local.set({
+          selectedModel: defaultModelId,
+          modelSelectVal: defaultModelId
+        });
+      }
+    }
+
+    toggleCustomModelVisibility();
+    return { valid: true, defaultModelId };
   } catch (_) {
-    return { valid: false, latestFlashModel: null };
+    return { valid: false, defaultModelId: null };
   }
 }
 
-validateBtn.addEventListener('click', async () => {
-  const key = apiKeyInput.value.trim();
-  if (!key) {
-    apiError.innerText = 'Key cannot be empty.';
-    apiError.style.display = 'block';
-    return;
-  }
-
-  validateBtn.innerText = 'Validating...';
-  validateBtn.disabled = true;
-  apiError.style.display = 'none';
-
-  chrome.storage.local.get(['selectedModel', 'modelSelectVal'], async (result) => {
-    const validation = await validateApiKey(key);
-
-    if (validation.valid) {
-      if (!result.selectedModel || result.modelSelectVal !== 'custom') {
-        chrome.storage.local.set({
-          selectedModel: validation.latestFlashModel,
-          modelSelectVal: validation.latestFlashModel
-        });
-      }
-      chrome.storage.local.set({ apiKey: key }, () => {
-        updateUI();
-      });
-    } else {
-      apiError.innerText = 'Invalid API key. Please try again.';
+if (validateBtn) {
+  validateBtn.addEventListener('click', async () => {
+    const key = apiKeyInput.value.trim();
+    if (!key) {
+      apiError.innerText = 'Key cannot be empty.';
       apiError.style.display = 'block';
-      validateBtn.innerText = 'Save & Validate';
-      validateBtn.disabled = false;
+      return;
+    }
+
+    validateBtn.innerText = '...';
+    validateBtn.disabled = true;
+    apiError.style.display = 'none';
+
+    chrome.storage.local.get(['selectedModel', 'modelSelectVal', 'userSelectedModel'], async (result) => {
+      const loaded = await loadModelsForPopup(key, result.modelSelectVal, result.userSelectedModel);
+
+      if (loaded.valid) {
+        const updates = { apiKey: key };
+        if (!result.selectedModel || result.modelSelectVal !== 'custom') {
+          updates.selectedModel = loaded.defaultModelId || 'gemini-2.5-flash';
+          updates.modelSelectVal = loaded.defaultModelId || 'gemini-2.5-flash';
+        }
+        chrome.storage.local.set(updates, () => {
+          validateBtn.innerText = '\u2713';
+          validateBtn.disabled = false;
+          showTransientStatus('Saved');
+          setTimeout(() => {
+            if (validateBtn) validateBtn.innerText = 'Save';
+          }, 1600);
+          updateUI();
+        });
+      } else {
+        apiError.innerText = 'Invalid API key. Please try again.';
+        apiError.style.display = 'block';
+        validateBtn.innerText = 'Save';
+        validateBtn.disabled = false;
+      }
+    });
+  });
+}
+
+if (modelSelect) {
+  modelSelect.addEventListener('change', () => {
+    toggleCustomModelVisibility();
+    const val = modelSelect.value;
+    if (val === 'custom') {
+      const customVal = customModelInput ? customModelInput.value.trim() : '';
+      chrome.storage.local.set({
+        modelSelectVal: 'custom',
+        selectedModel: customVal || 'gemini-2.5-flash',
+        userSelectedModel: true
+      });
+    } else if (val) {
+      chrome.storage.local.set({
+        modelSelectVal: val,
+        selectedModel: val,
+        userSelectedModel: true
+      });
     }
   });
-});
+}
+
+if (customModelInput) {
+  customModelInput.addEventListener('change', () => {
+    const customVal = customModelInput.value.trim();
+    if (customVal && modelSelect && modelSelect.value === 'custom') {
+      chrome.storage.local.set({
+        modelSelectVal: 'custom',
+        customModelVal: customVal,
+        selectedModel: customVal,
+        userSelectedModel: true
+      });
+    }
+  });
+}
+
+if (titleSourceSelect) {
+  titleSourceSelect.addEventListener('change', () => {
+    chrome.storage.local.set({
+      titleSource: titleSourceSelect.value === 'teams' ? 'teams' : 'ai'
+    });
+  });
+}
+
+if (hideCaptionBoxToggle) {
+  hideCaptionBoxToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ hideCaptionBox: !!hideCaptionBoxToggle.checked });
+  });
+}
 
 function applyProgressUI(progress, stage) {
   const pct = Math.max(0, Math.min(100, Math.round(typeof progress === 'number' ? progress : 0)));
@@ -144,49 +349,158 @@ function applyProgressUI(progress, stage) {
   }
 }
 
-function formatTime(seconds) {
-  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
-  const s = (seconds % 60).toString().padStart(2, '0');
-  return `${m}:${s}`;
+function updateHistoryRegenCardProgress(progressState) {
+  if (!progressState || !progressState.meetingId) return;
+  const wrap = document.querySelector(`[data-regen-wrap="${progressState.meetingId}"]`);
+  const fill = document.querySelector(`[data-regen-fill="${progressState.meetingId}"]`);
+  if (!wrap || !fill) return;
+  if (!progressState.active) {
+    wrap.style.display = 'none';
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, Math.round(progressState.progress || 0)));
+  wrap.style.display = 'block';
+  fill.style.width = `${Math.max(4, pct)}%`;
 }
 
-function updateTimerDisplay(startTime) {
-  const elapsed = Math.floor((Date.now() - startTime) / 1000);
-  timerEl.innerText = formatTime(elapsed);
-}
+function renderRecentMeetings(meetings) {
+  if (!recentMeetingsList) return;
+  recentMeetingsList.innerHTML = '';
 
-function startTimer(startTime) {
-  timerEl.style.display = 'block';
-  updateTimerDisplay(startTime);
-  if (timerInterval) clearInterval(timerInterval);
-  timerInterval = setInterval(() => {
-    updateTimerDisplay(startTime);
-  }, 1000);
-}
-
-function stopTimer() {
-  if (timerInterval) clearInterval(timerInterval);
-  timerEl.style.display = 'none';
-  timerEl.innerText = '00:00';
-}
-
-async function checkPageStatus(preferredTabId = null) {
-  let [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  let tab = activeTab;
-
-  if (preferredTabId && (!activeTab || activeTab.id !== preferredTabId)) {
-    try {
-      const preferredTab = await chrome.tabs.get(preferredTabId);
-      if (preferredTab) tab = preferredTab;
-    } catch (_) {}
+  if (!Array.isArray(meetings) || meetings.length === 0) {
+    recentMeetingsList.textContent = 'No recent meetings';
+    return;
   }
 
-  if (!tab) return { captionsOn: false, inActiveCall: false, meetingTitle: 'Meeting' };
+  meetings.slice(0, 4).forEach((item) => {
+    const card = document.createElement('div');
+    card.className = 'recent-item';
 
-  let msgStatus = null;
+    const row = document.createElement('div');
+    row.className = 'recent-row';
+
+    const info = document.createElement('div');
+    info.className = 'recent-info';
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'recent-title';
+    titleEl.textContent = item.title || 'Meeting';
+    titleEl.title = item.title || 'Meeting';
+
+    const dateEl = document.createElement('span');
+    dateEl.className = 'recent-date';
+    const shortDisplay = (item.displayDate || item.shortDate || '').replace(/,\s*\d{4}$/, '');
+    dateEl.textContent = shortDisplay;
+
+    info.appendChild(titleEl);
+    if (shortDisplay) {
+      info.appendChild(dateEl);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'recent-actions';
+
+    const progressWrap = document.createElement('div');
+    progressWrap.setAttribute('data-regen-wrap', String(item.id));
+    progressWrap.style.display = 'none';
+
+    const progressTrack = document.createElement('div');
+    progressTrack.className = 'progress-track';
+    progressTrack.style.marginTop = '3px';
+
+    const progressFill = document.createElement('div');
+    progressFill.className = 'progress-fill';
+    progressFill.setAttribute('data-regen-fill', String(item.id));
+    progressTrack.appendChild(progressFill);
+    progressWrap.appendChild(progressTrack);
+
+    // Sparkle icon button: Generate AI Notes
+    const genBtn = document.createElement('button');
+    genBtn.className = 'mini-icon-btn';
+    genBtn.title = 'Generate AI Notes';
+    genBtn.innerHTML =
+      '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<path d="M8 1.5L9.65 6.35L14.5 8L9.65 9.65L8 14.5L6.35 9.65L1.5 8L6.35 6.35L8 1.5Z" fill="currentColor"/>' +
+      '</svg>';
+    genBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (genBtn.disabled) return;
+      genBtn.disabled = true;
+      progressWrap.style.display = 'block';
+      progressFill.style.width = '8%';
+      chrome.runtime.sendMessage({ action: 'regenerate_meeting_notes', meetingId: item.id }, (res) => {
+        genBtn.disabled = false;
+        progressWrap.style.display = 'none';
+        if (res && res.status === 'done') {
+          showTransientStatus('Notes downloaded');
+        } else if (res && res.error) {
+          showTransientStatus(res.error, true);
+        }
+      });
+    });
+
+    // Download icon button: Download Transcript
+    const dlBtn = document.createElement('button');
+    dlBtn.className = 'mini-icon-btn';
+    dlBtn.title = 'Download Transcript';
+    dlBtn.innerHTML =
+      '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<path d="M8 2.5V10.5M8 10.5L5 7.5M8 10.5L11 7.5M3 13H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '</svg>';
+    dlBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (dlBtn.disabled) return;
+      dlBtn.disabled = true;
+      chrome.runtime.sendMessage({ action: 'download_history_transcript', meetingId: item.id }, (res) => {
+        dlBtn.disabled = false;
+        if (res && res.status === 'downloaded') {
+          showTransientStatus('Transcript saved');
+        }
+      });
+    });
+
+    // Delete (×) icon button
+    const delBtn = document.createElement('button');
+    delBtn.className = 'mini-icon-btn danger';
+    delBtn.title = 'Delete';
+    delBtn.textContent = '\u00D7';
+    delBtn.style.fontSize = '14px';
+    delBtn.style.fontWeight = '600';
+    delBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.runtime.sendMessage({ action: 'delete_recent_meeting', meetingId: item.id }, (res) => {
+        if (res && Array.isArray(res.recentMeetings)) {
+          renderRecentMeetings(res.recentMeetings);
+        }
+      });
+    });
+
+    actions.appendChild(genBtn);
+    actions.appendChild(dlBtn);
+    actions.appendChild(delBtn);
+
+    row.appendChild(info);
+    row.appendChild(actions);
+
+    card.appendChild(row);
+    card.appendChild(progressWrap);
+    recentMeetingsList.appendChild(card);
+  });
+}
+
+async function checkTeamsTabPresence() {
   try {
-    msgStatus = await new Promise((resolve) => {
-      chrome.tabs.sendMessage(tab.id, { action: 'get_status' }, (res) => {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!activeTab || !activeTab.id) return false;
+    const tabUrl = (activeTab.url || '').toLowerCase();
+    const isTeamsTab =
+      tabUrl.includes('teams.microsoft.com') ||
+      tabUrl.includes('teams.live.com') ||
+      tabUrl.includes('teams.cloud.microsoft');
+    if (!isTeamsTab) return false;
+
+    const msgStatus = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(activeTab.id, { action: 'get_status' }, (res) => {
         if (chrome.runtime.lastError) {
           resolve(null);
         } else {
@@ -194,528 +508,111 @@ async function checkPageStatus(preferredTabId = null) {
         }
       });
     });
-  } catch (_) {}
 
-  const tabUrl = (tab.url || '').toLowerCase();
-  const isTeamsTab =
-    tabUrl.includes('teams.microsoft.com') ||
-    tabUrl.includes('teams.live.com') ||
-    tabUrl.includes('teams.cloud.microsoft');
-  if (!isTeamsTab && !msgStatus) {
-    return { captionsOn: false, inActiveCall: false, meetingTitle: 'Meeting' };
-  }
-  if (isTeamsTab && !msgStatus && tab.id) {
-    try {
+    if (!msgStatus) {
       chrome.scripting.executeScript(
         {
-          target: { tabId: tab.id, allFrames: true },
+          target: { tabId: activeTab.id, allFrames: true },
           files: ['content.js']
         },
         () => {
           void chrome.runtime.lastError;
         }
       );
-    } catch (_) {}
-  }
-
-  let captionsOn = !!(msgStatus && msgStatus.captionsOn);
-  let inActiveCall = !!(msgStatus && msgStatus.inActiveCall);
-  let meetingTitle = msgStatus && msgStatus.meetingTitle ? msgStatus.meetingTitle : 'Meeting';
-
-  try {
-    let results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
-      func: () => {
-        const captionsOn = !!document.querySelector(
-          '[data-tid="closed-captions-container"], [data-tid="closed-caption-renderer-wrapper"], [data-tid="closed-caption-text"], [data-tid="author"], .ui-captions-container, [data-tid*="closed-caption" i], [data-tid*="captions-container" i], [data-tid*="caption-renderer" i], [aria-label*="Live captions" i], [aria-label*="Closed captions" i]'
-        );
-        const isPreJoin =
-          !!document.querySelector(
-            '[data-tid="prejoin-join-button"], button[data-tid="prejoin-join-button"], button[aria-label^="Join now" i]'
-          ) &&
-          !document.querySelector('#hangup-button, [data-tid="hangup-main-btn"], [data-tid="hangup-button"]');
-
-        const inActiveCall =
-          captionsOn ||
-          (!isPreJoin &&
-            !!document.querySelector(
-              '[data-tid="call-duration"], #hangup-button, button[data-tid="hangup-button"], [data-tid="hangup-main-btn"], [data-tid="hangup-chevron-btn"], button[data-tid="call-hangup"], button[id*="hangup" i], button[data-tid*="hangup" i], button[aria-label="Leave" i], button[aria-label^="Leave (" i], button[aria-label*="Leave call" i], button[aria-label*="Leave meeting" i], button[aria-label*="Hang up" i], #callingButtons-showMoreBtn, [data-tid="callingButtons-showMoreBtn"], #share-button, [data-tid="share-button"], [data-tid="calling-top-bar"], [data-tid="calling-screen"], [data-tid="meeting-stage"], [data-tid="calling-stage"], [data-tid="modern-calling-Header"], [data-tid="call-Composite"], [data-tid="call-status-container"]'
-            ));
-
-        const genericNames = new Set([
-          'microsoft teams',
-          'teams',
-          'chat',
-          'calendar',
-          'activity',
-          'calls',
-          'files',
-          'onedrive',
-          'approvals',
-          'meeting',
-          'general',
-          'unknown'
-        ]);
-        const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
-        const isValidTitle = (str) => {
-          if (!str || str.length < 2) return false;
-          if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(str)) return false;
-          return !genericNames.has(str.toLowerCase());
-        };
-
-        let meetingTitle = 'Meeting';
-        const titleSelectors = [
-          '[data-tid="call-title"]',
-          '[data-tid="meeting-title"]',
-          '[data-tid="calling-header-title"]',
-          '[data-tid="SimplifiedCallHeader-title"]',
-          '[data-tid="ubar-header-title"]',
-          '[data-tid="calling-top-bar"] [data-tid*="title" i]',
-          '[aria-label*="Meeting title" i]',
-          '.meeting-title',
-          '.call-title'
-        ];
-        for (const sel of titleSelectors) {
-          const el = document.querySelector(sel);
-          if (el) {
-            const candidate = cleanSegment(el.innerText || el.textContent || el.getAttribute('title') || '');
-            if (isValidTitle(candidate)) {
-              meetingTitle = candidate;
-              break;
-            }
-          }
-        }
-
-        if (meetingTitle === 'Meeting' && document.title) {
-          const cleanDocTitle = cleanSegment(document.title);
-          const parts = cleanDocTitle.split('|').map(cleanSegment).filter(Boolean);
-          for (const part of parts) {
-            if (isValidTitle(part)) {
-              meetingTitle = part;
-              break;
-            }
-          }
-        }
-
-        return { captionsOn: captionsOn, inActiveCall: inActiveCall, meetingTitle: meetingTitle };
-      }
-    });
-    if (results) {
-      for (let r of results) {
-        if (r.result) {
-          if (r.result.captionsOn) captionsOn = true;
-          if (r.result.inActiveCall) inActiveCall = true;
-          if (r.result.meetingTitle && r.result.meetingTitle !== 'Meeting') meetingTitle = r.result.meetingTitle;
-        }
-      }
+      return false;
     }
-  } catch (_) {}
-
-  if (inActiveCall && meetingTitle === 'Meeting' && tab.title) {
-    const genericNames = new Set([
-      'microsoft teams',
-      'teams',
-      'chat',
-      'calendar',
-      'activity',
-      'calls',
-      'files',
-      'onedrive',
-      'approvals',
-      'meeting',
-      'general',
-      'unknown'
-    ]);
-    const cleanSegment = (str) => (str || '').replace(/^\(\d+\)\s*/, '').replace(/\s+/g, ' ').trim();
-    const parts = cleanSegment(tab.title).split('|').map(cleanSegment).filter(Boolean);
-    for (const part of parts) {
-      if (part.length >= 2 && !/^\d{1,2}:\d{2}(:\d{2})?$/.test(part) && !genericNames.has(part.toLowerCase())) {
-        meetingTitle = part;
-        break;
-      }
-    }
+    return !!msgStatus.inActiveCall;
+  } catch (_) {
+    return false;
   }
-
-  return { captionsOn, inActiveCall, meetingTitle };
 }
 
-function updateUI() {
+let initializedModelsForKey = '';
+
+async function updateUI() {
+  const inActiveCallFallback = await checkTeamsTabPresence();
+
   chrome.storage.local.get(
     [
       'apiKey',
-      'isTranscribing',
-      'savedTranscript',
-      'startTime',
-      'issueDetected',
-      'activeTabId',
       'selectedModel',
+      'modelSelectVal',
+      'customModelVal',
+      'userSelectedModel',
+      'titleSource',
+      'hideCaptionBox',
+      'isTranscribing',
+      'liveCaptionsOn',
+      'inActiveCall',
       'notesStatus',
       'notesError',
       'notesProgress',
       'notesStage',
       'completionUnseen',
-      'callEnded',
-      'generationStartedAt',
-      'liveCaptionsOn',
-      'hideCaptionBox'
+      'recentMeetings'
     ],
-    async (result) => {
+    (result) => {
+      if (chrome.runtime.lastError || !result) return;
+
+      if (result.completionUnseen) {
+        chrome.storage.local.set({ completionUnseen: false });
+      }
+
+      syncToolbarAndHeaderDot(result, inActiveCallFallback);
+
+      if (apiKeyInput && document.activeElement !== apiKeyInput) {
+        apiKeyInput.value = result.apiKey || '';
+      }
+
+      if (result.apiKey && result.apiKey !== initializedModelsForKey) {
+        initializedModelsForKey = result.apiKey;
+        loadModelsForPopup(result.apiKey, result.modelSelectVal, result.userSelectedModel);
+      }
+
+      if (customModelInput && document.activeElement !== customModelInput && result.customModelVal) {
+        customModelInput.value = result.customModelVal;
+      }
+
+      if (titleSourceSelect) {
+        titleSourceSelect.value = result.titleSource === 'teams' ? 'teams' : 'ai';
+      }
+
       if (hideCaptionBoxToggle) {
         hideCaptionBoxToggle.checked = !!result.hideCaptionBox;
       }
-      let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const targetTabId = result.isTranscribing && result.activeTabId ? result.activeTabId : (tab ? tab.id : null);
-      const pageStatus = await checkPageStatus(targetTabId);
 
-      if (pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== 'Meeting') {
-        chrome.storage.local.set({ meetingTitle: pageStatus.meetingTitle });
-      }
+      renderRecentMeetings(Array.isArray(result.recentMeetings) ? result.recentMeetings : []);
 
-      let currentTabId = tab ? tab.id : null;
-      const hasUnseenCompletion = !!(result.notesStatus === 'done' && result.completionUnseen);
-      const switchedToNewTab = !!(
-        result.activeTabId &&
-        result.activeTabId !== currentTabId &&
-        !result.isTranscribing &&
-        !sawSessionTransitionInPopup &&
-        !hasUnseenCompletion
-      );
-      const startedNewCallInSameTab = !!(result.callEnded && pageStatus.inActiveCall && !result.isTranscribing);
-      const inNewActiveMeeting = !!(
-        pageStatus.inActiveCall &&
-        (switchedToNewTab || result.callEnded) &&
-        !result.isTranscribing
-      );
-      const reopenedAfterCompletion = !!(
-        (result.notesStatus === 'done' || !result.notesStatus || result.notesStatus === 'idle') &&
-        !sawSessionTransitionInPopup &&
-        !hasUnseenCompletion &&
-        !result.isTranscribing
-      );
-      const isGeneratingStale =
-        result.notesStatus === 'generating' &&
-        (!result.generationStartedAt || Date.now() - result.generationStartedAt > 75000);
-
-      // Never reset state while actively transcribing
-      if (
-        !result.isTranscribing &&
-        result.savedTranscript &&
-        result.savedTranscript.length > 0 &&
-        (switchedToNewTab || startedNewCallInSameTab || reopenedAfterCompletion) &&
-        (result.notesStatus !== 'generating' || isGeneratingStale) &&
-        (result.notesStatus !== 'error' || inNewActiveMeeting)
-      ) {
-        const nextMeetingTitle =
-          pageStatus.inActiveCall && pageStatus.meetingTitle && pageStatus.meetingTitle !== 'Meeting'
-            ? pageStatus.meetingTitle
-            : 'Meeting';
-        chrome.storage.local.set({
-          savedTranscript: [],
-          isTranscribing: false,
-          notesStatus: 'idle',
-          notesError: '',
-          notesProgress: 0,
-          notesStage: '',
-          completionUnseen: false,
-          transcriptDownloaded: false,
-          callEnded: false,
-          meetingTitle: nextMeetingTitle
+      if (result.notesStatus === 'generating') {
+        if (viewResults) viewResults.style.display = 'block';
+        if (progressContainer) progressContainer.style.display = 'block';
+        if (resultsErrorBox) resultsErrorBox.style.display = 'none';
+        applyProgressUI(result.notesProgress, result.notesStage);
+        chrome.runtime.sendMessage({ action: 'check_generation_status' }, () => {
+          void chrome.runtime.lastError;
         });
-        result.savedTranscript = [];
-        result.isTranscribing = false;
-        result.notesStatus = 'idle';
-        result.notesError = '';
-        result.notesProgress = 0;
-        result.notesStage = '';
-        result.completionUnseen = false;
-        result.callEnded = false;
-      }
-
-      // 1. API Key View
-      if (!result.apiKey) {
-        viewApiKey.style.display = 'block';
-        if (viewNoCall) viewNoCall.style.display = 'none';
-        viewMain.style.display = 'none';
-        viewResults.style.display = 'none';
-        validateBtn.innerText = 'Save & Validate';
-        validateBtn.disabled = false;
-        return;
-      }
-
-      const hasTranscript = result.savedTranscript && result.savedTranscript.length > 0;
-
-      // 2. Transcribing in progress always shows Main View (even when viewing another tab)
-      if (result.isTranscribing) {
-        sawSessionTransitionInPopup = true;
-        viewApiKey.style.display = 'none';
-        if (viewNoCall) viewNoCall.style.display = 'none';
-        viewMain.style.display = 'block';
-        viewResults.style.display = 'none';
-
-        if (result.issueDetected) {
-          issueBanner.style.display = 'block';
-        } else {
-          issueBanner.style.display = 'none';
+      } else if (result.notesStatus === 'error') {
+        if (viewResults) viewResults.style.display = 'block';
+        if (progressContainer) progressContainer.style.display = 'none';
+        if (resultsErrorBox) resultsErrorBox.style.display = 'block';
+        if (resultsStatus) {
+          resultsStatus.innerText = result.notesError
+            ? `Notes failed (${result.notesError})`
+            : 'Transcript saved, but AI notes failed.';
         }
-
-        if (captionHelperText) {
-          captionHelperText.style.display = 'none';
-        }
-
-        stopLink.style.display = 'block';
-
-        const startTime = result.startTime || Date.now();
-        startTimer(startTime);
-
-        const captionsCurrentlyOn = pageStatus.captionsOn || result.liveCaptionsOn === true;
-        const captionsOffWarning = !captionsCurrentlyOn && Date.now() - startTime >= 4000;
-
-        if (captionsOffWarning) {
-          startBtn.style.display = 'none';
-          if (enableCaptionsBtn) {
-            enableCaptionsBtn.style.display = 'block';
-          }
-          statusEl.style.color = '#d32f2f';
-          statusEl.innerText = 'Live captions are off. Enable captions to continue capturing.';
-        } else {
-          startBtn.style.display = 'block';
-          startBtn.disabled = true;
-          if (enableCaptionsBtn) {
-            enableCaptionsBtn.style.display = 'none';
-            enableCaptionsBtn.disabled = false;
-            enableCaptionsBtn.innerText = 'Enable Captions';
-          }
-          statusEl.style.color = '#333';
-          statusEl.innerText = 'Transcribing in progress...';
-        }
-        return;
+      } else {
+        if (viewResults) viewResults.style.display = 'none';
+        if (progressContainer) progressContainer.style.display = 'none';
+        if (resultsErrorBox) resultsErrorBox.style.display = 'none';
       }
-
-      // 3. Results View: if not transcribing but we have a transcript
-      if (!result.isTranscribing && hasTranscript) {
-        sawSessionTransitionInPopup = true;
-        viewApiKey.style.display = 'none';
-        if (viewNoCall) viewNoCall.style.display = 'none';
-        viewMain.style.display = 'none';
-        viewResults.style.display = 'block';
-        stopTimer();
-
-        if (result.notesStatus === 'generating') {
-          if (resultsHeading) resultsHeading.innerText = 'Generating Meeting Notes';
-          resultsStatus.style.color = '#5f6368';
-          resultsStatus.innerText = 'Generating AI meeting notes and saving transcript...';
-          if (progressContainer) progressContainer.style.display = 'block';
-          applyProgressUI(result.notesProgress, result.notesStage);
-          if (retryBtn) retryBtn.style.display = 'none';
-          if (dismissBtn) dismissBtn.style.display = 'none';
-          chrome.runtime.sendMessage({ action: 'check_generation_status' }, () => {
-            void chrome.runtime.lastError;
-          });
-        } else if (result.notesStatus === 'error') {
-          if (resultsHeading) resultsHeading.innerText = 'Notes Generation Failed';
-          if (progressContainer) progressContainer.style.display = 'none';
-          resultsStatus.style.color = '#d32f2f';
-          resultsStatus.innerText =
-            'Transcript saved, but AI notes failed to generate.' +
-            (result.notesError ? ' (' + result.notesError + ')' : '');
-          if (retryBtn) {
-            retryBtn.style.display = 'block';
-            retryBtn.disabled = false;
-            retryBtn.innerText = 'Retry';
-          }
-          if (dismissBtn) {
-            dismissBtn.style.display = 'block';
-          }
-        } else {
-          if (result.completionUnseen) {
-            chrome.storage.local.set({ completionUnseen: false });
-          }
-          if (resultsHeading) resultsHeading.innerText = 'Session Completed';
-          if (progressContainer) progressContainer.style.display = 'none';
-          resultsStatus.style.color = '#5f6368';
-          resultsStatus.innerText = 'Your AI meeting notes and transcript have been saved to your Downloads folder.';
-          if (retryBtn) retryBtn.style.display = 'none';
-          if (dismissBtn) dismissBtn.style.display = 'none';
-        }
-        return;
-      }
-
-      // 4. No Active Teams Call View
-      if (!pageStatus.inActiveCall) {
-        viewApiKey.style.display = 'none';
-        if (viewNoCall) viewNoCall.style.display = 'block';
-        viewMain.style.display = 'none';
-        viewResults.style.display = 'none';
-        stopTimer();
-        return;
-      }
-
-      // 5. Main View (Action-First Ready to Capture inside an active Teams call)
-      viewApiKey.style.display = 'none';
-      if (viewNoCall) viewNoCall.style.display = 'none';
-      viewMain.style.display = 'block';
-      viewResults.style.display = 'none';
-
-      issueBanner.style.display = 'none';
-      stopLink.style.display = 'none';
-      stopTimer();
-
-      startBtn.style.display = 'block';
-      startBtn.disabled = false;
-      if (enableCaptionsBtn) {
-        enableCaptionsBtn.style.display = 'none';
-        enableCaptionsBtn.disabled = false;
-        enableCaptionsBtn.innerText = 'Enable Captions';
-      }
-      if (captionHelperText) {
-        captionHelperText.style.display = 'block';
-        captionHelperText.style.color = '#5f6368';
-        if (result.hideCaptionBox) {
-          captionHelperText.innerText = pageStatus.captionsOn
-            ? 'Captions enabled and ready. Caption box will be hidden during capture.'
-            : 'Live captions will be enabled and hidden in Teams during capture.';
-        } else {
-          captionHelperText.innerText = pageStatus.captionsOn
-            ? 'Captions enabled and ready. Do not disable live captions during the call.'
-            : 'Live captions will be automatically enabled upon capture. Do not disable live captions during the call.';
-        }
-      }
-      statusEl.style.color = '#333';
-      statusEl.innerText = '';
     }
   );
-}
-
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local') return;
-  if (changes.notesProgress || changes.notesStage) {
-    chrome.storage.local.get(['notesProgress', 'notesStage', 'notesStatus'], (s) => {
-      if (s.notesStatus === 'generating') {
-        applyProgressUI(s.notesProgress, s.notesStage);
-      }
-    });
-  }
-  if (changes.notesStatus || changes.apiKey || changes.hideCaptionBox) {
-    updateUI();
-  }
-});
-
-updateUI();
-pollInterval = setInterval(updateUI, 2000);
-
-async function executeInActiveTab(action, callback, preferredTabId = null) {
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const stored = await chrome.storage.local.get(['activeTabId']);
-  const targetTabId = preferredTabId || stored.activeTabId || (tab ? tab.id : null);
-  if (!targetTabId) {
-    if (callback) callback();
-    return;
-  }
-  chrome.scripting.executeScript(
-    {
-      target: { tabId: targetTabId, allFrames: true },
-      files: ['content.js']
-    },
-    () => {
-      void chrome.runtime.lastError;
-      chrome.tabs.sendMessage(targetTabId, { action: action }, () => {
-        void chrome.runtime.lastError;
-        if (callback) callback();
-      });
-    }
-  );
-}
-
-startBtn.addEventListener('click', async () => {
-  sawSessionTransitionInPopup = true;
-  const startTime = Date.now();
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const pageStatus = await checkPageStatus(tab ? tab.id : null);
-  const initialMeetingTitle =
-    pageStatus.meetingTitle && pageStatus.meetingTitle !== 'Meeting' ? pageStatus.meetingTitle : 'Meeting';
-  chrome.storage.local.set(
-    {
-      savedTranscript: [],
-      isTranscribing: true,
-      startTime: startTime,
-      issueDetected: false,
-      activeTabId: tab ? tab.id : null,
-      notesStatus: 'idle',
-      notesError: '',
-      notesProgress: 0,
-      notesStage: '',
-      completionUnseen: false,
-      transcriptDownloaded: false,
-      callEnded: false,
-      liveCaptionsOn: true,
-      meetingTitle: initialMeetingTitle
-    },
-    () => {
-      executeInActiveTab('start', null, tab ? tab.id : null);
-      updateUI();
-    }
-  );
-});
-
-stopLink.addEventListener('click', async (e) => {
-  e.preventDefault();
-  sawSessionTransitionInPopup = true;
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const stored = await chrome.storage.local.get(['activeTabId']);
-  const targetTabId = stored.activeTabId || (tab ? tab.id : null);
-  chrome.storage.local.set(
-    {
-      isTranscribing: false,
-      notesStatus: 'generating',
-      notesProgress: 5,
-      notesStage: 'Connecting to Gemini...',
-      generationStartedAt: Date.now()
-    },
-    () => {
-      chrome.runtime.sendMessage({ action: 'stop_and_finalize', tabId: targetTabId }, () => {
-        void chrome.runtime.lastError;
-        updateUI();
-      });
-      executeInActiveTab(
-        'stop',
-        () => {
-          updateUI();
-        },
-        targetTabId
-      );
-      updateUI();
-    }
-  );
-});
-
-if (enableCaptionsBtn) {
-  enableCaptionsBtn.addEventListener('click', async () => {
-    enableCaptionsBtn.disabled = true;
-    enableCaptionsBtn.innerText = 'Enabling...';
-    const stored = await chrome.storage.local.get(['activeTabId']);
-    executeInActiveTab(
-      'force_captions',
-      () => {
-        setTimeout(() => {
-          enableCaptionsBtn.disabled = false;
-          enableCaptionsBtn.innerText = 'Enable Captions';
-          updateUI();
-        }, 1000);
-      },
-      stored.activeTabId || null
-    );
-  });
 }
 
 if (retryBtn) {
   retryBtn.addEventListener('click', () => {
-    retryBtn.disabled = true;
-    retryBtn.innerText = 'Retrying...';
-    if (dismissBtn) dismissBtn.style.display = 'none';
-    if (resultsHeading) resultsHeading.innerText = 'Generating Meeting Notes';
-    resultsStatus.style.color = '#5f6368';
-    resultsStatus.innerText = 'Generating AI meeting notes and saving transcript...';
     if (progressContainer) progressContainer.style.display = 'block';
+    if (resultsErrorBox) resultsErrorBox.style.display = 'none';
     applyProgressUI(5, 'Connecting to Gemini...');
     chrome.runtime.sendMessage({ action: 'generate_notes' }, () => {
       void chrome.runtime.lastError;
@@ -728,15 +625,11 @@ if (dismissBtn) {
   dismissBtn.addEventListener('click', () => {
     chrome.storage.local.set(
       {
-        savedTranscript: [],
-        isTranscribing: false,
         notesStatus: 'idle',
         notesError: '',
         notesProgress: 0,
         notesStage: '',
-        completionUnseen: false,
-        transcriptDownloaded: false,
-        callEnded: false
+        completionUnseen: false
       },
       () => {
         updateUI();
@@ -744,3 +637,15 @@ if (dismissBtn) {
     );
   });
 }
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.historyRegenProgress && changes.historyRegenProgress.newValue) {
+    updateHistoryRegenCardProgress(changes.historyRegenProgress.newValue);
+  }
+  updateUI();
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  updateUI();
+});

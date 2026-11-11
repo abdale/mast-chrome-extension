@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-6';
+const WORKER_BUILD_VERSION = '2.9-dev-7';
 let isGeneratingInMemory = false;
 let cachedBaseIconBitmap = null;
 
@@ -25,14 +25,14 @@ function renderIconWithDot(bitmap, size, dotColor) {
     ctx.drawImage(bitmap, 0, 0, size, size);
   }
   if (dotColor) {
-    const r = Math.max(2.0, size * 0.135);
-    const ring = Math.max(0.9, size * 0.045);
-    const cx = size - r - ring * 0.6;
-    const cy = size - r - ring * 0.6;
+    const r = Math.max(1.75, size * 0.105);
+    const ring = Math.max(0.8, size * 0.04);
+    const cx = size - r - ring * 0.7;
+    const cy = size - r - ring * 0.7;
 
     ctx.beginPath();
     ctx.arc(cx, cy, r + ring, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(24, 24, 27, 0.92)';
+    ctx.fillStyle = 'rgba(20, 20, 24, 0.94)';
     ctx.fill();
 
     ctx.beginPath();
@@ -51,7 +51,8 @@ async function syncToolbarBadge() {
     const stored = await chrome.storage.local.get([
       'isTranscribing',
       'liveCaptionsOn',
-      'notesStatus'
+      'notesStatus',
+      'inActiveCall'
     ]);
 
     let dotColor = null;
@@ -59,9 +60,11 @@ async function syncToolbarBadge() {
     if (stored.isTranscribing) {
       dotColor = stored.liveCaptionsOn === false ? '#FF9F0A' : '#30D158';
     } else if (stored.notesStatus === 'generating') {
-      dotColor = '#5B5FC7';
+      dotColor = '#8B8FF8';
     } else if (stored.notesStatus === 'error') {
       dotColor = '#FF453A';
+    } else if (stored.inActiveCall) {
+      dotColor = '#8B8FF8';
     }
 
     self.__mastToolbarDotColor = dotColor;
@@ -781,6 +784,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     changes.isTranscribing ||
     changes.liveCaptionsOn ||
     changes.notesStatus ||
+    changes.inActiveCall ||
     changes.completionUnseen
   ) {
     syncToolbarBadge();
@@ -857,6 +861,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
       await chrome.storage.local.set({
         savedTranscript: [],
         activeTabId: null,
+        inActiveCall: false,
         notesStatus: 'idle',
         notesError: '',
         notesProgress: 0,
@@ -866,7 +871,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
         meetingTitle: 'Meeting'
       });
     } else {
-      await chrome.storage.local.set({ activeTabId: null });
+      await chrome.storage.local.set({ activeTabId: null, inActiveCall: false });
     }
   }
 });

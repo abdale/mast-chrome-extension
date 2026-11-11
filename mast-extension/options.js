@@ -1,5 +1,10 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9-dev-6';
+  const WORKER_BUILD_VERSION = '2.9-dev-7';
+  try {
+    if (typeof chrome !== 'undefined' && chrome.action && typeof chrome.action.setBadgeText === 'function') {
+      chrome.action.setBadgeText({ text: '' });
+    }
+  } catch (_) {}
   chrome.runtime.sendMessage({ action: 'get_worker_version' }, () => {
     void chrome.runtime.lastError;
   });

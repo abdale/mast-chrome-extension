@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9-dev-6';
+  const CONTENT_SCRIPT_VERSION = '2.9-dev-7';
 
   function isExtensionContextValid() {
     try {
@@ -50,6 +50,8 @@
 
   let callCheckInterval = null;
   let meetingDetectInterval = null;
+  let pillTimerInterval = null;
+  let lastReportedInActiveCall = null;
   let sawActiveMeeting = false;
   let missingCallChecks = 0;
   let shouldGuardUnload = false;
@@ -515,6 +517,22 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      .mast-pill-timer {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        font-size: 12px;
+        color: #a5a9ff;
+        background: rgba(139, 143, 248, 0.14);
+        border: 1px solid rgba(139, 143, 248, 0.26);
+        padding: 2px 8px;
+        border-radius: 999px;
+        letter-spacing: 0.02em;
+        flex-shrink: 0;
+      }
+      #mast-status-toast[data-mode="micro"] .mast-pill-timer {
+        padding: 1px 7px;
+        font-size: 11.5px;
+      }
       .mast-pill-actions {
         display: inline-flex;
         align-items: center;
@@ -874,6 +892,45 @@
     return sep;
   }
 
+  function formatPillElapsed(startTime) {
+    const base = startTime || transcriptionStartedAt || Date.now();
+    const totalSec = Math.max(0, Math.floor((Date.now() - base) / 1000));
+    const hrs = Math.floor(totalSec / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60).toString().padStart(2, '0');
+    const secs = (totalSec % 60).toString().padStart(2, '0');
+    return hrs > 0 ? `${hrs}:${mins}:${secs}` : `${mins}:${secs}`;
+  }
+
+  function createPillTimerEl() {
+    const timerSpan = document.createElement('span');
+    timerSpan.id = 'mast-pill-timer';
+    timerSpan.className = 'mast-pill-timer';
+    timerSpan.textContent = formatPillElapsed(transcriptionStartedAt);
+    return timerSpan;
+  }
+
+  function startPillTimer() {
+    if (pillTimerInterval) clearInterval(pillTimerInterval);
+    pillTimerInterval = setInterval(() => {
+      if (!isTranscribing) {
+        clearInterval(pillTimerInterval);
+        pillTimerInterval = null;
+        return;
+      }
+      const el = document.getElementById('mast-pill-timer');
+      if (el) {
+        el.textContent = formatPillElapsed(transcriptionStartedAt);
+      }
+    }, 1000);
+  }
+
+  function stopPillTimer() {
+    if (pillTimerInterval) {
+      clearInterval(pillTimerInterval);
+      pillTimerInterval = null;
+    }
+  }
+
   function removeCaptionsAlert() {
     if (captionsAlertTimer) {
       clearTimeout(captionsAlertTimer);
@@ -1103,6 +1160,8 @@
       textEl.className = 'mast-pill-text';
       textEl.textContent = 'Capturing meeting notes';
       toast.appendChild(textEl);
+      toast.appendChild(createPillTimerEl());
+      startPillTimer();
 
       const actionsRow = document.createElement('div');
       actionsRow.className = 'mast-pill-actions';
@@ -1110,11 +1169,11 @@
       const hideBtn = document.createElement('button');
       hideBtn.id = 'mast-toast-hide-captions-btn';
       hideBtn.className = 'mast-pill-btn-subtle';
-      hideBtn.textContent = hideCaptionBox ? 'Show Caption Box' : 'Hide Caption Box';
+      hideBtn.textContent = hideCaptionBox ? 'Show Captions' : 'Hide Captions';
       hideBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         hideCaptionBox = !hideCaptionBox;
-        hideBtn.textContent = hideCaptionBox ? 'Show Caption Box' : 'Hide Caption Box';
+        hideBtn.textContent = hideCaptionBox ? 'Show Captions' : 'Hide Captions';
         syncHideCaptionsStyle();
         try {
           chrome.storage.local.set({ hideCaptionBox });
@@ -1150,6 +1209,8 @@
       toast.setAttribute('data-mode', 'micro');
       toast.title = 'mast is capturing live captions \u2014 click to expand (drag to move)';
       toast.appendChild(createPillBrandEl('waveform', 'mast'));
+      toast.appendChild(createPillTimerEl());
+      startPillTimer();
       toast.onclick = () => {
         if (didJustDragPill) {
           didJustDragPill = false;
@@ -1168,6 +1229,8 @@
       textEl.className = 'mast-pill-text';
       textEl.textContent = 'Captions off \u2014 mast is paused';
       toast.appendChild(textEl);
+      toast.appendChild(createPillTimerEl());
+      startPillTimer();
 
       const actionsRow = document.createElement('div');
       actionsRow.className = 'mast-pill-actions';
@@ -1426,6 +1489,7 @@
 
   function stopLocalObservation() {
     isTranscribing = false;
+    stopPillTimer();
     syncHideCaptionsStyle();
     removeCaptionsAlert();
     flushCaptionsToStorage();
@@ -1719,6 +1783,12 @@
         }
 
         const meetingActive = isTeamsMeetingActive();
+        if (meetingActive !== lastReportedInActiveCall) {
+          lastReportedInActiveCall = meetingActive;
+          try {
+            chrome.storage.local.set({ inActiveCall: meetingActive });
+          } catch (_) {}
+        }
         if (!meetingActive) {
           meetingDetectedToastDismissed = false;
           if (currentToastState === 'meeting_detected') {
@@ -1784,7 +1854,7 @@
       syncHideCaptionsStyle();
       const hideBtn = document.getElementById('mast-toast-hide-captions-btn');
       if (hideBtn) {
-        hideBtn.textContent = hideCaptionBox ? 'Show Caption Box' : 'Hide Caption Box';
+        hideBtn.textContent = hideCaptionBox ? 'Show Captions' : 'Hide Captions';
       }
     }
 
@@ -1793,6 +1863,7 @@
         renderStatusToast('capturing_started');
       } else if (changes.isTranscribing.newValue === false) {
         isTranscribing = false;
+        stopPillTimer();
         meetingDetectedToastDismissed = true;
         removeCaptionsAlert();
         removeHideCaptionsStyle();
@@ -1901,6 +1972,7 @@
   window.__mastContentScriptCleanup = function () {
     if (meetingDetectInterval) clearInterval(meetingDetectInterval);
     if (callCheckInterval) clearInterval(callCheckInterval);
+    stopPillTimer();
     if (issueTimer) clearTimeout(issueTimer);
     if (statusToastTimer) clearTimeout(statusToastTimer);
     if (captionsAlertTimer) clearTimeout(captionsAlertTimer);
