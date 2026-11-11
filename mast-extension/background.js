@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-7';
+const WORKER_BUILD_VERSION = '2.9-dev-8';
 let isGeneratingInMemory = false;
 let cachedBaseIconBitmap = null;
 
@@ -121,12 +121,24 @@ async function cleanupLegacyState() {
       'notesErrorReason'
     ]);
 
-    const stored = await chrome.storage.local.get(['selectedModel', 'modelSelectVal']);
+    const stored = await chrome.storage.local.get(['selectedModel', 'modelSelectVal', 'titleSource', 'hideCaptionBox']);
+    const updates = {};
     const flashPattern = /^gemini-(\d+)(?:\.(\d+))?-flash(?:-(\d{3}))?$/i;
     if (stored.modelSelectVal && stored.modelSelectVal !== 'custom' && !flashPattern.test(stored.modelSelectVal)) {
-      await chrome.storage.local.set({ selectedModel: '', modelSelectVal: '' });
+      updates.selectedModel = '';
+      updates.modelSelectVal = '';
     } else if (stored.selectedModel && stored.modelSelectVal !== 'custom' && !flashPattern.test(stored.selectedModel)) {
-      await chrome.storage.local.set({ selectedModel: '', modelSelectVal: '' });
+      updates.selectedModel = '';
+      updates.modelSelectVal = '';
+    }
+    if (stored.titleSource === undefined) {
+      updates.titleSource = 'ai';
+    }
+    if (stored.hideCaptionBox === undefined) {
+      updates.hideCaptionBox = true;
+    }
+    if (Object.keys(updates).length > 0) {
+      await chrome.storage.local.set(updates);
     }
   } catch (_) {}
 }

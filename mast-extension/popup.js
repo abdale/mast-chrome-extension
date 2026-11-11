@@ -9,7 +9,7 @@ const statusEl = document.getElementById('status');
 const modelSelect = document.getElementById('modelSelect');
 const customModelContainer = document.getElementById('customModelContainer');
 const customModelInput = document.getElementById('customModelInput');
-const titleSourceSelect = document.getElementById('titleSourceSelect');
+const titleSourceToggle = document.getElementById('titleSourceToggle');
 const hideCaptionBoxToggle = document.getElementById('hideCaptionBoxToggle');
 
 const viewResults = document.getElementById('view-results');
@@ -24,7 +24,7 @@ const dismissBtn = document.getElementById('dismissBtn');
 
 const recentMeetingsList = document.getElementById('recentMeetingsList');
 
-const WORKER_BUILD_VERSION = '2.9-dev-7';
+const WORKER_BUILD_VERSION = '2.9-dev-8';
 
 let cachedPopupBaseBitmap = null;
 
@@ -337,10 +337,10 @@ if (customModelInput) {
   });
 }
 
-if (titleSourceSelect) {
-  titleSourceSelect.addEventListener('change', () => {
+if (titleSourceToggle) {
+  titleSourceToggle.addEventListener('change', () => {
     chrome.storage.local.set({
-      titleSource: titleSourceSelect.value === 'teams' ? 'teams' : 'ai'
+      titleSource: titleSourceToggle.checked ? 'ai' : 'teams'
     });
   });
 }
@@ -593,12 +593,12 @@ async function updateUI() {
         customModelInput.value = result.customModelVal;
       }
 
-      if (titleSourceSelect) {
-        titleSourceSelect.value = result.titleSource === 'teams' ? 'teams' : 'ai';
+      if (titleSourceToggle) {
+        titleSourceToggle.checked = result.titleSource ? result.titleSource !== 'teams' : true;
       }
 
       if (hideCaptionBoxToggle) {
-        hideCaptionBoxToggle.checked = !!result.hideCaptionBox;
+        hideCaptionBoxToggle.checked = result.hideCaptionBox !== undefined ? !!result.hideCaptionBox : true;
       }
 
       renderRecentMeetings(Array.isArray(result.recentMeetings) ? result.recentMeetings : []);

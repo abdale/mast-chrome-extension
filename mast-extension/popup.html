@@ -540,7 +540,7 @@
       <input type="text" id="customModelInput" placeholder="e.g., gemini-2.5-flash">
     </div>
 
-    <!-- File Naming Row -->
+    <!-- AI Generated File Name Row -->
     <div class="cc-row">
       <span class="cc-label">
         <span class="cc-icon indigo">
@@ -549,12 +549,12 @@
             <path d="M6 8.5H10.5M6 11H9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
           </svg>
         </span>
-        <span>File Name</span>
+        <span>AI Generated File Name</span>
       </span>
-      <select id="titleSourceSelect">
-        <option value="ai">AI Title</option>
-        <option value="teams">Teams Title</option>
-      </select>
+      <label class="toggle-switch" for="titleSourceToggle" title="On: AI generates file name · Off: Uses Teams meeting name">
+        <input type="checkbox" id="titleSourceToggle" checked>
+        <span class="toggle-slider"></span>
+      </label>
     </div>
 
     <!-- Hide Captions Row -->
@@ -569,7 +569,7 @@
         <span>Hide Captions</span>
       </span>
       <label class="toggle-switch" for="hideCaptionBoxToggle" title="Hide captions overlay in Teams while capturing">
-        <input type="checkbox" id="hideCaptionBoxToggle">
+        <input type="checkbox" id="hideCaptionBoxToggle" checked>
         <span class="toggle-slider"></span>
       </label>
     </div>

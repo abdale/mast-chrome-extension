@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9-dev-7';
+  const CONTENT_SCRIPT_VERSION = '2.9-dev-8';
 
   function isExtensionContextValid() {
     try {
@@ -65,7 +65,7 @@
   let capturingPillMinimized = false;
   let customPillPos = null;
   let didJustDragPill = false;
-  let hideCaptionBox = false;
+  let hideCaptionBox = true;
   let meetingDetectedToastDismissed = false;
   let transcriptionStartedAt = 0;
   let lastRecentSyncAt = 0;
@@ -1997,7 +1997,7 @@
   try {
     chrome.storage.local.get(['hideCaptionBox', 'isTranscribing', 'startTime'], (stored) => {
       if (chrome.runtime.lastError || !stored) return;
-      hideCaptionBox = !!stored.hideCaptionBox;
+      hideCaptionBox = stored.hideCaptionBox !== undefined ? !!stored.hideCaptionBox : true;
       if (stored.isTranscribing && isTeamsMeetingActive()) {
         isTranscribing = true;
         transcriptionStartedAt = stored.startTime || Date.now();
