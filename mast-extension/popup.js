@@ -202,6 +202,19 @@ function toggleCustomModelVisibility() {
   customModelContainer.style.display = modelSelect.value === 'custom' ? 'flex' : 'none';
 }
 
+function setModelSelectLockedState(label = 'Enter API key first') {
+  if (!modelSelect) return;
+  modelSelect.innerHTML = '';
+  const opt = document.createElement('option');
+  opt.value = '';
+  opt.textContent = label;
+  modelSelect.appendChild(opt);
+  modelSelect.disabled = true;
+  if (customModelContainer) {
+    customModelContainer.style.display = 'none';
+  }
+}
+
 async function loadModelsForPopup(apiKey, selectedVal, userSelectedModel) {
   if (!modelSelect) return { valid: false, defaultModelId: 'gemini-2.5-flash' };
   try {
@@ -210,6 +223,7 @@ async function loadModelsForPopup(apiKey, selectedVal, userSelectedModel) {
     const data = await response.json();
 
     modelSelect.innerHTML = '';
+    modelSelect.disabled = false;
     const finalModels = getTopStableFlashModels(data.models);
     const validIds = finalModels.map((m) => m.name.replace('models/', ''));
     const defaultModelId = validIds.length >= 2 ? validIds[1] : (validIds[0] || 'gemini-2.5-flash');
@@ -242,6 +256,7 @@ async function loadModelsForPopup(apiKey, selectedVal, userSelectedModel) {
     toggleCustomModelVisibility();
     return { valid: true, defaultModelId };
   } catch (_) {
+    setModelSelectLockedState('Error loading models');
     return { valid: false, defaultModelId: null };
   }
 }
@@ -564,9 +579,14 @@ async function updateUI() {
         apiKeyInput.value = result.apiKey || '';
       }
 
-      if (result.apiKey && result.apiKey !== initializedModelsForKey) {
-        initializedModelsForKey = result.apiKey;
-        loadModelsForPopup(result.apiKey, result.modelSelectVal, result.userSelectedModel);
+      if (result.apiKey) {
+        if (result.apiKey !== initializedModelsForKey) {
+          initializedModelsForKey = result.apiKey;
+          loadModelsForPopup(result.apiKey, result.modelSelectVal, result.userSelectedModel);
+        }
+      } else {
+        initializedModelsForKey = '';
+        setModelSelectLockedState('Enter API key first');
       }
 
       if (customModelInput && document.activeElement !== customModelInput && result.customModelVal) {

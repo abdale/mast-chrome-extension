@@ -271,6 +271,10 @@
       outline: none;
       cursor: pointer;
     }
+    select:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
     select option {
       background: #202024;
       color: #ffffff;
@@ -526,8 +530,8 @@
         </span>
         <span>Model</span>
       </span>
-      <select id="modelSelect">
-        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+      <select id="modelSelect" disabled>
+        <option value="">Enter API key first</option>
       </select>
     </div>
 
