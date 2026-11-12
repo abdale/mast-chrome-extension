@@ -5,216 +5,715 @@
   <title>mast - Settings</title>
   <style>
     :root {
-      --primary: #5B5FC7;
-      --primary-hover: #464eb8;
-      --bg-gradient: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-      --card-bg: #ffffff;
-      --text: #202124;
-      --text-muted: #5f6368;
-      --border: #dadce0;
-      --focus-ring: rgba(91, 95, 199, 0.25);
+      --bg-top: #1c1c21;
+      --bg-bottom: #111114;
+      --panel-top: #26262b;
+      --panel-bottom: #18181b;
+      --card-bg: rgba(255, 255, 255, 0.06);
+      --card-border: rgba(255, 255, 255, 0.11);
+      --text: #ffffff;
+      --text-muted: rgba(255, 255, 255, 0.56);
+      --accent: #5B5FC7;
+      --accent-light: #8B8FF8;
+      --green: #30D158;
+      --amber: #FF9F0A;
+      --red: #FF453A;
     }
 
     body {
-      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-      background: var(--bg-gradient);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+      background: radial-gradient(circle at 50% 0%, #2a2a35 0%, var(--bg-bottom) 75%);
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
       margin: 0;
-      padding: 20px;
+      padding: 24px 16px;
       box-sizing: border-box;
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
     }
 
     .container {
-      background: var(--card-bg);
-      border-radius: 12px;
-      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+      background: linear-gradient(180deg, var(--panel-top) 0%, var(--panel-bottom) 100%);
+      border-radius: 18px;
+      box-shadow:
+        0 24px 60px rgba(0, 0, 0, 0.65),
+        0 0 0 1px rgba(0, 0, 0, 0.8),
+        inset 0 1px 0 rgba(255, 255, 255, 0.12);
       width: 100%;
-      max-width: 480px;
-      padding: 30px;
+      max-width: 440px;
+      padding: 22px 22px 18px;
       box-sizing: border-box;
-      border: 1px solid rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
     }
 
     h2 {
       color: var(--text);
-      font-size: 24px;
-      margin-top: 0;
-      margin-bottom: 8px;
-      font-weight: 600;
+      font-size: 19px;
+      margin: 0;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ver-label {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* Apple Control Center Cards */
+    .cc-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      border-radius: 13px;
+      padding: 12px 14px;
+      margin-bottom: 11px;
+    }
+
+    .cc-row {
+      position: relative;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 10px;
+      padding: 8px 0;
     }
 
-    .subtitle {
-      color: var(--text-muted);
-      font-size: 14px;
-      margin-bottom: 25px;
+    .info-tip {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 13px;
+      height: 13px;
+      color: rgba(255, 255, 255, 0.5);
+      cursor: help;
+      flex-shrink: 0;
+      margin-left: -2px;
+      outline: none;
+      transition: color 0.15s ease;
     }
-
-    .form-group {
-      margin-bottom: 20px;
-    }
-
-    label {
-      font-weight: 600;
-      font-size: 13px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: var(--text);
+    .info-tip svg {
       display: block;
-      margin-bottom: 8px;
+    }
+    .info-tip:hover,
+    .info-tip:focus-visible {
+      color: rgba(255, 255, 255, 0.92);
+    }
+    .info-tip::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: calc(100% + 7px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(24, 24, 28, 0.98);
+      color: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+      font-style: normal;
+      font-size: 10.5px;
+      font-weight: 500;
+      line-height: 1.25;
+      white-space: nowrap;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      z-index: 50;
+      transition: opacity 0.14s ease, visibility 0.14s ease;
+    }
+    .info-tip:hover::after,
+    .info-tip:focus-visible::after {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    @keyframes mastSpinRing {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .mast-spin-svg {
+      animation: mastSpinRing 0.95s linear infinite;
+    }
+    .docked-pill {
+      margin-bottom: 11px;
+      background: linear-gradient(180deg, rgba(44, 44, 48, 0.98) 0%, rgba(28, 28, 32, 0.98) 100%);
+      border: 1px solid rgba(139, 143, 248, 0.48);
+      border-radius: 999px;
+      box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.65),
+        inset 0 1px 0 rgba(255, 255, 255, 0.16),
+        0 8px 22px rgba(0, 0, 0, 0.45),
+        0 0 14px rgba(139, 143, 248, 0.16);
+      padding: 8px 11px 8px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      box-sizing: border-box;
+    }
+    .docked-pill[data-tone="green"] {
+      border-color: rgba(48, 209, 88, 0.5);
+    }
+    .docked-pill[data-tone="red"] {
+      border-color: rgba(255, 69, 58, 0.55);
+    }
+    .docked-pill-left {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex: 1;
+    }
+    .docked-pill-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+      flex-shrink: 0;
+    }
+    .docked-pill-sep {
+      width: 1px;
+      height: 14px;
+      background: rgba(255, 255, 255, 0.18);
+      flex-shrink: 0;
+    }
+    .docked-pill-text {
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.92);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .docked-pill-pct {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--accent-light);
+      font-variant-numeric: tabular-nums;
+      flex-shrink: 0;
+    }
+    .docked-pill-bar {
+      width: 64px;
+      height: 5px;
+      background: rgba(255, 255, 255, 0.16);
+      border-radius: 999px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .docked-pill-bar-fill {
+      height: 100%;
+      width: 6%;
+      background: linear-gradient(90deg, #5B5FC7 0%, #8B8FF8 100%);
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+    .docked-pill-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .docked-pill-undock {
+      background: rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.82);
+      border: none;
+      border-radius: 50%;
+      width: 23px;
+      height: 23px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+      flex-shrink: 0;
+    }
+    .docked-pill-undock:hover {
+      background: rgba(255, 255, 255, 0.24);
+      color: #ffffff;
+    }
+
+    .cc-row + .cc-row {
+      border-top: 1px solid rgba(255, 255, 255, 0.07);
+    }
+
+    .cc-row:first-child {
+      padding-top: 2px;
+    }
+
+    .cc-row:last-child {
+      padding-bottom: 2px;
+    }
+
+    .cc-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.94);
+      flex-shrink: 0;
+    }
+
+    .cc-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .cc-icon.indigo { background: rgba(139, 143, 248, 0.16); color: var(--accent-light); }
+    .cc-icon.green { background: rgba(48, 209, 88, 0.16); color: var(--green); }
+    .cc-icon.amber { background: rgba(255, 159, 10, 0.16); color: var(--amber); }
+
+    /* API Key Row */
+    .key-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 9px;
+    }
+
+    .key-links {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 11.5px;
+    }
+
+    .key-links a {
+      color: var(--accent-light);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .key-links a:hover {
+      text-decoration: underline;
+    }
+
+    .key-input-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     input[type="password"],
-    input[type="text"],
-    select {
+    input[type="text"] {
       width: 100%;
-      padding: 10px 14px;
+      padding: 8px 11px;
       box-sizing: border-box;
-      border: 1.5px solid var(--border);
-      border-radius: 8px;
-      font-size: 14px;
-      color: var(--text);
-      background-color: #fff;
-      transition: all 0.2s ease;
+      background: rgba(0, 0, 0, 0.28);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 9px;
+      font-size: 13px;
+      color: #ffffff;
       font-family: inherit;
       outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    input[type="password"]::placeholder,
+    input[type="text"]::placeholder {
+      color: rgba(255, 255, 255, 0.35);
     }
 
     input[type="password"]:focus,
     input[type="text"]:focus,
     select:focus {
-      border-color: var(--primary);
-      box-shadow: 0 0 0 4px var(--focus-ring);
+      border-color: var(--accent-light);
+      box-shadow: 0 0 0 2px rgba(139, 143, 248, 0.22);
     }
 
-    button {
-      background-color: var(--primary);
-      color: white;
+    .btn-pill {
+      background: var(--accent);
+      color: #ffffff;
       border: none;
-      padding: 12px 20px;
-      border-radius: 8px;
+      padding: 8px 15px;
+      border-radius: 9px;
       cursor: pointer;
       font-weight: 600;
-      font-size: 14px;
-      width: 100%;
-      transition: all 0.2s ease;
-      margin-top: 10px;
-      display: flex;
-      justify-content: center;
-      align-items: center;
+      font-size: 13px;
+      font-family: inherit;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 0.15s ease, transform 0.1s ease;
+    }
+    .btn-pill:hover:not(:disabled) {
+      background: #6b6fd6;
+    }
+    .btn-pill:active:not(:disabled) {
+      transform: scale(0.97);
+    }
+    .btn-pill:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
     }
 
-    button:hover {
-      background-color: var(--primary-hover);
-      box-shadow: 0 4px 12px rgba(91, 95, 199, 0.2);
+    select {
+      background: rgba(0, 0, 0, 0.3);
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      padding: 5px 10px;
+      font-size: 12.5px;
+      font-family: inherit;
+      font-weight: 500;
+      max-width: 210px;
+      outline: none;
+      cursor: pointer;
+    }
+    select:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    select option {
+      background: #202024;
+      color: #ffffff;
     }
 
-    button:active {
-      transform: scale(0.98);
+    /* Apple Toggle Switch */
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 21px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+      margin: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background-color: rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      transition: background-color 0.2s ease;
+    }
+    .toggle-slider::before {
+      content: "";
+      position: absolute;
+      height: 17px;
+      width: 17px;
+      left: 2px;
+      bottom: 2px;
+      background-color: #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background-color: var(--green);
+    }
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(15px);
     }
 
     #status {
-      margin-top: 15px;
-      color: #2e7d32;
-      font-size: 14px;
-      font-weight: 500;
-      text-align: center;
-      min-height: 20px;
-      transition: opacity 0.3s ease;
-    }
-
-    .help-text {
-      font-size: 12px;
-      color: var(--text-muted);
       margin-top: 6px;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 500;
+      min-height: 0;
     }
 
-    .help-text a {
-      color: var(--primary);
+    /* Recent Meetings */
+    .section-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .recent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+
+    .recent-item {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 10px;
+      background: rgba(0, 0, 0, 0.22);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 9px;
+    }
+
+    .recent-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .recent-info {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .recent-title {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.94);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .recent-date {
+      font-size: 11px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .recent-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+    }
+
+    .mini-icon-btn {
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 7px;
+      width: 25px;
+      height: 25px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+    .mini-icon-btn:hover {
+      background: rgba(139, 143, 248, 0.22);
+      color: #ffffff;
+      border-color: rgba(139, 143, 248, 0.45);
+    }
+    .mini-icon-btn.danger:hover {
+      background: rgba(255, 69, 58, 0.22);
+      color: #ff6961;
+      border-color: rgba(255, 69, 58, 0.45);
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 5px;
+      background: rgba(255, 255, 255, 0.14);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 4px;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #5B5FC7 0%, #8B8FF8 100%);
+      border-radius: 999px;
+      transition: width 0.3s ease;
+    }
+
+    .about-text {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .footer-links {
+      text-align: center;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 11.5px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+    }
+    .footer-links a {
+      color: var(--accent-light);
       text-decoration: none;
       font-weight: 500;
     }
-
-    .help-text a:hover {
+    .footer-links a:hover {
       text-decoration: underline;
-    }
-
-    #customModelContainer {
-      display: none;
-      animation: fadeIn 0.3s ease;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(-5px); }
-      to { opacity: 1; transform: translateY(0); }
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h2>mast Settings</h2>
-    <div class="subtitle">Configure your Gemini API key and preferred model.</div>
-    
-    <div class="form-group">
-      <label for="apiKey">Google AI Studio API Key</label>
-      <input type="password" id="apiKey" placeholder="AIzaSy...">
-      <div class="help-text">Generate an API key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. For detailed instructions, see <a href="http://go/aistudio-apikey" target="_blank">go/aistudio-apikey</a>.</div>
+    <div class="header-bar">
+      <h2>
+        <span>mast Settings</span>
+      </h2>
+      <span class="ver-label">2.9</span>
     </div>
 
-    <div class="form-group">
-      <label for="modelSelect">SELECT MODEL</label>
-      <select id="modelSelect">
-        <option value="">Loading available models...</option>
-      </select>
-      <div class="help-text">Select which Gemini intelligence level to summarize with.</div>
+    <!-- API Key Card -->
+    <div class="cc-card">
+      <div class="key-header">
+        <span class="cc-label">
+          <span class="cc-icon amber">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="5.5" cy="8.5" r="3" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M8 8.5H14M11.5 8.5V11M13.5 8.5V10.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <span>API Key</span>
+        </span>
+        <span class="key-links">
+          <a href="https://aistudio.google.com/app/apikey" target="_blank">Get Key &#8599;</a>
+          <a href="http://go/aistudio-apikey" target="_blank">Guide &#8599;</a>
+        </span>
+      </div>
+      <div class="key-input-row">
+        <input type="password" id="apiKey" placeholder="AIzaSy...">
+        <button id="saveBtn" class="btn-pill">Save</button>
+      </div>
+      <div id="status"></div>
     </div>
 
-    <div class="form-group" id="customModelContainer">
-      <label for="customModel">Custom Model ID</label>
-      <input type="text" id="customModel" placeholder="e.g., gemini-3.5-flash">
-      <div class="help-text">Specify any valid model ID supported by the Gemini Developer API.</div>
-    </div>
+    <!-- Configuration Card -->
+    <div class="cc-card">
+      <!-- Model Row -->
+      <div class="cc-row">
+        <span class="cc-label">
+          <span class="cc-icon indigo">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M8 1.5L9.65 6.35L14.5 8L9.65 9.65L8 14.5L6.35 9.65L1.5 8L6.35 6.35L8 1.5Z" fill="currentColor"/>
+            </svg>
+          </span>
+          <span>Model</span>
+        </span>
+        <select id="modelSelect" disabled>
+          <option value="">Enter API Key</option>
+        </select>
+      </div>
 
-    <div class="form-group">
-      <label for="titleSource">NOTES FILE NAMING</label>
-      <select id="titleSource">
-        <option value="ai">AI-Generated Title (Default)</option>
-        <option value="teams">Teams Meeting Name</option>
-      </select>
-      <div class="help-text">Choose whether the AI notes file is named by AI or matches the Teams meeting name.</div>
-    </div>
-    
-    <button id="saveBtn">Save Settings</button>
-    <div id="status"></div>
+      <!-- Custom Model Row -->
+      <div class="cc-row" id="customModelContainer" style="display: none;">
+        <input type="text" id="customModel" placeholder="e.g., gemini-2.5-flash">
+      </div>
 
-    <div style="margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border);">
-      <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 10px;">RECENT MEETINGS</div>
-      <div id="recentMeetingsList" style="display: flex; flex-direction: column; gap: 10px; font-size: 12px; color: var(--text-muted);">
-        No recent meetings recorded yet.
+      <!-- AI Generated File Name Row -->
+      <div class="cc-row">
+        <span class="cc-label">
+          <span class="cc-icon indigo">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 2.5H9.5L12.5 5.5V13.5H4V2.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+              <path d="M6 8.5H10.5M6 11H9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <span>AI Generated File Name</span>
+          <span class="info-tip" data-tip="AI names the AI Summary file (off uses Teams name)" tabindex="0" aria-label="AI Generated File Name info">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.35"/>
+              <circle cx="8" cy="4.85" r="0.95" fill="currentColor"/>
+              <path d="M8 7.3V11.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </span>
+        </span>
+        <label class="toggle-switch" for="titleSourceToggle">
+          <input type="checkbox" id="titleSourceToggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <!-- Always Hide Captions Row -->
+      <div class="cc-row">
+        <span class="cc-label">
+          <span class="cc-icon green">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="2" y="3.5" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.4"/>
+              <path d="M6.8 6.8C6.5 6.5 6.1 6.3 5.6 6.3C4.6 6.3 4 7 4 8C4 9 4.6 9.7 5.6 9.7C6.1 9.7 6.5 9.5 6.8 9.2M11.6 6.8C11.3 6.5 10.9 6.3 10.4 6.3C9.4 6.3 8.8 7 8.8 8C8.8 9 9.4 9.7 10.4 9.7C10.9 9.7 11.3 9.5 11.6 9.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            </svg>
+          </span>
+          <span>Always Hide Captions</span>
+          <span class="info-tip" data-tip="Hides live captions in Teams during capture" tabindex="0" aria-label="Always Hide Captions info">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.35"/>
+              <circle cx="8" cy="4.85" r="0.95" fill="currentColor"/>
+              <path d="M8 7.3V11.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </span>
+        </span>
+        <label class="toggle-switch" for="hideCaptionBoxToggle">
+          <input type="checkbox" id="hideCaptionBoxToggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
       </div>
     </div>
 
-    <div style="margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border);">
-      <div style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 6px;">ABOUT MAST</div>
-      <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5;">
-        <strong style="color: var(--text);">mast</strong> is a lightweight, privacy-focused Chrome extension built for Googlers to securely transcribe and generate AI meeting notes for Microsoft Teams calls. All captions are processed locally in your browser using your own Google AI Studio API key, with no external servers or third-party data storage.
+    <!-- Recent Meetings Card -->
+    <div class="cc-card">
+      <div class="section-head">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M8 4.8V8L10.2 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span>Recent</span>
+      </div>
+      <div id="recentMeetingsList" class="recent-list">No recent meetings</div>
+    </div>
+
+    <!-- Docked Progress / Completion Pill -->
+    <div id="dockedPillContainer" class="docked-pill" style="display: none;"></div>
+
+    <!-- About Card -->
+    <div class="cc-card">
+      <div class="section-head">About mast</div>
+      <div class="about-text">
+        <strong style="color: #ffffff;">mast</strong> is a lightweight, privacy-focused Chrome extension built for Googlers to securely transcribe and generate AI meeting notes for Microsoft Teams calls. All captions are processed locally in your browser using your own Google AI Studio API key, with no external servers or third-party data storage.
       </div>
     </div>
 
-    <div style="text-align: center; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); display: flex; justify-content: center; align-items: center; gap: 8px;">
-      <span>2.8</span>
+    <div class="footer-links">
+      <span>2.9</span>
       <span>&middot;</span>
-      <a href="release-notes.html" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 500;">Release Notes</a>
+      <a href="release-notes.html" target="_blank">Release Notes</a>
       <span>&middot;</span>
-      <a href="http://go/mast-feedback" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 500;">Report Bug</a>
+      <a href="http://go/mast-feedback" target="_blank">Report Bug</a>
     </div>
   </div>
-  
+
   <script src="options.js"></script>
 </body>
 </html>

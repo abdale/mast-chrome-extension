@@ -1,25 +1,157 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.8.1';
-  chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
-    if (chrome.runtime.lastError || !res || res.version !== WORKER_BUILD_VERSION) {
-      chrome.storage.local.set({ reopenOptionsAfterReload: true }, () => {
-        chrome.runtime.reload();
-      });
+  const WORKER_BUILD_VERSION = '2.9';
+  try {
+    if (typeof chrome !== 'undefined' && chrome.action && typeof chrome.action.setBadgeText === 'function') {
+      chrome.action.setBadgeText({ text: '' });
     }
+  } catch (_) {}
+  chrome.runtime.sendMessage({ action: 'get_worker_version' }, () => {
+    void chrome.runtime.lastError;
   });
+
+  if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.getDirectory === 'function') {
+    navigator.storage
+      .getDirectory()
+      .then((root) => root.removeEntry('cache', { recursive: true }))
+      .catch(() => {});
+  }
 
   const apiKeyInput = document.getElementById('apiKey');
   const modelSelect = document.getElementById('modelSelect');
   const customModelContainer = document.getElementById('customModelContainer');
   const customModelInput = document.getElementById('customModel');
-  const titleSourceSelect = document.getElementById('titleSource');
+  const titleSourceToggle = document.getElementById('titleSourceToggle');
+  const hideCaptionBoxToggle = document.getElementById('hideCaptionBoxToggle');
   const saveBtn = document.getElementById('saveBtn');
   const statusEl = document.getElementById('status');
   const recentMeetingsList = document.getElementById('recentMeetingsList');
+  const dockedPillContainer = document.getElementById('dockedPillContainer');
+  let dockedTimer = null;
+
+  function renderOptionsDockedPill(state) {
+    if (!dockedPillContainer) return;
+    if (dockedTimer) {
+      clearTimeout(dockedTimer);
+      dockedTimer = null;
+    }
+    if (!state) {
+      dockedPillContainer.style.display = 'none';
+      dockedPillContainer.removeAttribute('data-mode');
+      dockedPillContainer.innerHTML = '';
+      return;
+    }
+
+    if (state.mode === 'generating' && dockedPillContainer.getAttribute('data-mode') === 'generating') {
+      const pct = Math.max(0, Math.min(100, Math.round(state.progress || 6)));
+      const fill = document.getElementById('optDockedFill');
+      const pctEl = document.getElementById('optDockedPct');
+      const stageEl = document.getElementById('optDockedStage');
+      if (fill) fill.style.width = `${Math.max(6, pct)}%`;
+      if (pctEl) pctEl.textContent = `${pct}%`;
+      if (stageEl && state.text) stageEl.textContent = state.text;
+      return;
+    }
+
+    dockedPillContainer.style.display = 'flex';
+    dockedPillContainer.setAttribute('data-mode', state.mode);
+    dockedPillContainer.setAttribute(
+      'data-tone',
+      state.mode === 'done' ? 'green' : state.mode === 'error' ? 'red' : 'indigo'
+    );
+    dockedPillContainer.innerHTML = '';
+
+    const left = document.createElement('div');
+    left.className = 'docked-pill-left';
+
+    const brand = document.createElement('span');
+    brand.className = 'docked-pill-brand';
+    if (state.mode === 'generating') {
+      brand.innerHTML =
+        '<svg class="mast-spin-svg" width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="6" stroke="rgba(139, 143, 248, 0.25)" stroke-width="2"/>' +
+        '<path d="M14 8A6 6 0 0 0 8 2" stroke="#8B8FF8" stroke-width="2" stroke-linecap="round"/>' +
+        '</svg><span>mast</span>';
+    } else if (state.mode === 'done') {
+      brand.innerHTML =
+        '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="7" fill="rgba(48, 209, 88, 0.18)" stroke="#30D158" stroke-width="1.4"/>' +
+        '<path d="M5 8.2L7.1 10.3L11.2 6" stroke="#30D158" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+        '</svg><span>mast</span>';
+    } else {
+      brand.innerHTML =
+        '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="7" fill="rgba(255, 69, 58, 0.18)" stroke="#FF453A" stroke-width="1.4"/>' +
+        '<rect x="7.25" y="4.5" width="1.5" height="4.5" rx="0.75" fill="#FF453A"/>' +
+        '<circle cx="8" cy="11.2" r="0.85" fill="#FF453A"/>' +
+        '</svg><span>mast</span>';
+    }
+
+    const sep = document.createElement('span');
+    sep.className = 'docked-pill-sep';
+
+    const textEl = document.createElement('span');
+    textEl.id = 'optDockedStage';
+    textEl.className = 'docked-pill-text';
+    textEl.textContent = state.text || '';
+
+    left.appendChild(brand);
+    left.appendChild(sep);
+    left.appendChild(textEl);
+    dockedPillContainer.appendChild(left);
+
+    if (state.mode === 'generating') {
+      const pct = Math.max(0, Math.min(100, Math.round(state.progress || 6)));
+      const right = document.createElement('div');
+      right.className = 'docked-pill-actions';
+      const pctEl = document.createElement('span');
+      pctEl.id = 'optDockedPct';
+      pctEl.className = 'docked-pill-pct';
+      pctEl.textContent = `${pct}%`;
+      const bar = document.createElement('div');
+      bar.className = 'docked-pill-bar';
+      const fill = document.createElement('div');
+      fill.id = 'optDockedFill';
+      fill.className = 'docked-pill-bar-fill';
+      fill.style.width = `${Math.max(6, pct)}%`;
+      bar.appendChild(fill);
+      right.appendChild(pctEl);
+      right.appendChild(bar);
+      dockedPillContainer.appendChild(right);
+    } else {
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'docked-pill-undock';
+      closeBtn.title = 'Dismiss';
+      closeBtn.textContent = '\u00D7';
+      closeBtn.addEventListener('click', () => renderOptionsDockedPill(null));
+      dockedPillContainer.appendChild(closeBtn);
+      if (state.autoClearMs) {
+        dockedTimer = setTimeout(() => renderOptionsDockedPill(null), state.autoClearMs);
+      }
+    }
+  }
+
+  function showStatus(msg, isError = false) {
+    if (!statusEl) return;
+    statusEl.innerText = msg;
+    statusEl.style.color = isError ? '#ff6961' : '#30D158';
+  }
+
+  function setModelSelectLockedState(label = 'Enter API Key') {
+    if (!modelSelect) return;
+    modelSelect.innerHTML = '';
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = label;
+    modelSelect.appendChild(opt);
+    modelSelect.disabled = true;
+    if (customModelContainer) {
+      customModelContainer.style.display = 'none';
+    }
+  }
 
   function getTopStableFlashModels(models) {
     const validModels = (models || []).filter(
-      m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent")
+      (m) => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent')
     );
 
     const familyMap = new Map();
@@ -47,7 +179,41 @@ document.addEventListener('DOMContentLoaded', () => {
       return b.minor - a.minor;
     });
 
-    return sorted.slice(0, 2).map(entry => entry.model);
+    return sorted.slice(0, 2).map((entry) => entry.model);
+  }
+
+  function formatCompactStage(rawStage) {
+    const s = (rawStage || '').trim();
+    if (!s || /generating/i.test(s)) return 'Generating notes';
+    if (/connecting/i.test(s)) return 'Connecting...';
+    if (/saving/i.test(s)) return 'Saving file';
+    return s;
+  }
+
+  function updateHistoryRegenCardProgress(progressState) {
+    if (!progressState) return;
+    if (progressState.active) {
+      const fresh = !progressState.updatedAt || Date.now() - progressState.updatedAt < 90000;
+      if (!fresh) {
+        renderOptionsDockedPill(null);
+        chrome.storage.local.remove(['historyRegenProgress']);
+        return;
+      }
+      renderOptionsDockedPill({
+        mode: 'generating',
+        text: formatCompactStage(progressState.stage),
+        progress: progressState.progress || 6
+      });
+    } else if (progressState.error) {
+      renderOptionsDockedPill({
+        mode: 'error',
+        text: `Notes failed (${progressState.error})`
+      });
+    } else if (progressState.progress >= 100) {
+      renderOptionsDockedPill({ mode: 'done', text: 'AI notes downloaded', autoClearMs: 4500 });
+    } else {
+      renderOptionsDockedPill(null);
+    }
   }
 
   function renderRecentMeetings(meetings) {
@@ -55,182 +221,157 @@ document.addEventListener('DOMContentLoaded', () => {
     recentMeetingsList.innerHTML = '';
 
     if (!Array.isArray(meetings) || meetings.length === 0) {
-      recentMeetingsList.textContent = 'No recent meetings recorded yet.';
+      recentMeetingsList.textContent = 'No recent meetings';
       return;
     }
 
     meetings.slice(0, 5).forEach((item) => {
+      const card = document.createElement('div');
+      card.className = 'recent-item';
+
       const row = document.createElement('div');
-      row.style.cssText =
-        'display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 12px 14px; background: #f8f9fa; border: 1px solid var(--border); border-radius: 8px;';
+      row.className = 'recent-row';
 
-      const infoCol = document.createElement('div');
-      infoCol.style.cssText = 'min-width: 0; flex: 1;';
+      const info = document.createElement('div');
+      info.className = 'recent-info';
 
-      const titleEl = document.createElement('div');
-      titleEl.style.cssText =
-        'font-weight: 600; color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+      const titleEl = document.createElement('span');
+      titleEl.className = 'recent-title';
       titleEl.textContent = item.title || 'Meeting';
       titleEl.title = item.title || 'Meeting';
 
-      const dateEl = document.createElement('div');
-      dateEl.style.cssText = 'font-size: 11.5px; color: var(--text-muted); margin-top: 3px;';
+      const dateEl = document.createElement('span');
+      dateEl.className = 'recent-date';
       dateEl.textContent = item.displayDate || item.shortDate || '';
 
-      infoCol.appendChild(titleEl);
-      infoCol.appendChild(dateEl);
+      info.appendChild(titleEl);
+      info.appendChild(dateEl);
 
-      const actionsCol = document.createElement('div');
-      actionsCol.style.cssText = 'display: flex; align-items: center; gap: 6px; flex-shrink: 0;';
+      const actions = document.createElement('div');
+      actions.className = 'recent-actions';
 
-      const pillBaseStyle =
-        'color: var(--primary); background: #ffffff; border: 1px solid rgba(91, 95, 199, 0.35); padding: 5px 10px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 11.5px; white-space: nowrap; transition: all 0.15s ease;';
-
-      const genLink = document.createElement('a');
-      genLink.href = '#';
-      genLink.textContent = 'Generate Notes';
-      genLink.style.cssText = pillBaseStyle;
-
-      genLink.addEventListener('mouseenter', () => {
-        if (genLink.dataset.busy !== 'true') {
-          genLink.style.background = 'rgba(91, 95, 199, 0.08)';
-          genLink.style.borderColor = 'var(--primary)';
-        }
-      });
-      genLink.addEventListener('mouseleave', () => {
-        if (genLink.dataset.busy !== 'true') {
-          genLink.style.background = '#ffffff';
-          genLink.style.borderColor = 'rgba(91, 95, 199, 0.35)';
-        }
-      });
-
-      genLink.addEventListener('click', (e) => {
+      const genBtn = document.createElement('button');
+      genBtn.className = 'mini-icon-btn';
+      genBtn.title = 'Generate AI Notes';
+      genBtn.innerHTML =
+        '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<path d="M8 1.5L9.65 6.35L14.5 8L9.65 9.65L8 14.5L6.35 9.65L1.5 8L6.35 6.35L8 1.5Z" fill="currentColor"/>' +
+        '</svg>';
+      genBtn.addEventListener('click', (e) => {
         e.preventDefault();
-        if (genLink.dataset.busy === 'true') return;
-        genLink.dataset.busy = 'true';
-        genLink.textContent = 'Generating...';
-        genLink.style.color = 'var(--text-muted)';
-        genLink.style.background = '#ffffff';
-        genLink.style.borderColor = 'var(--border)';
-        genLink.style.pointerEvents = 'none';
-
-        chrome.runtime.sendMessage(
-          { action: 'regenerate_meeting_notes', meetingId: item.id },
-          (res) => {
-            genLink.dataset.busy = 'false';
-            genLink.style.pointerEvents = 'auto';
-            if (res && res.status === 'done') {
-              genLink.textContent = 'Downloaded';
-              genLink.style.color = '#2e7d32';
-              genLink.style.borderColor = 'rgba(46, 125, 50, 0.35)';
-              setTimeout(() => {
-                genLink.textContent = 'Generate Notes';
-                genLink.style.color = 'var(--primary)';
-                genLink.style.borderColor = 'rgba(91, 95, 199, 0.35)';
-              }, 3000);
-            } else {
-              genLink.textContent = 'Retry';
-              genLink.style.color = '#d32f2f';
-              genLink.style.borderColor = 'rgba(211, 47, 47, 0.35)';
-              if (res && res.error) {
-                statusEl.innerText = `Error: ${res.error}`;
-                statusEl.style.color = '#d32f2f';
-              }
-            }
+        if (genBtn.disabled) return;
+        genBtn.disabled = true;
+        renderOptionsDockedPill({ mode: 'generating', text: 'Connecting...', progress: 6 });
+        chrome.runtime.sendMessage({ action: 'regenerate_meeting_notes', meetingId: item.id }, (res) => {
+          genBtn.disabled = false;
+          if (res && res.status === 'done') {
+            renderOptionsDockedPill({ mode: 'done', text: 'AI notes downloaded', autoClearMs: 4500 });
+          } else {
+            renderOptionsDockedPill({
+              mode: 'error',
+              text: (res && res.error) ? `Notes failed (${res.error})` : 'Notes generation failed'
+            });
           }
-        );
+        });
       });
 
-      const dlLink = document.createElement('a');
-      dlLink.href = '#';
-      dlLink.textContent = 'Transcript';
-      dlLink.title = 'Download Transcript';
-      dlLink.style.cssText = pillBaseStyle;
-
-      dlLink.addEventListener('mouseenter', () => {
-        if (dlLink.dataset.busy !== 'true') {
-          dlLink.style.background = 'rgba(91, 95, 199, 0.08)';
-          dlLink.style.borderColor = 'var(--primary)';
-        }
-      });
-      dlLink.addEventListener('mouseleave', () => {
-        if (dlLink.dataset.busy !== 'true') {
-          dlLink.style.background = '#ffffff';
-          dlLink.style.borderColor = 'rgba(91, 95, 199, 0.35)';
-        }
-      });
-
-      dlLink.addEventListener('click', (e) => {
+      const dlBtn = document.createElement('button');
+      dlBtn.className = 'mini-icon-btn';
+      dlBtn.title = 'Download Transcript';
+      dlBtn.innerHTML =
+        '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<path d="M8 2.5V10.5M8 10.5L5 7.5M8 10.5L11 7.5M3 13H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+        '</svg>';
+      dlBtn.addEventListener('click', (e) => {
         e.preventDefault();
-        if (dlLink.dataset.busy === 'true') return;
-        dlLink.dataset.busy = 'true';
-        dlLink.textContent = 'Saving...';
-        dlLink.style.color = 'var(--text-muted)';
-        dlLink.style.background = '#ffffff';
-        dlLink.style.borderColor = 'var(--border)';
-        dlLink.style.pointerEvents = 'none';
-
-        chrome.runtime.sendMessage(
-          { action: 'download_history_transcript', meetingId: item.id },
-          (res) => {
-            dlLink.dataset.busy = 'false';
-            dlLink.style.pointerEvents = 'auto';
-            if (res && res.status === 'downloaded') {
-              dlLink.textContent = 'Saved';
-              dlLink.style.color = '#2e7d32';
-              dlLink.style.borderColor = 'rgba(46, 125, 50, 0.35)';
-              setTimeout(() => {
-                dlLink.textContent = 'Transcript';
-                dlLink.style.color = 'var(--primary)';
-                dlLink.style.borderColor = 'rgba(91, 95, 199, 0.35)';
-              }, 2500);
-            } else {
-              dlLink.textContent = 'Transcript';
-              dlLink.style.color = '#d32f2f';
-              dlLink.style.borderColor = 'rgba(211, 47, 47, 0.35)';
-              if (res && res.error) {
-                statusEl.innerText = `Error: ${res.error}`;
-                statusEl.style.color = '#d32f2f';
-              }
-            }
+        if (dlBtn.disabled) return;
+        dlBtn.disabled = true;
+        chrome.runtime.sendMessage({ action: 'download_history_transcript', meetingId: item.id }, (res) => {
+          dlBtn.disabled = false;
+          if (res && res.status === 'downloaded') {
+            renderOptionsDockedPill({ mode: 'done', text: 'Transcript downloaded', autoClearMs: 3500 });
+          } else if (res && res.error) {
+            renderOptionsDockedPill({ mode: 'error', text: res.error });
           }
-        );
+        });
       });
 
-      const delLink = document.createElement('a');
-      delLink.href = '#';
-      delLink.title = 'Delete meeting';
-      delLink.textContent = '\u00D7';
-      delLink.style.cssText =
-        'color: var(--text-muted); text-decoration: none; font-size: 16px; font-weight: 600; line-height: 1; padding: 4px 6px; margin-left: 2px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; transition: all 0.15s ease;';
-      delLink.addEventListener('mouseenter', () => {
-        delLink.style.color = '#d32f2f';
-        delLink.style.background = 'rgba(211, 47, 47, 0.08)';
-      });
-      delLink.addEventListener('mouseleave', () => {
-        delLink.style.color = 'var(--text-muted)';
-        delLink.style.background = 'transparent';
-      });
-      delLink.addEventListener('click', (e) => {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'mini-icon-btn danger';
+      delBtn.title = 'Delete';
+      delBtn.textContent = '\u00D7';
+      delBtn.style.fontSize = '15px';
+      delBtn.style.fontWeight = '600';
+      delBtn.addEventListener('click', (e) => {
         e.preventDefault();
-        chrome.runtime.sendMessage(
-          { action: 'delete_recent_meeting', meetingId: item.id },
-          (res) => {
-            if (res && Array.isArray(res.recentMeetings)) {
-              renderRecentMeetings(res.recentMeetings);
-            }
+        chrome.runtime.sendMessage({ action: 'delete_recent_meeting', meetingId: item.id }, (res) => {
+          if (res && Array.isArray(res.recentMeetings)) {
+            renderRecentMeetings(res.recentMeetings);
           }
-        );
+        });
       });
 
-      actionsCol.appendChild(genLink);
-      actionsCol.appendChild(dlLink);
-      actionsCol.appendChild(delLink);
+      actions.appendChild(genBtn);
+      actions.appendChild(dlBtn);
+      actions.appendChild(delBtn);
 
-      row.appendChild(infoCol);
-      row.appendChild(actionsCol);
-      recentMeetingsList.appendChild(row);
+      row.appendChild(info);
+      row.appendChild(actions);
+
+      card.appendChild(row);
+      recentMeetingsList.appendChild(card);
     });
+  }
+
+  function toggleCustomModelVisibility() {
+    if (!customModelContainer || !modelSelect) return;
+    customModelContainer.style.display = modelSelect.value === 'custom' ? 'flex' : 'none';
+  }
+
+  async function loadModels(apiKey, selectedVal, userSelectedModel) {
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      if (!response.ok) throw new Error('Invalid API key');
+      const data = await response.json();
+
+      modelSelect.innerHTML = '';
+      modelSelect.disabled = false;
+      const finalModels = getTopStableFlashModels(data.models);
+      const validIds = finalModels.map((m) => m.name.replace('models/', ''));
+      const defaultModelId = validIds.length >= 2 ? validIds[1] : (validIds[0] || 'custom');
+
+      finalModels.forEach((m) => {
+        const modelId = m.name.replace('models/', '');
+        const option = document.createElement('option');
+        option.value = modelId;
+        option.textContent = m.displayName || modelId;
+        modelSelect.appendChild(option);
+      });
+
+      const customOpt = document.createElement('option');
+      customOpt.value = 'custom';
+      customOpt.textContent = 'Custom...';
+      modelSelect.appendChild(customOpt);
+
+      if (userSelectedModel && selectedVal && (validIds.includes(selectedVal) || selectedVal === 'custom')) {
+        modelSelect.value = selectedVal;
+      } else {
+        modelSelect.value = defaultModelId;
+        if (defaultModelId !== 'custom') {
+          chrome.storage.local.set({
+            selectedModel: defaultModelId,
+            modelSelectVal: defaultModelId
+          });
+        }
+      }
+
+      toggleCustomModelVisibility();
+      return true;
+    } catch (_) {
+      showStatus('Invalid API key. Please check and try again.', true);
+      setModelSelectLockedState('Enter API Key');
+      return false;
+    }
   }
 
   // Load saved settings
@@ -241,6 +382,8 @@ document.addEventListener('DOMContentLoaded', () => {
       'customModelVal',
       'userSelectedModel',
       'titleSource',
+      'hideCaptionBox',
+      'historyRegenProgress',
       'recentMeetings',
       'savedTranscript',
       'meetingTitle',
@@ -251,15 +394,23 @@ document.addEventListener('DOMContentLoaded', () => {
         apiKeyInput.value = result.apiKey;
         loadModels(result.apiKey, result.modelSelectVal, result.userSelectedModel);
       } else {
-        modelSelect.innerHTML = '<option value="">Enter API Key to load models</option>';
+        setModelSelectLockedState('Enter API Key');
       }
 
-      if (result.customModelVal) {
+      if (result.customModelVal && customModelInput) {
         customModelInput.value = result.customModelVal;
       }
 
-      if (titleSourceSelect) {
-        titleSourceSelect.value = result.titleSource === 'teams' ? 'teams' : 'ai';
+      if (titleSourceToggle) {
+        titleSourceToggle.checked = result.titleSource ? result.titleSource !== 'teams' : true;
+      }
+
+      if (hideCaptionBoxToggle) {
+        hideCaptionBoxToggle.checked = result.hideCaptionBox !== undefined ? !!result.hideCaptionBox : true;
+      }
+
+      if (result.historyRegenProgress && result.historyRegenProgress.active) {
+        updateHistoryRegenCardProgress(result.historyRegenProgress);
       }
 
       let recent = Array.isArray(result.recentMeetings) ? result.recentMeetings : [];
@@ -281,116 +432,131 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       renderRecentMeetings(recent);
 
-      // Trigger initial visibility of custom model container
       toggleCustomModelVisibility();
     }
   );
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.recentMeetings) {
+    if (area !== 'local') return;
+    if (changes.recentMeetings) {
       renderRecentMeetings(changes.recentMeetings.newValue || []);
     }
-  });
-
-  apiKeyInput.addEventListener('change', () => {
-    const key = apiKeyInput.value.trim();
-    if (key) {
-      loadModels(key, modelSelect.value, true);
+    if (changes.historyRegenProgress) {
+      updateHistoryRegenCardProgress(changes.historyRegenProgress.newValue || null);
+    }
+    if (changes.titleSource && titleSourceToggle) {
+      titleSourceToggle.checked = changes.titleSource.newValue !== 'teams';
+    }
+    if (changes.hideCaptionBox && hideCaptionBoxToggle) {
+      hideCaptionBoxToggle.checked = changes.hideCaptionBox.newValue !== undefined ? !!changes.hideCaptionBox.newValue : true;
     }
   });
 
-  async function loadModels(apiKey, selectedVal, userSelectedModel) {
-    statusEl.innerText = "Loading available models...";
-    statusEl.style.color = "#5B5FC7";
-    try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-      if (!response.ok) throw new Error("Invalid API key or network error");
-      const data = await response.json();
-
-      modelSelect.innerHTML = '';
-      const finalModels = getTopStableFlashModels(data.models);
-      const validIds = finalModels.map(m => m.name.replace('models/', ''));
-      const defaultModelId = validIds.length >= 2 ? validIds[1] : (validIds[0] || 'custom');
-
-      finalModels.forEach(m => {
-        const modelId = m.name.replace('models/', '');
-        const option = document.createElement('option');
-        option.value = modelId;
-        const baseLabel = m.displayName || modelId;
-        option.textContent = modelId === defaultModelId ? `${baseLabel} (Default)` : baseLabel;
-        modelSelect.appendChild(option);
-      });
-
-      const customOpt = document.createElement('option');
-      customOpt.value = 'custom';
-      customOpt.textContent = 'Custom Model...';
-      modelSelect.appendChild(customOpt);
-
-      if (userSelectedModel && selectedVal && (validIds.includes(selectedVal) || selectedVal === 'custom')) {
-        modelSelect.value = selectedVal;
-      } else {
-        modelSelect.value = defaultModelId;
-        if (defaultModelId !== 'custom') {
-          chrome.storage.local.set({
-            selectedModel: defaultModelId,
-            modelSelectVal: defaultModelId
-          });
-        }
-      }
-      
+  if (modelSelect) {
+    modelSelect.addEventListener('change', () => {
       toggleCustomModelVisibility();
-      statusEl.innerText = "";
-    } catch (e) {
-      statusEl.innerText = "Error loading models. Check API Key.";
-      statusEl.style.color = "#d32f2f";
-      modelSelect.innerHTML = '<option value="">Error loading models</option>';
-    }
+      const val = modelSelect.value;
+      if (val === 'custom') {
+        const customVal = customModelInput ? customModelInput.value.trim() : '';
+        chrome.storage.local.set({
+          modelSelectVal: 'custom',
+          selectedModel: customVal || 'gemini-2.5-flash',
+          userSelectedModel: true
+        });
+      } else if (val) {
+        chrome.storage.local.set({
+          modelSelectVal: val,
+          selectedModel: val,
+          userSelectedModel: true
+        });
+      }
+    });
   }
 
-  // Toggle custom model input visibility based on dropdown selection
-  function toggleCustomModelVisibility() {
-    if (modelSelect.value === 'custom') {
-      customModelContainer.style.display = 'block';
-    } else {
-      customModelContainer.style.display = 'none';
-    }
+  if (customModelInput) {
+    customModelInput.addEventListener('change', () => {
+      const customVal = customModelInput.value.trim();
+      if (customVal && modelSelect && modelSelect.value === 'custom') {
+        chrome.storage.local.set({
+          modelSelectVal: 'custom',
+          customModelVal: customVal,
+          selectedModel: customVal,
+          userSelectedModel: true
+        });
+      }
+    });
   }
 
-  modelSelect.addEventListener('change', toggleCustomModelVisibility);
+  if (titleSourceToggle) {
+    titleSourceToggle.addEventListener('change', () => {
+      chrome.storage.local.set({
+        titleSource: titleSourceToggle.checked ? 'ai' : 'teams'
+      });
+    });
+  }
 
-  saveBtn.addEventListener('click', () => {
+  if (hideCaptionBoxToggle) {
+    hideCaptionBoxToggle.addEventListener('change', () => {
+      chrome.storage.local.set({
+        hideCaptionBox: !!hideCaptionBoxToggle.checked
+      });
+    });
+  }
+
+  saveBtn.addEventListener('click', async () => {
     const apiKey = apiKeyInput.value.trim();
+    const titleSource = titleSourceToggle && !titleSourceToggle.checked ? 'teams' : 'ai';
+    const hideCaptionBox = hideCaptionBoxToggle ? !!hideCaptionBoxToggle.checked : true;
+
+    if (!apiKey) {
+      showStatus('Please enter your Google AI Studio API key.', true);
+      setModelSelectLockedState('Enter API Key');
+      return;
+    }
+
+    saveBtn.disabled = true;
+    saveBtn.innerText = '...';
+
+    const ok = await loadModels(apiKey, modelSelect.value, !!modelSelect.value);
+    if (!ok) {
+      saveBtn.disabled = false;
+      saveBtn.innerText = 'Save';
+      return;
+    }
+
     const modelSelectVal = modelSelect.value;
-    const customModelVal = customModelInput.value.trim();
-    const titleSource = titleSourceSelect ? titleSourceSelect.value : 'ai';
-    
+    const customModelVal = customModelInput ? customModelInput.value.trim() : '';
     let selectedModel = modelSelectVal;
-    
+
     if (modelSelectVal === 'custom') {
       if (!customModelVal) {
-        statusEl.innerText = "Error: Please enter a Custom Model ID.";
-        statusEl.style.color = "#d32f2f";
+        showStatus('Please enter a Custom Model ID.', true);
+        saveBtn.disabled = false;
+        saveBtn.innerText = 'Save';
         return;
       }
       selectedModel = customModelVal;
     }
 
-    statusEl.innerText = "Saving settings...";
-    statusEl.style.color = "#5B5FC7";
-
-    chrome.storage.local.set({
-      apiKey: apiKey,
-      selectedModel: selectedModel,
-      modelSelectVal: modelSelectVal,
-      customModelVal: customModelVal,
-      userSelectedModel: true,
-      titleSource: titleSource
-    }, () => {
-      statusEl.innerText = "Settings saved successfully!";
-      statusEl.style.color = "#2e7d32";
-      setTimeout(() => {
-        statusEl.innerText = "";
-      }, 3000);
-    });
+    chrome.storage.local.set(
+      {
+        apiKey: apiKey,
+        selectedModel: selectedModel,
+        modelSelectVal: modelSelectVal,
+        customModelVal: customModelVal,
+        userSelectedModel: true,
+        titleSource: titleSource,
+        hideCaptionBox: hideCaptionBox
+      },
+      () => {
+        saveBtn.disabled = false;
+        saveBtn.innerText = '\u2713';
+        showStatus('Settings saved!');
+        setTimeout(() => {
+          if (saveBtn) saveBtn.innerText = 'Save';
+          showStatus('');
+        }, 2200);
+      }
+    );
   });
 });

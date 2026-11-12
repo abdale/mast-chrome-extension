@@ -1,7 +1,114 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.8.1';
+const WORKER_BUILD_VERSION = '2.9';
 let isGeneratingInMemory = false;
+let cachedBaseIconBitmap = null;
+let latestBadgeSyncToken = 0;
+
+async function getBaseIconBitmap() {
+  if (cachedBaseIconBitmap) return cachedBaseIconBitmap;
+  try {
+    if (typeof fetch !== 'function' || typeof createImageBitmap !== 'function') return null;
+    const res = await fetch(chrome.runtime.getURL('icons/icon128.png'));
+    const blob = await res.blob();
+    cachedBaseIconBitmap = await createImageBitmap(blob);
+    return cachedBaseIconBitmap;
+  } catch (_) {
+    return null;
+  }
+}
+
+function renderIconWithDot(bitmap, size, dotColor) {
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, size, size);
+  ctx.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in ctx) {
+    ctx.imageSmoothingQuality = 'high';
+  }
+  if (bitmap) {
+    const iconBox = dotColor ? Math.round(size * 0.80) : size;
+    ctx.drawImage(bitmap, 0, 0, iconBox, iconBox);
+  }
+  if (dotColor) {
+    const r = size * 0.215;
+    const ring = Math.max(0.9, size * 0.04);
+    const cx = size * 0.74;
+    const cy = size * 0.74;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + ring, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(20, 20, 24, 0.96)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = dotColor;
+    ctx.fill();
+  }
+  return ctx.getImageData(0, 0, size, size);
+}
+
+async function syncToolbarBadge() {
+  const token = ++latestBadgeSyncToken;
+  try {
+    if (typeof chrome === 'undefined' || !chrome.action) {
+      return;
+    }
+    const stored = await chrome.storage.local.get([
+      'isTranscribing',
+      'liveCaptionsOn',
+      'notesStatus',
+      'inActiveCall',
+      'historyRegenProgress'
+    ]);
+    if (token !== latestBadgeSyncToken) return;
+
+    let dotColor = null;
+
+    if (stored.isTranscribing) {
+      dotColor = stored.liveCaptionsOn === false ? '#FF9F0A' : '#30D158';
+    } else if (
+      stored.notesStatus === 'generating' ||
+      (stored.historyRegenProgress && stored.historyRegenProgress.active)
+    ) {
+      dotColor = '#8B8FF8';
+    } else if (stored.notesStatus === 'error') {
+      dotColor = '#FF453A';
+    } else if (stored.inActiveCall) {
+      dotColor = '#8B8FF8';
+    }
+
+    self.__mastToolbarDotColor = dotColor;
+
+    if (typeof chrome.action.setBadgeText === 'function') {
+      await chrome.action.setBadgeText({ text: '' });
+    }
+    if (token !== latestBadgeSyncToken) return;
+
+    if (typeof chrome.action.setIcon === 'function') {
+      if (!dotColor) {
+        await chrome.action.setIcon({
+          path: {
+            16: 'icons/icon16.png',
+            48: 'icons/icon48.png',
+            128: 'icons/icon128.png'
+          }
+        });
+      } else if (typeof OffscreenCanvas !== 'undefined') {
+        const bitmap = await getBaseIconBitmap();
+        if (token !== latestBadgeSyncToken) return;
+        const imageData = {
+          16: renderIconWithDot(bitmap, 16, dotColor),
+          24: renderIconWithDot(bitmap, 24, dotColor),
+          32: renderIconWithDot(bitmap, 32, dotColor),
+          48: renderIconWithDot(bitmap, 48, dotColor)
+        };
+        await chrome.action.setIcon({ imageData });
+      }
+    }
+  } catch (_) {}
+}
 
 const TEAMS_URL_PATTERNS = [
   "https://teams.microsoft.com/*",
@@ -11,6 +118,46 @@ const TEAMS_URL_PATTERNS = [
   "https://teams.cloud.microsoft/*",
   "https://*.teams.cloud.microsoft/*"
 ];
+
+async function cleanupLegacyState() {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.getDirectory === 'function') {
+      const root = await navigator.storage.getDirectory();
+      await root.removeEntry('cache', { recursive: true }).catch(() => {});
+    }
+  } catch (_) {}
+
+  try {
+    await chrome.storage.local.remove([
+      'aiMode',
+      'onboardingCompleted',
+      'devNanoSimMode',
+      'notesErrorCode',
+      'notesErrorReason',
+      'historyRegenProgress'
+    ]);
+
+    const stored = await chrome.storage.local.get(['selectedModel', 'modelSelectVal', 'titleSource', 'hideCaptionBox']);
+    const updates = {};
+    const flashPattern = /^gemini-(\d+)(?:\.(\d+))?-flash(?:-(\d{3}))?$/i;
+    if (stored.modelSelectVal && stored.modelSelectVal !== 'custom' && !flashPattern.test(stored.modelSelectVal)) {
+      updates.selectedModel = '';
+      updates.modelSelectVal = '';
+    } else if (stored.selectedModel && stored.modelSelectVal !== 'custom' && !flashPattern.test(stored.selectedModel)) {
+      updates.selectedModel = '';
+      updates.modelSelectVal = '';
+    }
+    if (stored.titleSource === undefined) {
+      updates.titleSource = 'ai';
+    }
+    if (stored.hideCaptionBox === undefined) {
+      updates.hideCaptionBox = true;
+    }
+    if (Object.keys(updates).length > 0) {
+      await chrome.storage.local.set(updates);
+    }
+  } catch (_) {}
+}
 
 async function injectContentScriptIntoOpenTeamsTabs() {
   try {
@@ -248,8 +395,35 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
 
   // Keep MV3 service worker alive while waiting on network generation
   const keepAliveInterval = setInterval(() => {
-    chrome.storage.local.get(['notesStatus'], () => {});
+    chrome.storage.local.get(['notesStatus'], () => {
+      void chrome.runtime.lastError;
+    });
   }, 15000);
+
+  let cloudTickerInterval = null;
+
+  const reportProgress = async (progress, stage, extra = {}) => {
+    const clamped = Math.max(0, Math.min(100, Math.round(progress)));
+    try {
+      if (isHistoryRegen) {
+        await chrome.storage.local.set({
+          historyRegenProgress: {
+            meetingId: String(overrideMeeting.id),
+            progress: clamped,
+            stage: stage || '',
+            active: extra.active !== undefined ? extra.active : clamped < 100,
+            error: extra.error || '',
+            updatedAt: Date.now()
+          }
+        });
+      } else {
+        await chrome.storage.local.set({
+          notesProgress: clamped,
+          notesStage: stage || ''
+        });
+      }
+    } catch (_) {}
+  };
 
   try {
     const result = await chrome.storage.local.get([
@@ -292,8 +466,12 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
       await chrome.storage.local.set({
         notesStatus: 'generating',
         notesError: '',
+        notesProgress: 5,
+        notesStage: 'Connecting...',
         generationStartedAt: Date.now()
       });
+    } else {
+      await reportProgress(5, 'Connecting...');
     }
 
     const model = await resolveActiveModel(apiKey, result);
@@ -339,6 +517,15 @@ ${fullTranscript}`;
       generationConfig: { temperature: 0.2 }
     };
 
+    let cloudPct = 20;
+    await reportProgress(cloudPct, 'Generating notes');
+    cloudTickerInterval = setInterval(() => {
+      if (cloudPct < 88) {
+        cloudPct += cloudPct < 60 ? 7 : 3;
+        reportProgress(Math.min(88, cloudPct), 'Generating notes');
+      }
+    }, 650);
+
     const response = await fetchWithTimeout(
       url,
       {
@@ -348,6 +535,9 @@ ${fullTranscript}`;
       },
       60000
     );
+
+    clearInterval(cloudTickerInterval);
+    cloudTickerInterval = null;
 
     if (!response.ok) {
       let errMsg = "Google AI Studio Error";
@@ -363,6 +553,8 @@ ${fullTranscript}`;
     if (!minutesText) {
       throw new Error("Empty response from Gemini model.");
     }
+
+    await reportProgress(96, 'Saving file');
 
     let aiTitle = "meeting";
     const outLines = minutesText.split('\n');
@@ -392,6 +584,7 @@ ${fullTranscript}`;
     const filename = `${sanitizedTitle}_${shortDate}.md`;
 
     await downloadTextViaDataUrl(minutesText, 'text/markdown', filename);
+    await reportProgress(100, 'Completed', { active: false });
 
     if (isHistoryRegen) {
       await updateRecentMeetingTitle(overrideMeeting.id, chosenTitle);
@@ -400,6 +593,8 @@ ${fullTranscript}`;
       await chrome.storage.local.set({
         notesStatus: 'done',
         notesError: '',
+        notesProgress: 100,
+        notesStage: 'Completed',
         completionUnseen: true
       });
     }
@@ -407,14 +602,24 @@ ${fullTranscript}`;
     return { status: "done", filename };
   } catch (error) {
     console.error("mast: Generation failed:", error);
-    if (!isHistoryRegen) {
+    if (isHistoryRegen) {
+      await reportProgress(0, '', {
+        active: false,
+        error: error.message || "Failed to generate AI summary."
+      });
+    } else {
       await chrome.storage.local.set({
         notesStatus: 'error',
-        notesError: error.message || "Failed to generate AI summary."
+        notesError: error.message || "Failed to generate AI summary.",
+        notesProgress: 0,
+        notesStage: ''
       });
     }
     return { status: "error", error: error.message };
   } finally {
+    if (cloudTickerInterval) {
+      clearInterval(cloudTickerInterval);
+    }
     clearInterval(keepAliveInterval);
     if (!isHistoryRegen) {
       isGeneratingInMemory = false;
@@ -527,11 +732,15 @@ async function startFromToast(sender, meetingTitle) {
     startTime: startTime,
     issueDetected: false,
     activeTabId: tabId,
+    pillDismissedInCall: false,
     notesStatus: 'idle',
     notesError: '',
+    notesProgress: 0,
+    notesStage: '',
     completionUnseen: false,
     transcriptDownloaded: false,
     callEnded: false,
+    liveCaptionsOn: true,
     meetingTitle: initialTitle
   });
 
@@ -590,8 +799,28 @@ async function backfillRecentMeetingsIfNeeded() {
   }
 }
 
+cleanupLegacyState();
+injectContentScriptIntoOpenTeamsTabs();
+syncToolbarBadge();
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (
+    changes.isTranscribing ||
+    changes.liveCaptionsOn ||
+    changes.notesStatus ||
+    changes.inActiveCall ||
+    changes.historyRegenProgress ||
+    changes.completionUnseen
+  ) {
+    syncToolbarBadge();
+  }
+});
+
 // Auto-migrate model selection, inject content script, and recover any interrupted generation on install/reload
 chrome.runtime.onInstalled.addListener(async () => {
+  await cleanupLegacyState();
+  await syncToolbarBadge();
   const result = await chrome.storage.local.get([
     'apiKey',
     'selectedModel',
@@ -613,6 +842,8 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onStartup.addListener(async () => {
+  await cleanupLegacyState();
+  await syncToolbarBadge();
   await backfillRecentMeetingsIfNeeded();
   await injectContentScriptIntoOpenTeamsTabs();
   await recoverStuckGenerationIfNeeded();
@@ -658,14 +889,18 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
       await chrome.storage.local.set({
         savedTranscript: [],
         activeTabId: null,
+        inActiveCall: false,
+        pillDismissedInCall: false,
         notesStatus: 'idle',
         notesError: '',
+        notesProgress: 0,
+        notesStage: '',
         completionUnseen: false,
         transcriptDownloaded: false,
         meetingTitle: 'Meeting'
       });
     } else {
-      await chrome.storage.local.set({ activeTabId: null });
+      await chrome.storage.local.set({ activeTabId: null, inActiveCall: false, pillDismissedInCall: false });
     }
   }
 });
@@ -675,32 +910,50 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ version: WORKER_BUILD_VERSION });
     return false;
   } else if (request.action === "start_from_toast") {
-    startFromToast(sender, request.meetingTitle).then(sendResponse);
+    startFromToast(sender, request.meetingTitle)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed to start" }));
     return true;
   } else if (request.action === "open_options") {
-    chrome.runtime.openOptionsPage();
+    try {
+      chrome.runtime.openOptionsPage();
+    } catch (_) {}
     sendResponse({ status: "opened" });
     return false;
   } else if (request.action === "session_ended") {
-    handleSessionEnded().then(sendResponse);
+    handleSessionEnded()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "stop_and_finalize") {
-    stopTabAndFinalize(request.tabId).then(sendResponse);
+    stopTabAndFinalize(request.tabId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "check_generation_status") {
-    recoverStuckGenerationIfNeeded().then(sendResponse);
+    recoverStuckGenerationIfNeeded()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "generate_notes") {
-    generateAndDownloadNotes().then(sendResponse);
+    generateAndDownloadNotes()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "regenerate_meeting_notes") {
-    regenerateMeetingFromHistory(request.meetingId).then(sendResponse);
+    regenerateMeetingFromHistory(request.meetingId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "download_history_transcript") {
-    downloadHistoryTranscript(request.meetingId).then(sendResponse);
+    downloadHistoryTranscript(request.meetingId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "delete_recent_meeting") {
-    deleteRecentMeeting(request.meetingId).then(sendResponse);
+    deleteRecentMeeting(request.meetingId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ status: "error", error: err && err.message ? err.message : "Failed" }));
     return true;
   } else if (request.action === "download_transcript") {
     downloadTranscriptIfNeeded(true)
