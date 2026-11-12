@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9-dev-8';
+  const CONTENT_SCRIPT_VERSION = '2.9-dev-9';
 
   function isExtensionContextValid() {
     try {
@@ -599,22 +599,33 @@
         border-color: rgba(255, 255, 255, 0.32);
       }
       .mast-pill-btn-stop {
-        background: rgba(255, 69, 58, 0.18);
-        color: #ff6961;
-        border: 1px solid rgba(255, 69, 58, 0.38);
-        border-radius: 999px;
-        padding: 5px 12px;
-        font-size: 12px;
-        font-weight: 600;
+        background: rgba(255, 69, 58, 0.16);
+        border: 1px solid rgba(255, 69, 58, 0.42);
+        border-radius: 50%;
+        width: 25px;
+        height: 25px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         cursor: pointer;
-        font-family: inherit;
-        line-height: 1.2;
-        transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        padding: 0;
+        flex-shrink: 0;
+        transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
       }
       .mast-pill-btn-stop:hover {
-        background: rgba(255, 69, 58, 0.3);
-        border-color: rgba(255, 69, 58, 0.55);
-        color: #ffffff;
+        background: rgba(255, 69, 58, 0.28);
+        border-color: rgba(255, 69, 58, 0.68);
+      }
+      .mast-pill-btn-stop:active {
+        transform: scale(0.95);
+      }
+      .mast-stop-square {
+        width: 9px;
+        height: 9px;
+        border-radius: 2px;
+        background: #FF453A;
+        box-shadow: 0 0 6px rgba(255, 69, 58, 0.45);
+        display: block;
       }
       .mast-pill-btn-icon {
         background: rgba(255, 255, 255, 0.12);
@@ -892,6 +903,20 @@
     return sep;
   }
 
+  function createPillStopBtnEl() {
+    const stopBtn = document.createElement('button');
+    stopBtn.id = 'mast-toast-stop-btn';
+    stopBtn.className = 'mast-pill-btn-stop';
+    stopBtn.title = 'Stop capturing & generate notes';
+    stopBtn.setAttribute('aria-label', 'Stop capturing');
+    const sq = document.createElement('span');
+    sq.className = 'mast-stop-square';
+    sq.setAttribute('aria-hidden', 'true');
+    stopBtn.appendChild(sq);
+    stopBtn.addEventListener('click', handlePillStopClick);
+    return stopBtn;
+  }
+
   function formatPillElapsed(startTime) {
     const base = startTime || transcriptionStartedAt || Date.now();
     const totalSec = Math.max(0, Math.floor((Date.now() - base) / 1000));
@@ -1145,6 +1170,9 @@
       dismissBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         meetingDetectedToastDismissed = true;
+        try {
+          chrome.storage.local.set({ pillDismissedInCall: true });
+        } catch (_) {}
         removeStatusToast();
       });
 
@@ -1180,11 +1208,7 @@
         } catch (_) {}
       });
 
-      const stopBtn = document.createElement('button');
-      stopBtn.id = 'mast-toast-stop-btn';
-      stopBtn.className = 'mast-pill-btn-stop';
-      stopBtn.textContent = 'Stop';
-      stopBtn.addEventListener('click', handlePillStopClick);
+      const stopBtn = createPillStopBtnEl();
 
       const minBtn = document.createElement('button');
       minBtn.id = 'mast-toast-minimize-btn';
@@ -1250,11 +1274,7 @@
         }, 1200);
       });
 
-      const stopBtn = document.createElement('button');
-      stopBtn.id = 'mast-toast-stop-btn';
-      stopBtn.className = 'mast-pill-btn-stop';
-      stopBtn.textContent = 'Stop';
-      stopBtn.addEventListener('click', handlePillStopClick);
+      const stopBtn = createPillStopBtnEl();
 
       const minBtn = document.createElement('button');
       minBtn.id = 'mast-alert-minimize-btn';
@@ -1790,7 +1810,12 @@
           } catch (_) {}
         }
         if (!meetingActive) {
-          meetingDetectedToastDismissed = false;
+          if (meetingDetectedToastDismissed) {
+            meetingDetectedToastDismissed = false;
+            try {
+              chrome.storage.local.set({ pillDismissedInCall: false });
+            } catch (_) {}
+          }
           if (currentToastState === 'meeting_detected') {
             removeStatusToast();
           }
@@ -1858,6 +1883,13 @@
       }
     }
 
+    if (changes.pillDismissedInCall && window === window.top) {
+      meetingDetectedToastDismissed = !!changes.pillDismissedInCall.newValue;
+      if (!meetingDetectedToastDismissed && isTeamsMeetingActive() && !isTranscribing && !currentToastState) {
+        renderStatusToast('meeting_detected');
+      }
+    }
+
     if (changes.isTranscribing) {
       if (changes.isTranscribing.newValue === true && currentToastState === 'meeting_detected') {
         renderStatusToast('capturing_started');
@@ -1865,6 +1897,11 @@
         isTranscribing = false;
         stopPillTimer();
         meetingDetectedToastDismissed = true;
+        try {
+          if (window === window.top && isTeamsMeetingActive()) {
+            chrome.storage.local.set({ pillDismissedInCall: true });
+          }
+        } catch (_) {}
         removeCaptionsAlert();
         removeHideCaptionsStyle();
         if (currentToastState === 'capturing_started' || currentToastState === 'capturing_badge') {
@@ -1938,12 +1975,24 @@
         sendResponse({
           captionsOn: areCaptionsVisible(),
           inActiveCall: isTeamsMeetingActive(),
-          meetingTitle: extractTeamsMeetingTitle()
+          meetingTitle: extractTeamsMeetingTitle(),
+          pillDismissed: meetingDetectedToastDismissed
         });
       }
       return false;
+    } else if (request.action === "restore_pill") {
+      meetingDetectedToastDismissed = false;
+      try {
+        chrome.storage.local.set({ pillDismissedInCall: false });
+      } catch (_) {}
+      if (window === window.top && isTeamsMeetingActive() && !isTranscribing) {
+        renderStatusToast('meeting_detected');
+      }
+      sendResponse({ status: "restored" });
+      return false;
     } else if (request.action === "start") {
       shouldGuardUnload = false;
+      meetingDetectedToastDismissed = false;
       isTranscribing = true;
       transcriptionStartedAt = Date.now();
       sawCaptionsActive = areCaptionsVisible();
@@ -1995,9 +2044,12 @@
   };
 
   try {
-    chrome.storage.local.get(['hideCaptionBox', 'isTranscribing', 'startTime'], (stored) => {
+    chrome.storage.local.get(['hideCaptionBox', 'isTranscribing', 'startTime', 'pillDismissedInCall'], (stored) => {
       if (chrome.runtime.lastError || !stored) return;
       hideCaptionBox = stored.hideCaptionBox !== undefined ? !!stored.hideCaptionBox : true;
+      if (isTeamsMeetingActive() && stored.pillDismissedInCall && !stored.isTranscribing) {
+        meetingDetectedToastDismissed = true;
+      }
       if (stored.isTranscribing && isTeamsMeetingActive()) {
         isTranscribing = true;
         transcriptionStartedAt = stored.startTime || Date.now();

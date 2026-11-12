@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-8';
+const WORKER_BUILD_VERSION = '2.9-dev-9';
 let isGeneratingInMemory = false;
 let cachedBaseIconBitmap = null;
 
@@ -25,10 +25,10 @@ function renderIconWithDot(bitmap, size, dotColor) {
     ctx.drawImage(bitmap, 0, 0, size, size);
   }
   if (dotColor) {
-    const r = Math.max(1.75, size * 0.105);
-    const ring = Math.max(0.8, size * 0.04);
-    const cx = size - r - ring * 0.7;
-    const cy = size - r - ring * 0.7;
+    const r = Math.max(3.2, size * 0.215);
+    const ring = Math.max(1.1, size * 0.065);
+    const cx = size - r - ring * 0.5;
+    const cy = size - r - ring * 0.5;
 
     ctx.beginPath();
     ctx.arc(cx, cy, r + ring, 0, Math.PI * 2);
@@ -720,6 +720,7 @@ async function startFromToast(sender, meetingTitle) {
     startTime: startTime,
     issueDetected: false,
     activeTabId: tabId,
+    pillDismissedInCall: false,
     notesStatus: 'idle',
     notesError: '',
     notesProgress: 0,
@@ -874,6 +875,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
         savedTranscript: [],
         activeTabId: null,
         inActiveCall: false,
+        pillDismissedInCall: false,
         notesStatus: 'idle',
         notesError: '',
         notesProgress: 0,
@@ -883,7 +885,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
         meetingTitle: 'Meeting'
       });
     } else {
-      await chrome.storage.local.set({ activeTabId: null, inActiveCall: false });
+      await chrome.storage.local.set({ activeTabId: null, inActiveCall: false, pillDismissedInCall: false });
     }
   }
 });

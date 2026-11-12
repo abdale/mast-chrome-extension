@@ -23,10 +23,14 @@ const retryBtn = document.getElementById('retryBtn');
 const dismissBtn = document.getElementById('dismissBtn');
 
 const recentMeetingsList = document.getElementById('recentMeetingsList');
+const dockedPillContainer = document.getElementById('dockedPillContainer');
+const dockedCaptureBtn = document.getElementById('dockedCaptureBtn');
+const dockedRestoreBtn = document.getElementById('dockedRestoreBtn');
 
-const WORKER_BUILD_VERSION = '2.9-dev-8';
+const WORKER_BUILD_VERSION = '2.9-dev-9';
 
 let cachedPopupBaseBitmap = null;
+let lastDetectedTeamsTab = { tabId: null, meetingTitle: 'Meeting' };
 
 async function getPopupBaseBitmap() {
   if (cachedPopupBaseBitmap) return cachedPopupBaseBitmap;
@@ -49,10 +53,10 @@ function renderPopupIconWithDot(bitmap, size, dotColor) {
     ctx.drawImage(bitmap, 0, 0, size, size);
   }
   if (dotColor) {
-    const r = Math.max(1.75, size * 0.105);
-    const ring = Math.max(0.8, size * 0.04);
-    const cx = size - r - ring * 0.7;
-    const cy = size - r - ring * 0.7;
+    const r = Math.max(3.2, size * 0.215);
+    const ring = Math.max(1.1, size * 0.065);
+    const cx = size - r - ring * 0.5;
+    const cy = size - r - ring * 0.5;
 
     ctx.beginPath();
     ctx.arc(cx, cy, r + ring, 0, Math.PI * 2);
@@ -504,18 +508,42 @@ function renderRecentMeetings(meetings) {
 }
 
 async function checkTeamsTabPresence() {
+  const emptyRes = { inActiveCall: false, pillDismissed: false, tabId: null, meetingTitle: 'Meeting' };
   try {
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!activeTab || !activeTab.id) return false;
-    const tabUrl = (activeTab.url || '').toLowerCase();
-    const isTeamsTab =
-      tabUrl.includes('teams.microsoft.com') ||
-      tabUrl.includes('teams.live.com') ||
-      tabUrl.includes('teams.cloud.microsoft');
-    if (!isTeamsTab) return false;
+    let targetTab = null;
+
+    if (activeTab && activeTab.id) {
+      const tabUrl = (activeTab.url || '').toLowerCase();
+      if (
+        tabUrl.includes('teams.microsoft.com') ||
+        tabUrl.includes('teams.live.com') ||
+        tabUrl.includes('teams.cloud.microsoft')
+      ) {
+        targetTab = activeTab;
+      }
+    }
+
+    if (!targetTab) {
+      const teamsTabs = await chrome.tabs.query({
+        url: [
+          'https://teams.microsoft.com/*',
+          'https://*.teams.microsoft.com/*',
+          'https://teams.live.com/*',
+          'https://*.teams.live.com/*',
+          'https://teams.cloud.microsoft/*',
+          'https://*.teams.cloud.microsoft/*'
+        ]
+      });
+      if (teamsTabs && teamsTabs.length > 0) {
+        targetTab = teamsTabs[0];
+      }
+    }
+
+    if (!targetTab || !targetTab.id) return emptyRes;
 
     const msgStatus = await new Promise((resolve) => {
-      chrome.tabs.sendMessage(activeTab.id, { action: 'get_status' }, (res) => {
+      chrome.tabs.sendMessage(targetTab.id, { action: 'get_status' }, (res) => {
         if (chrome.runtime.lastError) {
           resolve(null);
         } else {
@@ -527,25 +555,37 @@ async function checkTeamsTabPresence() {
     if (!msgStatus) {
       chrome.scripting.executeScript(
         {
-          target: { tabId: activeTab.id, allFrames: true },
+          target: { tabId: targetTab.id, allFrames: true },
           files: ['content.js']
         },
         () => {
           void chrome.runtime.lastError;
         }
       );
-      return false;
+      return { ...emptyRes, tabId: targetTab.id };
     }
-    return !!msgStatus.inActiveCall;
+
+    return {
+      inActiveCall: !!msgStatus.inActiveCall,
+      pillDismissed: !!msgStatus.pillDismissed,
+      tabId: targetTab.id,
+      meetingTitle: msgStatus.meetingTitle || 'Meeting'
+    };
   } catch (_) {
-    return false;
+    return emptyRes;
   }
 }
 
 let initializedModelsForKey = '';
 
 async function updateUI() {
-  const inActiveCallFallback = await checkTeamsTabPresence();
+  const tabPresence = await checkTeamsTabPresence();
+  if (tabPresence.tabId) {
+    lastDetectedTeamsTab = {
+      tabId: tabPresence.tabId,
+      meetingTitle: tabPresence.meetingTitle || 'Meeting'
+    };
+  }
 
   chrome.storage.local.get(
     [
@@ -559,6 +599,7 @@ async function updateUI() {
       'isTranscribing',
       'liveCaptionsOn',
       'inActiveCall',
+      'pillDismissedInCall',
       'notesStatus',
       'notesError',
       'notesProgress',
@@ -573,7 +614,7 @@ async function updateUI() {
         chrome.storage.local.set({ completionUnseen: false });
       }
 
-      syncToolbarAndHeaderDot(result, inActiveCallFallback);
+      syncToolbarAndHeaderDot(result, tabPresence.inActiveCall);
 
       if (apiKeyInput && document.activeElement !== apiKeyInput) {
         apiKeyInput.value = result.apiKey || '';
@@ -602,6 +643,16 @@ async function updateUI() {
       }
 
       renderRecentMeetings(Array.isArray(result.recentMeetings) ? result.recentMeetings : []);
+
+      const callActive = !!(tabPresence.inActiveCall || result.inActiveCall);
+      const pillWasDismissed = !!(tabPresence.pillDismissed || result.pillDismissedInCall);
+      if (dockedPillContainer) {
+        if (callActive && !result.isTranscribing && result.notesStatus !== 'generating' && pillWasDismissed) {
+          dockedPillContainer.style.display = 'flex';
+        } else {
+          dockedPillContainer.style.display = 'none';
+        }
+      }
 
       if (result.notesStatus === 'generating') {
         if (viewResults) viewResults.style.display = 'block';
@@ -655,6 +706,71 @@ if (dismissBtn) {
         updateUI();
       }
     );
+  });
+}
+
+if (dockedCaptureBtn) {
+  dockedCaptureBtn.addEventListener('click', () => {
+    chrome.storage.local.get(['apiKey'], (stored) => {
+      const hasKey = !!(stored && typeof stored.apiKey === 'string' && stored.apiKey.trim());
+      if (!hasKey) {
+        if (apiError) {
+          apiError.innerText = 'Save your API key above to start capturing.';
+          apiError.style.display = 'block';
+        }
+        if (apiKeyInput) apiKeyInput.focus();
+        return;
+      }
+
+      const startTime = Date.now();
+      const targetTabId = lastDetectedTeamsTab.tabId;
+      const initialTitle =
+        lastDetectedTeamsTab.meetingTitle && lastDetectedTeamsTab.meetingTitle !== 'Meeting'
+          ? lastDetectedTeamsTab.meetingTitle
+          : 'Meeting';
+
+      chrome.storage.local.set(
+        {
+          savedTranscript: [],
+          isTranscribing: true,
+          startTime: startTime,
+          issueDetected: false,
+          activeTabId: targetTabId,
+          pillDismissedInCall: false,
+          notesStatus: 'idle',
+          notesError: '',
+          notesProgress: 0,
+          notesStage: '',
+          completionUnseen: false,
+          transcriptDownloaded: false,
+          callEnded: false,
+          liveCaptionsOn: true,
+          meetingTitle: initialTitle
+        },
+        () => {
+          if (targetTabId) {
+            chrome.tabs.sendMessage(targetTabId, { action: 'start' }, () => {
+              void chrome.runtime.lastError;
+            });
+          }
+          updateUI();
+        }
+      );
+    });
+  });
+}
+
+if (dockedRestoreBtn) {
+  dockedRestoreBtn.addEventListener('click', () => {
+    const targetTabId = lastDetectedTeamsTab.tabId;
+    chrome.storage.local.set({ pillDismissedInCall: false }, () => {
+      if (targetTabId) {
+        chrome.tabs.sendMessage(targetTabId, { action: 'restore_pill' }, () => {
+          void chrome.runtime.lastError;
+        });
+      }
+      updateUI();
+    });
   });
 }
 

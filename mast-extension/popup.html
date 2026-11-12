@@ -147,11 +147,68 @@
     }
 
     .cc-row {
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
       padding: 6px 0;
+    }
+
+    .info-tip {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.34);
+      color: rgba(255, 255, 255, 0.64);
+      font-size: 9.5px;
+      font-weight: 700;
+      font-style: italic;
+      font-family: Georgia, 'Times New Roman', serif;
+      line-height: 1;
+      cursor: help;
+      flex-shrink: 0;
+      margin-left: -2px;
+      transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    }
+    .info-tip:hover {
+      color: #ffffff;
+      border-color: rgba(255, 255, 255, 0.72);
+      background: rgba(255, 255, 255, 0.12);
+    }
+    .info-tip::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: calc(100% + 7px);
+      left: 50%;
+      transform: translateX(-60%);
+      width: max-content;
+      max-width: 195px;
+      background: rgba(24, 24, 28, 0.98);
+      color: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 8px;
+      padding: 6px 9px;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+      font-style: normal;
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.35;
+      white-space: normal;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      z-index: 50;
+      transition: opacity 0.14s ease, visibility 0.14s ease;
+    }
+    .info-tip:hover::after {
+      opacity: 1;
+      visibility: visible;
     }
 
     .cc-row + .cc-row {
@@ -466,6 +523,98 @@
       color: #ff6961;
       border-color: rgba(255, 69, 58, 0.45);
     }
+
+    /* Docked Dynamic Island Pill (shown when in-page pill was x'd out) */
+    .docked-pill {
+      margin-top: 10px;
+      background: linear-gradient(180deg, rgba(44, 44, 48, 0.98) 0%, rgba(28, 28, 32, 0.98) 100%);
+      border: 1px solid rgba(139, 143, 248, 0.48);
+      border-radius: 999px;
+      box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.65),
+        inset 0 1px 0 rgba(255, 255, 255, 0.16),
+        0 8px 22px rgba(0, 0, 0, 0.45),
+        0 0 14px rgba(139, 143, 248, 0.16);
+      padding: 7px 9px 7px 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .docked-pill-left {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+    }
+    .docked-pill-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 700;
+      font-size: 12.5px;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+      flex-shrink: 0;
+    }
+    .docked-pill-sep {
+      width: 1px;
+      height: 13px;
+      background: rgba(255, 255, 255, 0.18);
+      flex-shrink: 0;
+    }
+    .docked-pill-text {
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.9);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .docked-pill-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+    }
+    .docked-pill-cta {
+      background: var(--accent);
+      color: #ffffff;
+      border: none;
+      border-radius: 999px;
+      padding: 5px 11px;
+      font-size: 11.5px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s ease, transform 0.1s ease;
+    }
+    .docked-pill-cta:hover {
+      background: #6b6fd6;
+    }
+    .docked-pill-cta:active {
+      transform: scale(0.97);
+    }
+    .docked-pill-undock {
+      background: rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.82);
+      border: none;
+      border-radius: 50%;
+      width: 23px;
+      height: 23px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      flex-shrink: 0;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .docked-pill-undock:hover {
+      background: rgba(255, 255, 255, 0.24);
+      color: #ffffff;
+    }
   </style>
 </head>
 <body>
@@ -566,14 +715,15 @@
           </svg>
         </span>
         <span>AI Generated File Name</span>
+        <span class="info-tip" data-tip="On: AI generates the notes filename. Off: Uses the Teams meeting name.">i</span>
       </span>
-      <label class="toggle-switch" for="titleSourceToggle" title="On: AI generates file name · Off: Uses Teams meeting name">
+      <label class="toggle-switch" for="titleSourceToggle">
         <input type="checkbox" id="titleSourceToggle" checked>
         <span class="toggle-slider"></span>
       </label>
     </div>
 
-    <!-- Hide Captions Row -->
+    <!-- Always Hide Captions Row -->
     <div class="cc-row">
       <span class="cc-label">
         <span class="cc-icon green">
@@ -582,9 +732,10 @@
             <path d="M6.8 6.8C6.5 6.5 6.1 6.3 5.6 6.3C4.6 6.3 4 7 4 8C4 9 4.6 9.7 5.6 9.7C6.1 9.7 6.5 9.5 6.8 9.2M11.6 6.8C11.3 6.5 10.9 6.3 10.4 6.3C9.4 6.3 8.8 7 8.8 8C8.8 9 9.4 9.7 10.4 9.7C10.9 9.7 11.3 9.5 11.6 9.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
           </svg>
         </span>
-        <span>Hide Captions</span>
+        <span>Always Hide Captions</span>
+        <span class="info-tip" data-tip="Hides the live captions overlay in Teams while mast captures in the background.">i</span>
       </span>
-      <label class="toggle-switch" for="hideCaptionBoxToggle" title="Hide captions overlay in Teams while capturing">
+      <label class="toggle-switch" for="hideCaptionBoxToggle">
         <input type="checkbox" id="hideCaptionBoxToggle" checked>
         <span class="toggle-slider"></span>
       </label>
@@ -603,11 +754,25 @@
     <div id="recentMeetingsList" class="recent-list">No recent meetings</div>
   </div>
 
-  <!-- About Card -->
-  <div class="cc-card">
-    <div class="section-head">About mast</div>
-    <div style="font-size: 11px; color: var(--text-muted); line-height: 1.45;">
-      <strong style="color: #ffffff;">mast</strong> is a lightweight, privacy-focused Chrome extension built for Googlers to securely transcribe and generate AI meeting notes for Microsoft Teams calls. All captions are processed locally in your browser using your own Google AI Studio API key, with no external servers or third-party data storage.
+  <!-- Docked Pill (appears here if the floating pill in Teams was dismissed via ×) -->
+  <div id="dockedPillContainer" class="docked-pill" style="display: none;">
+    <div class="docked-pill-left">
+      <span class="docked-pill-brand">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M8 1.5L9.65 6.35L14.5 8L9.65 9.65L8 14.5L6.35 9.65L1.5 8L6.35 6.35L8 1.5Z" fill="#8B8FF8"/>
+        </svg>
+        <span>mast</span>
+      </span>
+      <span class="docked-pill-sep"></span>
+      <span class="docked-pill-text">Meeting active</span>
+    </div>
+    <div class="docked-pill-actions">
+      <button id="dockedCaptureBtn" class="docked-pill-cta">Capture</button>
+      <button id="dockedRestoreBtn" class="docked-pill-undock" title="Show pill in Teams">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M5 11L11 5M11 5H6.2M11 5V9.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </div>
   </div>
 

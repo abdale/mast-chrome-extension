@@ -94,11 +94,68 @@
     }
 
     .cc-row {
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 10px;
       padding: 8px 0;
+    }
+
+    .info-tip {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.34);
+      color: rgba(255, 255, 255, 0.64);
+      font-size: 10px;
+      font-weight: 700;
+      font-style: italic;
+      font-family: Georgia, 'Times New Roman', serif;
+      line-height: 1;
+      cursor: help;
+      flex-shrink: 0;
+      margin-left: -2px;
+      transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    }
+    .info-tip:hover {
+      color: #ffffff;
+      border-color: rgba(255, 255, 255, 0.72);
+      background: rgba(255, 255, 255, 0.12);
+    }
+    .info-tip::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: max-content;
+      max-width: 220px;
+      background: rgba(24, 24, 28, 0.98);
+      color: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
+      font-style: normal;
+      font-size: 11.5px;
+      font-weight: 500;
+      line-height: 1.4;
+      white-space: normal;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      z-index: 50;
+      transition: opacity 0.14s ease, visibility 0.14s ease;
+    }
+    .info-tip:hover::after {
+      opacity: 1;
+      visibility: visible;
     }
 
     .cc-row + .cc-row {
@@ -492,14 +549,15 @@
             </svg>
           </span>
           <span>AI Generated File Name</span>
+          <span class="info-tip" data-tip="On: AI generates the notes filename. Off: Uses the Teams meeting name.">i</span>
         </span>
-        <label class="toggle-switch" for="titleSourceToggle" title="On: AI generates file name · Off: Uses Teams meeting name">
+        <label class="toggle-switch" for="titleSourceToggle">
           <input type="checkbox" id="titleSourceToggle" checked>
           <span class="toggle-slider"></span>
         </label>
       </div>
 
-      <!-- Hide Captions Row -->
+      <!-- Always Hide Captions Row -->
       <div class="cc-row">
         <span class="cc-label">
           <span class="cc-icon green">
@@ -508,9 +566,10 @@
               <path d="M6.8 6.8C6.5 6.5 6.1 6.3 5.6 6.3C4.6 6.3 4 7 4 8C4 9 4.6 9.7 5.6 9.7C6.1 9.7 6.5 9.5 6.8 9.2M11.6 6.8C11.3 6.5 10.9 6.3 10.4 6.3C9.4 6.3 8.8 7 8.8 8C8.8 9 9.4 9.7 10.4 9.7C10.9 9.7 11.3 9.5 11.6 9.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
             </svg>
           </span>
-          <span>Hide Captions</span>
+          <span>Always Hide Captions</span>
+          <span class="info-tip" data-tip="Hides the live captions overlay in Teams while mast captures in the background.">i</span>
         </span>
-        <label class="toggle-switch" for="hideCaptionBoxToggle" title="Hide captions overlay in Teams while capturing">
+        <label class="toggle-switch" for="hideCaptionBoxToggle">
           <input type="checkbox" id="hideCaptionBoxToggle" checked>
           <span class="toggle-slider"></span>
         </label>
