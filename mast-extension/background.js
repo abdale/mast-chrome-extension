@@ -1,8 +1,9 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-10';
+const WORKER_BUILD_VERSION = '2.9-dev-11';
 let isGeneratingInMemory = false;
 let cachedBaseIconBitmap = null;
+let latestBadgeSyncToken = 0;
 
 async function getBaseIconBitmap() {
   if (cachedBaseIconBitmap) return cachedBaseIconBitmap;
@@ -49,6 +50,7 @@ function renderIconWithDot(bitmap, size, dotColor) {
 }
 
 async function syncToolbarBadge() {
+  const token = ++latestBadgeSyncToken;
   try {
     if (typeof chrome === 'undefined' || !chrome.action) {
       return;
@@ -57,14 +59,19 @@ async function syncToolbarBadge() {
       'isTranscribing',
       'liveCaptionsOn',
       'notesStatus',
-      'inActiveCall'
+      'inActiveCall',
+      'historyRegenProgress'
     ]);
+    if (token !== latestBadgeSyncToken) return;
 
     let dotColor = null;
 
     if (stored.isTranscribing) {
       dotColor = stored.liveCaptionsOn === false ? '#FF9F0A' : '#30D158';
-    } else if (stored.notesStatus === 'generating') {
+    } else if (
+      stored.notesStatus === 'generating' ||
+      (stored.historyRegenProgress && stored.historyRegenProgress.active)
+    ) {
       dotColor = '#8B8FF8';
     } else if (stored.notesStatus === 'error') {
       dotColor = '#FF453A';
@@ -77,6 +84,7 @@ async function syncToolbarBadge() {
     if (typeof chrome.action.setBadgeText === 'function') {
       await chrome.action.setBadgeText({ text: '' });
     }
+    if (token !== latestBadgeSyncToken) return;
 
     if (typeof chrome.action.setIcon === 'function') {
       if (!dotColor) {
@@ -89,8 +97,10 @@ async function syncToolbarBadge() {
         });
       } else if (typeof OffscreenCanvas !== 'undefined') {
         const bitmap = await getBaseIconBitmap();
+        if (token !== latestBadgeSyncToken) return;
         const imageData = {
           16: renderIconWithDot(bitmap, 16, dotColor),
+          24: renderIconWithDot(bitmap, 24, dotColor),
           32: renderIconWithDot(bitmap, 32, dotColor),
           48: renderIconWithDot(bitmap, 48, dotColor)
         };
@@ -803,6 +813,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     changes.liveCaptionsOn ||
     changes.notesStatus ||
     changes.inActiveCall ||
+    changes.historyRegenProgress ||
     changes.completionUnseen
   ) {
     syncToolbarBadge();
@@ -812,6 +823,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // Auto-migrate model selection, inject content script, and recover any interrupted generation on install/reload
 chrome.runtime.onInstalled.addListener(async () => {
   await cleanupLegacyState();
+  await syncToolbarBadge();
   const result = await chrome.storage.local.get([
     'apiKey',
     'selectedModel',
@@ -834,6 +846,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(async () => {
   await cleanupLegacyState();
+  await syncToolbarBadge();
   await backfillRecentMeetingsIfNeeded();
   await injectContentScriptIntoOpenTeamsTabs();
   await recoverStuckGenerationIfNeeded();

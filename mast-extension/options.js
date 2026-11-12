@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9-dev-10';
+  const WORKER_BUILD_VERSION = '2.9-dev-11';
   try {
     if (typeof chrome !== 'undefined' && chrome.action && typeof chrome.action.setBadgeText === 'function') {
       chrome.action.setBadgeText({ text: '' });

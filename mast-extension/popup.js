@@ -15,14 +15,15 @@ const hideCaptionBoxToggle = document.getElementById('hideCaptionBoxToggle');
 const recentMeetingsList = document.getElementById('recentMeetingsList');
 const dockedPillContainer = document.getElementById('dockedPillContainer');
 
-const WORKER_BUILD_VERSION = '2.9-dev-10';
+const WORKER_BUILD_VERSION = '2.9-dev-11';
 
 let cachedPopupBaseBitmap = null;
 let lastDetectedTeamsTab = { tabId: null, meetingTitle: 'Meeting', inActiveCall: false, pillDismissed: false };
 let lastRecentSignature = null;
-let localBottomState = null; // { mode: 'generating'|'done'|'error', text, progress, meetingId }
+let localBottomState = null; // { mode: 'generating'|'done'|'error'|'update_required', text, progress, meetingId }
 let localBottomTimer = null;
 let latestStoredSnapshot = {};
+let latestPopupBadgeToken = 0;
 
 async function getPopupBaseBitmap() {
   if (cachedPopupBaseBitmap) return cachedPopupBaseBitmap;
@@ -69,9 +70,11 @@ function renderPopupIconWithDot(bitmap, size, dotColor) {
 }
 
 async function syncToolbarAndHeaderDot(stored, inActiveCallFallback = false) {
+  const token = ++latestPopupBadgeToken;
   const isTranscribing = !!(stored && stored.isTranscribing);
   const liveCaptionsOn = stored ? stored.liveCaptionsOn : true;
   const notesStatus = (stored && stored.notesStatus) || 'idle';
+  const regenActive = !!(stored && stored.historyRegenProgress && stored.historyRegenProgress.active);
   const inActiveCall = !!(stored && stored.inActiveCall) || inActiveCallFallback;
 
   let dotColor = null;
@@ -85,7 +88,7 @@ async function syncToolbarAndHeaderDot(stored, inActiveCallFallback = false) {
       dotColor = '#30D158';
       tone = 'green';
     }
-  } else if (notesStatus === 'generating' || (localBottomState && localBottomState.mode === 'generating')) {
+  } else if (notesStatus === 'generating' || regenActive || (localBottomState && localBottomState.mode === 'generating')) {
     dotColor = '#8B8FF8';
     tone = 'indigo';
   } else if (notesStatus === 'error') {
@@ -109,6 +112,7 @@ async function syncToolbarAndHeaderDot(stored, inActiveCallFallback = false) {
       if (typeof chrome.action.setBadgeText === 'function') {
         await chrome.action.setBadgeText({ text: '' });
       }
+      if (token !== latestPopupBadgeToken) return;
       if (typeof chrome.action.setIcon === 'function') {
         if (!dotColor) {
           await chrome.action.setIcon({
@@ -120,8 +124,10 @@ async function syncToolbarAndHeaderDot(stored, inActiveCallFallback = false) {
           });
         } else if (typeof OffscreenCanvas !== 'undefined') {
           const bitmap = await getPopupBaseBitmap();
+          if (token !== latestPopupBadgeToken) return;
           const imageData = {
             16: renderPopupIconWithDot(bitmap, 16, dotColor),
+            24: renderPopupIconWithDot(bitmap, 24, dotColor),
             32: renderPopupIconWithDot(bitmap, 32, dotColor),
             48: renderPopupIconWithDot(bitmap, 48, dotColor)
           };
@@ -139,8 +145,11 @@ try {
   }
 } catch (_) {}
 
-chrome.runtime.sendMessage({ action: 'get_worker_version' }, () => {
+chrome.runtime.sendMessage({ action: 'get_worker_version' }, (res) => {
   void chrome.runtime.lastError;
+  if (res && res.version && res.version !== WORKER_BUILD_VERSION && !localBottomState) {
+    setLocalBottomState({ mode: 'update_required', text: 'Extension update pending' });
+  }
 });
 
 if (settingsLink) {
@@ -481,7 +490,8 @@ function renderBottomDockedPill(stored = {}) {
     const restoreBtn = document.createElement('button');
     restoreBtn.id = 'dockedRestoreBtn';
     restoreBtn.className = 'docked-pill-undock';
-    restoreBtn.title = 'Show pill in Teams';
+    restoreBtn.title = 'Pop out to Teams';
+    restoreBtn.setAttribute('aria-label', 'Pop out to Teams');
     restoreBtn.innerHTML =
       '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
       '<path d="M5 11L11 5M11 5H6.2M11 5V9.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
@@ -490,6 +500,33 @@ function renderBottomDockedPill(stored = {}) {
 
     actions.appendChild(captureBtn);
     actions.appendChild(restoreBtn);
+    dockedPillContainer.appendChild(left);
+    dockedPillContainer.appendChild(actions);
+  } else if (mode === 'update_required') {
+    dockedPillContainer.setAttribute('data-tone', 'amber');
+    brand.innerHTML = createDockedIconHtml('sparkle') + '<span>mast</span>';
+
+    const textEl = document.createElement('span');
+    textEl.className = 'docked-pill-text';
+    textEl.textContent = stageText || 'Extension update pending';
+
+    left.appendChild(brand);
+    left.appendChild(sep);
+    left.appendChild(textEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'docked-pill-actions';
+
+    const reloadBtn = document.createElement('button');
+    reloadBtn.className = 'docked-pill-cta';
+    reloadBtn.textContent = 'Reload';
+    reloadBtn.addEventListener('click', () => {
+      try {
+        chrome.runtime.reload();
+      } catch (_) {}
+    });
+
+    actions.appendChild(reloadBtn);
     dockedPillContainer.appendChild(left);
     dockedPillContainer.appendChild(actions);
   }
