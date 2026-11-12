@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9-dev-12';
+  const CONTENT_SCRIPT_VERSION = '2.9';
 
   function isExtensionContextValid() {
     try {

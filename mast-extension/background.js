@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-12';
+const WORKER_BUILD_VERSION = '2.9';
 let isGeneratingInMemory = false;
 let cachedBaseIconBitmap = null;
 let latestBadgeSyncToken = 0;

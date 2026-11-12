@@ -15,7 +15,7 @@ const hideCaptionBoxToggle = document.getElementById('hideCaptionBoxToggle');
 const recentMeetingsList = document.getElementById('recentMeetingsList');
 const dockedPillContainer = document.getElementById('dockedPillContainer');
 
-const WORKER_BUILD_VERSION = '2.9-dev-12';
+const WORKER_BUILD_VERSION = '2.9';
 
 let cachedPopupBaseBitmap = null;
 let lastDetectedTeamsTab = { tabId: null, meetingTitle: 'Meeting', inActiveCall: false, pillDismissed: false };
