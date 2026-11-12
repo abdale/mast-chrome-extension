@@ -15,7 +15,7 @@ const hideCaptionBoxToggle = document.getElementById('hideCaptionBoxToggle');
 const recentMeetingsList = document.getElementById('recentMeetingsList');
 const dockedPillContainer = document.getElementById('dockedPillContainer');
 
-const WORKER_BUILD_VERSION = '2.9-dev-11';
+const WORKER_BUILD_VERSION = '2.9-dev-12';
 
 let cachedPopupBaseBitmap = null;
 let lastDetectedTeamsTab = { tabId: null, meetingTitle: 'Meeting', inActiveCall: false, pillDismissed: false };
@@ -193,6 +193,14 @@ function setLocalBottomState(nextState, autoClearMs = 0) {
   }
 }
 
+function formatCompactStage(rawStage) {
+  const s = (rawStage || '').trim();
+  if (!s || /generating/i.test(s)) return 'Generating notes';
+  if (/connecting/i.test(s)) return 'Connecting...';
+  if (/saving/i.test(s)) return 'Saving file';
+  return s;
+}
+
 function updateDockedGeneratingProgressInPlace(progress, stage) {
   const fill = document.getElementById('dockedProgressFill');
   const pctEl = document.getElementById('dockedProgressPct');
@@ -200,7 +208,7 @@ function updateDockedGeneratingProgressInPlace(progress, stage) {
   const pct = Math.max(0, Math.min(100, Math.round(typeof progress === 'number' ? progress : 0)));
   if (fill) fill.style.width = `${Math.max(6, pct)}%`;
   if (pctEl) pctEl.textContent = `${pct}%`;
-  if (stageEl && stage) stageEl.textContent = stage;
+  if (stageEl) stageEl.textContent = formatCompactStage(stage);
 }
 
 function createDockedIconHtml(type) {
@@ -366,7 +374,7 @@ function renderBottomDockedPill(stored = {}) {
     const textEl = document.createElement('span');
     textEl.id = 'dockedProgressStage';
     textEl.className = 'docked-pill-text';
-    textEl.textContent = stageText || 'Generating notes...';
+    textEl.textContent = formatCompactStage(stageText);
 
     left.appendChild(brand);
     left.appendChild(sep);
@@ -724,7 +732,7 @@ function triggerRecentMeetingNotes(meetingId, btnEl = null) {
   setLocalBottomState({
     mode: 'generating',
     meetingId: String(meetingId),
-    text: 'Connecting to Gemini...',
+    text: 'Connecting...',
     progress: 6
   });
 
@@ -732,11 +740,17 @@ function triggerRecentMeetingNotes(meetingId, btnEl = null) {
     if (btnEl) btnEl.disabled = false;
     if (res && res.status === 'done') {
       setLocalBottomState({ mode: 'done', text: 'AI notes downloaded' }, 4500);
-    } else {
+    } else if (res && res.error) {
       setLocalBottomState({
         mode: 'error',
         meetingId: String(meetingId),
-        text: (res && res.error) ? `Notes failed (${res.error})` : 'Notes generation failed'
+        text: `Notes failed (${res.error})`
+      });
+    } else if (localBottomState && localBottomState.mode === 'generating') {
+      setLocalBottomState({
+        mode: 'error',
+        meetingId: String(meetingId),
+        text: 'Notes generation failed'
       });
     }
   });
@@ -957,13 +971,23 @@ async function updateUI() {
         chrome.storage.local.set({ completionUnseen: false });
       }
 
-      if (result.historyRegenProgress && result.historyRegenProgress.active) {
+      const regenProg = result.historyRegenProgress;
+      const regenFresh = regenProg && (!regenProg.updatedAt || Date.now() - regenProg.updatedAt < 90000);
+      if (regenProg && regenProg.active && regenFresh) {
         localBottomState = {
           mode: 'generating',
-          meetingId: result.historyRegenProgress.meetingId,
-          text: result.historyRegenProgress.stage || 'Generating notes...',
-          progress: result.historyRegenProgress.progress || 6
+          meetingId: regenProg.meetingId,
+          text: formatCompactStage(regenProg.stage),
+          progress: regenProg.progress || 6
         };
+      } else if (regenProg && regenProg.active && !regenFresh) {
+        chrome.storage.local.remove(['historyRegenProgress']);
+      } else if (localBottomState && localBottomState.mode === 'generating' && regenProg && !regenProg.active) {
+        if (regenProg.error) {
+          setLocalBottomState({ mode: 'error', meetingId: regenProg.meetingId, text: `Notes failed (${regenProg.error})` });
+        } else {
+          setLocalBottomState({ mode: 'done', text: 'AI notes downloaded' }, 4500);
+        }
       }
 
       syncToolbarAndHeaderDot(result, tabPresence.inActiveCall);
@@ -1012,14 +1036,26 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.historyRegenProgress) {
     const p = changes.historyRegenProgress.newValue;
     if (p && p.active) {
-      localBottomState = {
+      setLocalBottomState({
         mode: 'generating',
         meetingId: p.meetingId,
-        text: p.stage || 'Generating notes...',
+        text: formatCompactStage(p.stage),
         progress: typeof p.progress === 'number' ? p.progress : 6
-      };
-      renderBottomDockedPill(latestStoredSnapshot);
-      syncToolbarAndHeaderDot(latestStoredSnapshot, lastDetectedTeamsTab.inActiveCall);
+      });
+    } else if (p && !p.active) {
+      if (p.error) {
+        setLocalBottomState({
+          mode: 'error',
+          meetingId: p.meetingId,
+          text: `Notes failed (${p.error})`
+        });
+      } else if (localBottomState && localBottomState.mode === 'generating') {
+        setLocalBottomState({ mode: 'done', text: 'AI notes downloaded' }, 4500);
+      } else {
+        setLocalBottomState(null);
+      }
+    } else if (!p && localBottomState && localBottomState.mode === 'generating') {
+      setLocalBottomState(null);
     }
     if (Object.keys(changes).length === 1) {
       return;

@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9-dev-11';
+  const WORKER_BUILD_VERSION = '2.9-dev-12';
   try {
     if (typeof chrome !== 'undefined' && chrome.action && typeof chrome.action.setBadgeText === 'function') {
       chrome.action.setBadgeText({ text: '' });
@@ -182,13 +182,38 @@ document.addEventListener('DOMContentLoaded', () => {
     return sorted.slice(0, 2).map((entry) => entry.model);
   }
 
+  function formatCompactStage(rawStage) {
+    const s = (rawStage || '').trim();
+    if (!s || /generating/i.test(s)) return 'Generating notes';
+    if (/connecting/i.test(s)) return 'Connecting...';
+    if (/saving/i.test(s)) return 'Saving file';
+    return s;
+  }
+
   function updateHistoryRegenCardProgress(progressState) {
-    if (!progressState || !progressState.active) return;
-    renderOptionsDockedPill({
-      mode: 'generating',
-      text: progressState.stage || 'Generating notes...',
-      progress: progressState.progress || 6
-    });
+    if (!progressState) return;
+    if (progressState.active) {
+      const fresh = !progressState.updatedAt || Date.now() - progressState.updatedAt < 90000;
+      if (!fresh) {
+        renderOptionsDockedPill(null);
+        chrome.storage.local.remove(['historyRegenProgress']);
+        return;
+      }
+      renderOptionsDockedPill({
+        mode: 'generating',
+        text: formatCompactStage(progressState.stage),
+        progress: progressState.progress || 6
+      });
+    } else if (progressState.error) {
+      renderOptionsDockedPill({
+        mode: 'error',
+        text: `Notes failed (${progressState.error})`
+      });
+    } else if (progressState.progress >= 100) {
+      renderOptionsDockedPill({ mode: 'done', text: 'AI notes downloaded', autoClearMs: 4500 });
+    } else {
+      renderOptionsDockedPill(null);
+    }
   }
 
   function renderRecentMeetings(meetings) {
@@ -236,7 +261,7 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         if (genBtn.disabled) return;
         genBtn.disabled = true;
-        renderOptionsDockedPill({ mode: 'generating', text: 'Connecting to Gemini...', progress: 6 });
+        renderOptionsDockedPill({ mode: 'generating', text: 'Connecting...', progress: 6 });
         chrome.runtime.sendMessage({ action: 'regenerate_meeting_notes', meetingId: item.id }, (res) => {
           genBtn.disabled = false;
           if (res && res.status === 'done') {
@@ -358,6 +383,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'userSelectedModel',
       'titleSource',
       'hideCaptionBox',
+      'historyRegenProgress',
       'recentMeetings',
       'savedTranscript',
       'meetingTitle',
@@ -381,6 +407,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (hideCaptionBoxToggle) {
         hideCaptionBoxToggle.checked = result.hideCaptionBox !== undefined ? !!result.hideCaptionBox : true;
+      }
+
+      if (result.historyRegenProgress && result.historyRegenProgress.active) {
+        updateHistoryRegenCardProgress(result.historyRegenProgress);
       }
 
       let recent = Array.isArray(result.recentMeetings) ? result.recentMeetings : [];
@@ -411,8 +441,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (changes.recentMeetings) {
       renderRecentMeetings(changes.recentMeetings.newValue || []);
     }
-    if (changes.historyRegenProgress && changes.historyRegenProgress.newValue) {
-      updateHistoryRegenCardProgress(changes.historyRegenProgress.newValue);
+    if (changes.historyRegenProgress) {
+      updateHistoryRegenCardProgress(changes.historyRegenProgress.newValue || null);
     }
     if (changes.titleSource && titleSourceToggle) {
       titleSourceToggle.checked = changes.titleSource.newValue !== 'teams';

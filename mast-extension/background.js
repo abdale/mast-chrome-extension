@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-11';
+const WORKER_BUILD_VERSION = '2.9-dev-12';
 let isGeneratingInMemory = false;
 let cachedBaseIconBitmap = null;
 let latestBadgeSyncToken = 0;
@@ -133,7 +133,8 @@ async function cleanupLegacyState() {
       'onboardingCompleted',
       'devNanoSimMode',
       'notesErrorCode',
-      'notesErrorReason'
+      'notesErrorReason',
+      'historyRegenProgress'
     ]);
 
     const stored = await chrome.storage.local.get(['selectedModel', 'modelSelectVal', 'titleSource', 'hideCaptionBox']);
@@ -401,7 +402,7 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
 
   let cloudTickerInterval = null;
 
-  const reportProgress = async (progress, stage) => {
+  const reportProgress = async (progress, stage, extra = {}) => {
     const clamped = Math.max(0, Math.min(100, Math.round(progress)));
     try {
       if (isHistoryRegen) {
@@ -410,7 +411,9 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
             meetingId: String(overrideMeeting.id),
             progress: clamped,
             stage: stage || '',
-            active: clamped < 100
+            active: extra.active !== undefined ? extra.active : clamped < 100,
+            error: extra.error || '',
+            updatedAt: Date.now()
           }
         });
       } else {
@@ -464,11 +467,11 @@ async function generateAndDownloadNotes(overrideMeeting = null) {
         notesStatus: 'generating',
         notesError: '',
         notesProgress: 5,
-        notesStage: 'Connecting to Gemini...',
+        notesStage: 'Connecting...',
         generationStartedAt: Date.now()
       });
     } else {
-      await reportProgress(5, 'Connecting to Gemini...');
+      await reportProgress(5, 'Connecting...');
     }
 
     const model = await resolveActiveModel(apiKey, result);
@@ -515,11 +518,11 @@ ${fullTranscript}`;
     };
 
     let cloudPct = 20;
-    await reportProgress(cloudPct, 'Generating meeting notes...');
+    await reportProgress(cloudPct, 'Generating notes');
     cloudTickerInterval = setInterval(() => {
       if (cloudPct < 88) {
         cloudPct += cloudPct < 60 ? 7 : 3;
-        reportProgress(Math.min(88, cloudPct), 'Generating meeting notes...');
+        reportProgress(Math.min(88, cloudPct), 'Generating notes');
       }
     }, 650);
 
@@ -551,7 +554,7 @@ ${fullTranscript}`;
       throw new Error("Empty response from Gemini model.");
     }
 
-    await reportProgress(96, 'Saving Markdown file...');
+    await reportProgress(96, 'Saving file');
 
     let aiTitle = "meeting";
     const outLines = minutesText.split('\n');
@@ -581,7 +584,7 @@ ${fullTranscript}`;
     const filename = `${sanitizedTitle}_${shortDate}.md`;
 
     await downloadTextViaDataUrl(minutesText, 'text/markdown', filename);
-    await reportProgress(100, 'Completed');
+    await reportProgress(100, 'Completed', { active: false });
 
     if (isHistoryRegen) {
       await updateRecentMeetingTitle(overrideMeeting.id, chosenTitle);
@@ -600,16 +603,10 @@ ${fullTranscript}`;
   } catch (error) {
     console.error("mast: Generation failed:", error);
     if (isHistoryRegen) {
-      try {
-        await chrome.storage.local.set({
-          historyRegenProgress: {
-            meetingId: String(overrideMeeting.id),
-            progress: 0,
-            stage: '',
-            active: false
-          }
-        });
-      } catch (_) {}
+      await reportProgress(0, '', {
+        active: false,
+        error: error.message || "Failed to generate AI summary."
+      });
     } else {
       await chrome.storage.local.set({
         notesStatus: 'error',

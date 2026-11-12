@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9-dev-11';
+  const CONTENT_SCRIPT_VERSION = '2.9-dev-12';
 
   function isExtensionContextValid() {
     try {
@@ -856,7 +856,7 @@
                 isTranscribing: false,
                 notesStatus: 'generating',
                 notesProgress: 5,
-                notesStage: 'Connecting to Gemini...',
+                notesStage: 'Connecting...',
                 generationStartedAt: Date.now()
               },
               () => {
