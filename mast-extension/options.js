@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const WORKER_BUILD_VERSION = '2.9-dev-9';
+  const WORKER_BUILD_VERSION = '2.9-dev-10';
   try {
     if (typeof chrome !== 'undefined' && chrome.action && typeof chrome.action.setBadgeText === 'function') {
       chrome.action.setBadgeText({ text: '' });
@@ -25,6 +25,110 @@ document.addEventListener('DOMContentLoaded', () => {
   const saveBtn = document.getElementById('saveBtn');
   const statusEl = document.getElementById('status');
   const recentMeetingsList = document.getElementById('recentMeetingsList');
+  const dockedPillContainer = document.getElementById('dockedPillContainer');
+  let dockedTimer = null;
+
+  function renderOptionsDockedPill(state) {
+    if (!dockedPillContainer) return;
+    if (dockedTimer) {
+      clearTimeout(dockedTimer);
+      dockedTimer = null;
+    }
+    if (!state) {
+      dockedPillContainer.style.display = 'none';
+      dockedPillContainer.removeAttribute('data-mode');
+      dockedPillContainer.innerHTML = '';
+      return;
+    }
+
+    if (state.mode === 'generating' && dockedPillContainer.getAttribute('data-mode') === 'generating') {
+      const pct = Math.max(0, Math.min(100, Math.round(state.progress || 6)));
+      const fill = document.getElementById('optDockedFill');
+      const pctEl = document.getElementById('optDockedPct');
+      const stageEl = document.getElementById('optDockedStage');
+      if (fill) fill.style.width = `${Math.max(6, pct)}%`;
+      if (pctEl) pctEl.textContent = `${pct}%`;
+      if (stageEl && state.text) stageEl.textContent = state.text;
+      return;
+    }
+
+    dockedPillContainer.style.display = 'flex';
+    dockedPillContainer.setAttribute('data-mode', state.mode);
+    dockedPillContainer.setAttribute(
+      'data-tone',
+      state.mode === 'done' ? 'green' : state.mode === 'error' ? 'red' : 'indigo'
+    );
+    dockedPillContainer.innerHTML = '';
+
+    const left = document.createElement('div');
+    left.className = 'docked-pill-left';
+
+    const brand = document.createElement('span');
+    brand.className = 'docked-pill-brand';
+    if (state.mode === 'generating') {
+      brand.innerHTML =
+        '<svg class="mast-spin-svg" width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="6" stroke="rgba(139, 143, 248, 0.25)" stroke-width="2"/>' +
+        '<path d="M14 8A6 6 0 0 0 8 2" stroke="#8B8FF8" stroke-width="2" stroke-linecap="round"/>' +
+        '</svg><span>mast</span>';
+    } else if (state.mode === 'done') {
+      brand.innerHTML =
+        '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="7" fill="rgba(48, 209, 88, 0.18)" stroke="#30D158" stroke-width="1.4"/>' +
+        '<path d="M5 8.2L7.1 10.3L11.2 6" stroke="#30D158" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+        '</svg><span>mast</span>';
+    } else {
+      brand.innerHTML =
+        '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="8" cy="8" r="7" fill="rgba(255, 69, 58, 0.18)" stroke="#FF453A" stroke-width="1.4"/>' +
+        '<rect x="7.25" y="4.5" width="1.5" height="4.5" rx="0.75" fill="#FF453A"/>' +
+        '<circle cx="8" cy="11.2" r="0.85" fill="#FF453A"/>' +
+        '</svg><span>mast</span>';
+    }
+
+    const sep = document.createElement('span');
+    sep.className = 'docked-pill-sep';
+
+    const textEl = document.createElement('span');
+    textEl.id = 'optDockedStage';
+    textEl.className = 'docked-pill-text';
+    textEl.textContent = state.text || '';
+
+    left.appendChild(brand);
+    left.appendChild(sep);
+    left.appendChild(textEl);
+    dockedPillContainer.appendChild(left);
+
+    if (state.mode === 'generating') {
+      const pct = Math.max(0, Math.min(100, Math.round(state.progress || 6)));
+      const right = document.createElement('div');
+      right.className = 'docked-pill-actions';
+      const pctEl = document.createElement('span');
+      pctEl.id = 'optDockedPct';
+      pctEl.className = 'docked-pill-pct';
+      pctEl.textContent = `${pct}%`;
+      const bar = document.createElement('div');
+      bar.className = 'docked-pill-bar';
+      const fill = document.createElement('div');
+      fill.id = 'optDockedFill';
+      fill.className = 'docked-pill-bar-fill';
+      fill.style.width = `${Math.max(6, pct)}%`;
+      bar.appendChild(fill);
+      right.appendChild(pctEl);
+      right.appendChild(bar);
+      dockedPillContainer.appendChild(right);
+    } else {
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'docked-pill-undock';
+      closeBtn.title = 'Dismiss';
+      closeBtn.textContent = '\u00D7';
+      closeBtn.addEventListener('click', () => renderOptionsDockedPill(null));
+      dockedPillContainer.appendChild(closeBtn);
+      if (state.autoClearMs) {
+        dockedTimer = setTimeout(() => renderOptionsDockedPill(null), state.autoClearMs);
+      }
+    }
+  }
 
   function showStatus(msg, isError = false) {
     if (!statusEl) return;
@@ -79,19 +183,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateHistoryRegenCardProgress(progressState) {
-    if (!progressState || !progressState.meetingId) return;
-    const wrap = document.querySelector(`[data-regen-wrap="${progressState.meetingId}"]`);
-    const fill = document.querySelector(`[data-regen-fill="${progressState.meetingId}"]`);
-    if (!wrap || !fill) return;
-
-    if (!progressState.active) {
-      wrap.style.display = 'none';
-      return;
-    }
-
-    const pct = Math.max(0, Math.min(100, Math.round(progressState.progress || 0)));
-    wrap.style.display = 'block';
-    fill.style.width = `${Math.max(4, pct)}%`;
+    if (!progressState || !progressState.active) return;
+    renderOptionsDockedPill({
+      mode: 'generating',
+      text: progressState.stage || 'Generating notes...',
+      progress: progressState.progress || 6
+    });
   }
 
   function renderRecentMeetings(meetings) {
@@ -128,19 +225,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const actions = document.createElement('div');
       actions.className = 'recent-actions';
 
-      const progressWrap = document.createElement('div');
-      progressWrap.setAttribute('data-regen-wrap', String(item.id));
-      progressWrap.style.display = 'none';
-
-      const progressTrack = document.createElement('div');
-      progressTrack.className = 'progress-track';
-
-      const progressFill = document.createElement('div');
-      progressFill.className = 'progress-fill';
-      progressFill.setAttribute('data-regen-fill', String(item.id));
-      progressTrack.appendChild(progressFill);
-      progressWrap.appendChild(progressTrack);
-
       const genBtn = document.createElement('button');
       genBtn.className = 'mini-icon-btn';
       genBtn.title = 'Generate AI Notes';
@@ -152,16 +236,16 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         if (genBtn.disabled) return;
         genBtn.disabled = true;
-        progressWrap.style.display = 'block';
-        progressFill.style.width = '8%';
+        renderOptionsDockedPill({ mode: 'generating', text: 'Connecting to Gemini...', progress: 6 });
         chrome.runtime.sendMessage({ action: 'regenerate_meeting_notes', meetingId: item.id }, (res) => {
           genBtn.disabled = false;
-          progressWrap.style.display = 'none';
           if (res && res.status === 'done') {
-            showStatus('Notes downloaded');
-            setTimeout(() => showStatus(''), 2500);
-          } else if (res && res.error) {
-            showStatus(`Error: ${res.error}`, true);
+            renderOptionsDockedPill({ mode: 'done', text: 'AI notes downloaded', autoClearMs: 4500 });
+          } else {
+            renderOptionsDockedPill({
+              mode: 'error',
+              text: (res && res.error) ? `Notes failed (${res.error})` : 'Notes generation failed'
+            });
           }
         });
       });
@@ -180,8 +264,9 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.runtime.sendMessage({ action: 'download_history_transcript', meetingId: item.id }, (res) => {
           dlBtn.disabled = false;
           if (res && res.status === 'downloaded') {
-            showStatus('Transcript saved');
-            setTimeout(() => showStatus(''), 2500);
+            renderOptionsDockedPill({ mode: 'done', text: 'Transcript downloaded', autoClearMs: 3500 });
+          } else if (res && res.error) {
+            renderOptionsDockedPill({ mode: 'error', text: res.error });
           }
         });
       });
@@ -209,7 +294,6 @@ document.addEventListener('DOMContentLoaded', () => {
       row.appendChild(actions);
 
       card.appendChild(row);
-      card.appendChild(progressWrap);
       recentMeetingsList.appendChild(card);
     });
   }

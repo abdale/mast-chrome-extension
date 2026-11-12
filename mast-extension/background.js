@@ -1,6 +1,6 @@
 // Background Service Worker for mast (Meeting AI Summarizer & Transcriber for MS Teams)
 
-const WORKER_BUILD_VERSION = '2.9-dev-9';
+const WORKER_BUILD_VERSION = '2.9-dev-10';
 let isGeneratingInMemory = false;
 let cachedBaseIconBitmap = null;
 
@@ -8,7 +8,7 @@ async function getBaseIconBitmap() {
   if (cachedBaseIconBitmap) return cachedBaseIconBitmap;
   try {
     if (typeof fetch !== 'function' || typeof createImageBitmap !== 'function') return null;
-    const res = await fetch(chrome.runtime.getURL('icons/icon48.png'));
+    const res = await fetch(chrome.runtime.getURL('icons/icon128.png'));
     const blob = await res.blob();
     cachedBaseIconBitmap = await createImageBitmap(blob);
     return cachedBaseIconBitmap;
@@ -21,18 +21,23 @@ function renderIconWithDot(bitmap, size, dotColor) {
   const canvas = new OffscreenCanvas(size, size);
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, size, size);
+  ctx.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in ctx) {
+    ctx.imageSmoothingQuality = 'high';
+  }
   if (bitmap) {
-    ctx.drawImage(bitmap, 0, 0, size, size);
+    const iconBox = dotColor ? Math.round(size * 0.80) : size;
+    ctx.drawImage(bitmap, 0, 0, iconBox, iconBox);
   }
   if (dotColor) {
-    const r = Math.max(3.2, size * 0.215);
-    const ring = Math.max(1.1, size * 0.065);
-    const cx = size - r - ring * 0.5;
-    const cy = size - r - ring * 0.5;
+    const r = size * 0.215;
+    const ring = Math.max(0.9, size * 0.04);
+    const cx = size * 0.74;
+    const cy = size * 0.74;
 
     ctx.beginPath();
     ctx.arc(cx, cy, r + ring, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(20, 20, 24, 0.94)';
+    ctx.fillStyle = 'rgba(20, 20, 24, 0.96)';
     ctx.fill();
 
     ctx.beginPath();

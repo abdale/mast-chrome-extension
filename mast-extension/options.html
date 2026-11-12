@@ -107,12 +107,12 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 15px;
-      height: 15px;
+      width: 12px;
+      height: 12px;
       border-radius: 50%;
-      border: 1px solid rgba(255, 255, 255, 0.34);
-      color: rgba(255, 255, 255, 0.64);
-      font-size: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      color: rgba(255, 255, 255, 0.58);
+      font-size: 8.5px;
       font-weight: 700;
       font-style: italic;
       font-family: Georgia, 'Times New Roman', serif;
@@ -130,23 +130,21 @@
     .info-tip::after {
       content: attr(data-tip);
       position: absolute;
-      bottom: calc(100% + 8px);
+      bottom: calc(100% + 6px);
       left: 50%;
       transform: translateX(-50%);
-      width: max-content;
-      max-width: 220px;
       background: rgba(24, 24, 28, 0.98);
       color: rgba(255, 255, 255, 0.94);
       border: 1px solid rgba(255, 255, 255, 0.22);
-      border-radius: 8px;
-      padding: 7px 10px;
+      border-radius: 6px;
+      padding: 4px 8px;
       font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
       font-style: normal;
-      font-size: 11.5px;
+      font-size: 10.5px;
       font-weight: 500;
-      line-height: 1.4;
-      white-space: normal;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+      line-height: 1.25;
+      white-space: nowrap;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
       opacity: 0;
       visibility: hidden;
       pointer-events: none;
@@ -156,6 +154,117 @@
     .info-tip:hover::after {
       opacity: 1;
       visibility: visible;
+    }
+
+    @keyframes mastSpinRing {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .mast-spin-svg {
+      animation: mastSpinRing 0.95s linear infinite;
+    }
+    .docked-pill {
+      margin-bottom: 11px;
+      background: linear-gradient(180deg, rgba(44, 44, 48, 0.98) 0%, rgba(28, 28, 32, 0.98) 100%);
+      border: 1px solid rgba(139, 143, 248, 0.48);
+      border-radius: 999px;
+      box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.65),
+        inset 0 1px 0 rgba(255, 255, 255, 0.16),
+        0 8px 22px rgba(0, 0, 0, 0.45),
+        0 0 14px rgba(139, 143, 248, 0.16);
+      padding: 8px 11px 8px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      box-sizing: border-box;
+    }
+    .docked-pill[data-tone="green"] {
+      border-color: rgba(48, 209, 88, 0.5);
+    }
+    .docked-pill[data-tone="red"] {
+      border-color: rgba(255, 69, 58, 0.55);
+    }
+    .docked-pill-left {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex: 1;
+    }
+    .docked-pill-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+      flex-shrink: 0;
+    }
+    .docked-pill-sep {
+      width: 1px;
+      height: 14px;
+      background: rgba(255, 255, 255, 0.18);
+      flex-shrink: 0;
+    }
+    .docked-pill-text {
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.92);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .docked-pill-pct {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--accent-light);
+      font-variant-numeric: tabular-nums;
+      flex-shrink: 0;
+    }
+    .docked-pill-bar {
+      width: 64px;
+      height: 5px;
+      background: rgba(255, 255, 255, 0.16);
+      border-radius: 999px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .docked-pill-bar-fill {
+      height: 100%;
+      width: 6%;
+      background: linear-gradient(90deg, #5B5FC7 0%, #8B8FF8 100%);
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+    .docked-pill-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .docked-pill-undock {
+      background: rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.82);
+      border: none;
+      border-radius: 50%;
+      width: 23px;
+      height: 23px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+      flex-shrink: 0;
+    }
+    .docked-pill-undock:hover {
+      background: rgba(255, 255, 255, 0.24);
+      color: #ffffff;
     }
 
     .cc-row + .cc-row {
@@ -549,7 +658,7 @@
             </svg>
           </span>
           <span>AI Generated File Name</span>
-          <span class="info-tip" data-tip="On: AI generates the notes filename. Off: Uses the Teams meeting name.">i</span>
+          <span class="info-tip" data-tip="Off uses Teams meeting name">i</span>
         </span>
         <label class="toggle-switch" for="titleSourceToggle">
           <input type="checkbox" id="titleSourceToggle" checked>
@@ -567,7 +676,7 @@
             </svg>
           </span>
           <span>Always Hide Captions</span>
-          <span class="info-tip" data-tip="Hides the live captions overlay in Teams while mast captures in the background.">i</span>
+          <span class="info-tip" data-tip="Hides captions in Teams during capture">i</span>
         </span>
         <label class="toggle-switch" for="hideCaptionBoxToggle">
           <input type="checkbox" id="hideCaptionBoxToggle" checked>
@@ -587,6 +696,9 @@
       </div>
       <div id="recentMeetingsList" class="recent-list">No recent meetings</div>
     </div>
+
+    <!-- Docked Progress / Completion Pill -->
+    <div id="dockedPillContainer" class="docked-pill" style="display: none;"></div>
 
     <!-- About Card -->
     <div class="cc-card">

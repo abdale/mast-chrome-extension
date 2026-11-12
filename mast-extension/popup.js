@@ -12,31 +12,23 @@ const customModelInput = document.getElementById('customModelInput');
 const titleSourceToggle = document.getElementById('titleSourceToggle');
 const hideCaptionBoxToggle = document.getElementById('hideCaptionBoxToggle');
 
-const viewResults = document.getElementById('view-results');
-const progressContainer = document.getElementById('progressContainer');
-const progressBarFill = document.getElementById('progressBarFill');
-const progressStageText = document.getElementById('progressStageText');
-const progressPercentText = document.getElementById('progressPercentText');
-const resultsErrorBox = document.getElementById('resultsErrorBox');
-const resultsStatus = document.getElementById('resultsStatus');
-const retryBtn = document.getElementById('retryBtn');
-const dismissBtn = document.getElementById('dismissBtn');
-
 const recentMeetingsList = document.getElementById('recentMeetingsList');
 const dockedPillContainer = document.getElementById('dockedPillContainer');
-const dockedCaptureBtn = document.getElementById('dockedCaptureBtn');
-const dockedRestoreBtn = document.getElementById('dockedRestoreBtn');
 
-const WORKER_BUILD_VERSION = '2.9-dev-9';
+const WORKER_BUILD_VERSION = '2.9-dev-10';
 
 let cachedPopupBaseBitmap = null;
-let lastDetectedTeamsTab = { tabId: null, meetingTitle: 'Meeting' };
+let lastDetectedTeamsTab = { tabId: null, meetingTitle: 'Meeting', inActiveCall: false, pillDismissed: false };
+let lastRecentSignature = null;
+let localBottomState = null; // { mode: 'generating'|'done'|'error', text, progress, meetingId }
+let localBottomTimer = null;
+let latestStoredSnapshot = {};
 
 async function getPopupBaseBitmap() {
   if (cachedPopupBaseBitmap) return cachedPopupBaseBitmap;
   try {
     if (typeof fetch !== 'function' || typeof createImageBitmap !== 'function') return null;
-    const res = await fetch(chrome.runtime.getURL('icons/icon48.png'));
+    const res = await fetch(chrome.runtime.getURL('icons/icon128.png'));
     const blob = await res.blob();
     cachedPopupBaseBitmap = await createImageBitmap(blob);
     return cachedPopupBaseBitmap;
@@ -49,18 +41,23 @@ function renderPopupIconWithDot(bitmap, size, dotColor) {
   const canvas = new OffscreenCanvas(size, size);
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, size, size);
+  ctx.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in ctx) {
+    ctx.imageSmoothingQuality = 'high';
+  }
   if (bitmap) {
-    ctx.drawImage(bitmap, 0, 0, size, size);
+    const iconBox = dotColor ? Math.round(size * 0.80) : size;
+    ctx.drawImage(bitmap, 0, 0, iconBox, iconBox);
   }
   if (dotColor) {
-    const r = Math.max(3.2, size * 0.215);
-    const ring = Math.max(1.1, size * 0.065);
-    const cx = size - r - ring * 0.5;
-    const cy = size - r - ring * 0.5;
+    const r = size * 0.215;
+    const ring = Math.max(0.9, size * 0.04);
+    const cx = size * 0.74;
+    const cy = size * 0.74;
 
     ctx.beginPath();
     ctx.arc(cx, cy, r + ring, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(20, 20, 24, 0.94)';
+    ctx.fillStyle = 'rgba(20, 20, 24, 0.96)';
     ctx.fill();
 
     ctx.beginPath();
@@ -88,7 +85,7 @@ async function syncToolbarAndHeaderDot(stored, inActiveCallFallback = false) {
       dotColor = '#30D158';
       tone = 'green';
     }
-  } else if (notesStatus === 'generating') {
+  } else if (notesStatus === 'generating' || (localBottomState && localBottomState.mode === 'generating')) {
     dotColor = '#8B8FF8';
     tone = 'indigo';
   } else if (notesStatus === 'error') {
@@ -153,18 +150,348 @@ if (settingsLink) {
   });
 }
 
-function showTransientStatus(msg, isError = false) {
+function showApiKeySavedStatus(msg) {
   if (!statusEl) return;
   statusEl.innerText = msg;
-  statusEl.style.color = isError ? '#ff6961' : '#30D158';
+  statusEl.style.color = '#30D158';
   statusEl.style.display = msg ? 'block' : 'none';
-  if (msg && !isError) {
+  if (msg) {
     setTimeout(() => {
       if (statusEl.innerText === msg) {
         statusEl.innerText = '';
         statusEl.style.display = 'none';
       }
-    }, 2200);
+    }, 2000);
+  }
+}
+
+function setLocalBottomState(nextState, autoClearMs = 0) {
+  if (localBottomTimer) {
+    clearTimeout(localBottomTimer);
+    localBottomTimer = null;
+  }
+  localBottomState = nextState;
+  renderBottomDockedPill(latestStoredSnapshot);
+  syncToolbarAndHeaderDot(latestStoredSnapshot, lastDetectedTeamsTab.inActiveCall);
+  if (autoClearMs > 0 && nextState) {
+    localBottomTimer = setTimeout(() => {
+      if (localBottomState === nextState) {
+        localBottomState = null;
+        renderBottomDockedPill(latestStoredSnapshot);
+        syncToolbarAndHeaderDot(latestStoredSnapshot, lastDetectedTeamsTab.inActiveCall);
+      }
+    }, autoClearMs);
+  }
+}
+
+function updateDockedGeneratingProgressInPlace(progress, stage) {
+  const fill = document.getElementById('dockedProgressFill');
+  const pctEl = document.getElementById('dockedProgressPct');
+  const stageEl = document.getElementById('dockedProgressStage');
+  const pct = Math.max(0, Math.min(100, Math.round(typeof progress === 'number' ? progress : 0)));
+  if (fill) fill.style.width = `${Math.max(6, pct)}%`;
+  if (pctEl) pctEl.textContent = `${pct}%`;
+  if (stageEl && stage) stageEl.textContent = stage;
+}
+
+function createDockedIconHtml(type) {
+  if (type === 'spinner') {
+    return (
+      '<svg class="mast-spin-svg" width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<circle cx="8" cy="8" r="6" stroke="rgba(139, 143, 248, 0.25)" stroke-width="2"/>' +
+      '<path d="M14 8A6 6 0 0 0 8 2" stroke="#8B8FF8" stroke-width="2" stroke-linecap="round"/>' +
+      '</svg>'
+    );
+  }
+  if (type === 'check') {
+    return (
+      '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<circle cx="8" cy="8" r="7" fill="rgba(48, 209, 88, 0.18)" stroke="#30D158" stroke-width="1.4"/>' +
+      '<path d="M5 8.2L7.1 10.3L11.2 6" stroke="#30D158" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '</svg>'
+    );
+  }
+  if (type === 'error') {
+    return (
+      '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<circle cx="8" cy="8" r="7" fill="rgba(255, 69, 58, 0.18)" stroke="#FF453A" stroke-width="1.4"/>' +
+      '<rect x="7.25" y="4.5" width="1.5" height="4.5" rx="0.75" fill="#FF453A"/>' +
+      '<circle cx="8" cy="11.2" r="0.85" fill="#FF453A"/>' +
+      '</svg>'
+    );
+  }
+  return (
+    '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+    '<path d="M8 1.5L9.65 6.35L14.5 8L9.65 9.65L8 14.5L6.35 9.65L1.5 8L6.35 6.35L8 1.5Z" fill="#8B8FF8"/>' +
+    '</svg>'
+  );
+}
+
+function startCaptureFromDockedPill() {
+  chrome.storage.local.get(['apiKey'], (stored) => {
+    const hasKey = !!(stored && typeof stored.apiKey === 'string' && stored.apiKey.trim());
+    if (!hasKey) {
+      if (apiError) {
+        apiError.innerText = 'Save your API key above to start capturing.';
+        apiError.style.display = 'block';
+      }
+      if (apiKeyInput) apiKeyInput.focus();
+      return;
+    }
+
+    const startTime = Date.now();
+    const targetTabId = lastDetectedTeamsTab.tabId;
+    const initialTitle =
+      lastDetectedTeamsTab.meetingTitle && lastDetectedTeamsTab.meetingTitle !== 'Meeting'
+        ? lastDetectedTeamsTab.meetingTitle
+        : 'Meeting';
+
+    chrome.storage.local.set(
+      {
+        savedTranscript: [],
+        isTranscribing: true,
+        startTime: startTime,
+        issueDetected: false,
+        activeTabId: targetTabId,
+        pillDismissedInCall: false,
+        notesStatus: 'idle',
+        notesError: '',
+        notesProgress: 0,
+        notesStage: '',
+        completionUnseen: false,
+        transcriptDownloaded: false,
+        callEnded: false,
+        liveCaptionsOn: true,
+        meetingTitle: initialTitle
+      },
+      () => {
+        lastDetectedTeamsTab.pillDismissed = false;
+        if (targetTabId) {
+          chrome.tabs.sendMessage(targetTabId, { action: 'start' }, () => {
+            void chrome.runtime.lastError;
+          });
+        }
+        updateUI();
+      }
+    );
+  });
+}
+
+function restoreFloatingPillToTeams() {
+  const targetTabId = lastDetectedTeamsTab.tabId;
+  lastDetectedTeamsTab.pillDismissed = false;
+  chrome.storage.local.set({ pillDismissedInCall: false }, () => {
+    if (targetTabId) {
+      chrome.tabs.sendMessage(targetTabId, { action: 'restore_pill' }, () => {
+        void chrome.runtime.lastError;
+      });
+    }
+    updateUI();
+  });
+}
+
+function renderBottomDockedPill(stored = {}) {
+  if (!dockedPillContainer) return;
+
+  // Determine effective state for the unified bottom docked pill
+  let mode = null;
+  let stageText = '';
+  let pct = 0;
+  let errorText = '';
+  let retryMeetingId = null;
+
+  if (localBottomState) {
+    mode = localBottomState.mode;
+    stageText = localBottomState.text || 'Generating notes...';
+    pct = typeof localBottomState.progress === 'number' ? localBottomState.progress : 6;
+    errorText = localBottomState.text || 'Notes failed';
+    retryMeetingId = localBottomState.meetingId || null;
+  } else if (stored.notesStatus === 'generating') {
+    mode = 'generating';
+    stageText = stored.notesStage || 'Generating notes...';
+    pct = typeof stored.notesProgress === 'number' ? stored.notesProgress : 6;
+  } else if (stored.notesStatus === 'error') {
+    mode = 'error';
+    errorText = stored.notesError ? `Notes failed (${stored.notesError})` : 'Notes generation failed';
+  } else {
+    const callActive = !!(lastDetectedTeamsTab.inActiveCall || stored.inActiveCall);
+    const pillWasDismissed = !!(lastDetectedTeamsTab.pillDismissed || stored.pillDismissedInCall);
+    if (callActive && !stored.isTranscribing && pillWasDismissed) {
+      mode = 'dismissed_call';
+    }
+  }
+
+  if (!mode) {
+    dockedPillContainer.style.display = 'none';
+    dockedPillContainer.removeAttribute('data-mode');
+    dockedPillContainer.innerHTML = '';
+    return;
+  }
+
+  // Fast in-place update if already showing generating mode
+  if (mode === 'generating' && dockedPillContainer.getAttribute('data-mode') === 'generating') {
+    dockedPillContainer.style.display = 'flex';
+    updateDockedGeneratingProgressInPlace(pct, stageText);
+    return;
+  }
+
+  dockedPillContainer.style.display = 'flex';
+  dockedPillContainer.setAttribute('data-mode', mode);
+  dockedPillContainer.removeAttribute('data-tone');
+  dockedPillContainer.innerHTML = '';
+
+  const left = document.createElement('div');
+  left.className = 'docked-pill-left';
+
+  const brand = document.createElement('span');
+  brand.className = 'docked-pill-brand';
+
+  const sep = document.createElement('span');
+  sep.className = 'docked-pill-sep';
+
+  if (mode === 'generating') {
+    dockedPillContainer.setAttribute('data-tone', 'indigo');
+    brand.innerHTML = createDockedIconHtml('spinner') + '<span>mast</span>';
+    const clampedPct = Math.max(0, Math.min(100, Math.round(pct)));
+
+    const textEl = document.createElement('span');
+    textEl.id = 'dockedProgressStage';
+    textEl.className = 'docked-pill-text';
+    textEl.textContent = stageText || 'Generating notes...';
+
+    left.appendChild(brand);
+    left.appendChild(sep);
+    left.appendChild(textEl);
+
+    const right = document.createElement('div');
+    right.className = 'docked-pill-actions';
+
+    const pctEl = document.createElement('span');
+    pctEl.id = 'dockedProgressPct';
+    pctEl.className = 'docked-pill-pct';
+    pctEl.textContent = `${clampedPct}%`;
+
+    const bar = document.createElement('div');
+    bar.className = 'docked-pill-bar';
+    const fill = document.createElement('div');
+    fill.id = 'dockedProgressFill';
+    fill.className = 'docked-pill-bar-fill';
+    fill.style.width = `${Math.max(6, clampedPct)}%`;
+    bar.appendChild(fill);
+
+    right.appendChild(pctEl);
+    right.appendChild(bar);
+
+    dockedPillContainer.appendChild(left);
+    dockedPillContainer.appendChild(right);
+  } else if (mode === 'done') {
+    dockedPillContainer.setAttribute('data-tone', 'green');
+    brand.innerHTML = createDockedIconHtml('check') + '<span>mast</span>';
+
+    const textEl = document.createElement('span');
+    textEl.className = 'docked-pill-text';
+    textEl.textContent = stageText || 'AI notes downloaded';
+
+    left.appendChild(brand);
+    left.appendChild(sep);
+    left.appendChild(textEl);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'docked-pill-undock';
+    closeBtn.title = 'Dismiss';
+    closeBtn.textContent = '\u00D7';
+    closeBtn.addEventListener('click', () => {
+      setLocalBottomState(null);
+    });
+
+    dockedPillContainer.appendChild(left);
+    dockedPillContainer.appendChild(closeBtn);
+  } else if (mode === 'error') {
+    dockedPillContainer.setAttribute('data-tone', 'red');
+    brand.innerHTML = createDockedIconHtml('error') + '<span>mast</span>';
+
+    const textEl = document.createElement('span');
+    textEl.className = 'docked-pill-text';
+    textEl.textContent = errorText;
+    textEl.title = errorText;
+
+    left.appendChild(brand);
+    left.appendChild(sep);
+    left.appendChild(textEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'docked-pill-actions';
+
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'docked-pill-cta';
+    retryBtn.textContent = 'Retry';
+    retryBtn.addEventListener('click', () => {
+      if (retryMeetingId) {
+        triggerRecentMeetingNotes(retryMeetingId);
+      } else {
+        setLocalBottomState({ mode: 'generating', text: 'Connecting to Gemini...', progress: 6 });
+        chrome.runtime.sendMessage({ action: 'generate_notes' }, () => {
+          void chrome.runtime.lastError;
+          setLocalBottomState(null);
+          updateUI();
+        });
+      }
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'docked-pill-undock';
+    closeBtn.title = 'Dismiss';
+    closeBtn.textContent = '\u00D7';
+    closeBtn.addEventListener('click', () => {
+      if (localBottomState) {
+        setLocalBottomState(null);
+      } else {
+        chrome.storage.local.set(
+          { notesStatus: 'idle', notesError: '', notesProgress: 0, notesStage: '', completionUnseen: false },
+          () => updateUI()
+        );
+      }
+    });
+
+    actions.appendChild(retryBtn);
+    actions.appendChild(closeBtn);
+    dockedPillContainer.appendChild(left);
+    dockedPillContainer.appendChild(actions);
+  } else if (mode === 'dismissed_call') {
+    dockedPillContainer.setAttribute('data-tone', 'indigo');
+    brand.innerHTML = createDockedIconHtml('sparkle') + '<span>mast</span>';
+
+    const textEl = document.createElement('span');
+    textEl.className = 'docked-pill-text';
+    textEl.textContent = 'Meeting active';
+
+    left.appendChild(brand);
+    left.appendChild(sep);
+    left.appendChild(textEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'docked-pill-actions';
+
+    const captureBtn = document.createElement('button');
+    captureBtn.id = 'dockedCaptureBtn';
+    captureBtn.className = 'docked-pill-cta';
+    captureBtn.textContent = 'Capture';
+    captureBtn.addEventListener('click', startCaptureFromDockedPill);
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.id = 'dockedRestoreBtn';
+    restoreBtn.className = 'docked-pill-undock';
+    restoreBtn.title = 'Show pill in Teams';
+    restoreBtn.innerHTML =
+      '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<path d="M5 11L11 5M11 5H6.2M11 5V9.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+      '</svg>';
+    restoreBtn.addEventListener('click', restoreFloatingPillToTeams);
+
+    actions.appendChild(captureBtn);
+    actions.appendChild(restoreBtn);
+    dockedPillContainer.appendChild(left);
+    dockedPillContainer.appendChild(actions);
   }
 }
 
@@ -290,7 +617,7 @@ if (validateBtn) {
         chrome.storage.local.set(updates, () => {
           validateBtn.innerText = '\u2713';
           validateBtn.disabled = false;
-          showTransientStatus('Saved');
+          showApiKeySavedStatus('API key saved');
           setTimeout(() => {
             if (validateBtn) validateBtn.innerText = 'Save';
           }, 1600);
@@ -355,43 +682,44 @@ if (hideCaptionBoxToggle) {
   });
 }
 
-function applyProgressUI(progress, stage) {
-  const pct = Math.max(0, Math.min(100, Math.round(typeof progress === 'number' ? progress : 0)));
-  if (progressBarFill) {
-    progressBarFill.style.width = `${Math.max(4, pct)}%`;
-  }
-  if (progressStageText) {
-    progressStageText.innerText = stage || 'Generating meeting notes...';
-  }
-  if (progressPercentText) {
-    progressPercentText.innerText = `${pct}%`;
-  }
+function triggerRecentMeetingNotes(meetingId, btnEl = null) {
+  if (btnEl) btnEl.disabled = true;
+  setLocalBottomState({
+    mode: 'generating',
+    meetingId: String(meetingId),
+    text: 'Connecting to Gemini...',
+    progress: 6
+  });
+
+  chrome.runtime.sendMessage({ action: 'regenerate_meeting_notes', meetingId }, (res) => {
+    if (btnEl) btnEl.disabled = false;
+    if (res && res.status === 'done') {
+      setLocalBottomState({ mode: 'done', text: 'AI notes downloaded' }, 4500);
+    } else {
+      setLocalBottomState({
+        mode: 'error',
+        meetingId: String(meetingId),
+        text: (res && res.error) ? `Notes failed (${res.error})` : 'Notes generation failed'
+      });
+    }
+  });
 }
 
-function updateHistoryRegenCardProgress(progressState) {
-  if (!progressState || !progressState.meetingId) return;
-  const wrap = document.querySelector(`[data-regen-wrap="${progressState.meetingId}"]`);
-  const fill = document.querySelector(`[data-regen-fill="${progressState.meetingId}"]`);
-  if (!wrap || !fill) return;
-  if (!progressState.active) {
-    wrap.style.display = 'none';
-    return;
-  }
-  const pct = Math.max(0, Math.min(100, Math.round(progressState.progress || 0)));
-  wrap.style.display = 'block';
-  fill.style.width = `${Math.max(4, pct)}%`;
-}
-
-function renderRecentMeetings(meetings) {
+function renderRecentMeetings(meetings, force = false) {
   if (!recentMeetingsList) return;
+  const list = Array.isArray(meetings) ? meetings.slice(0, 4) : [];
+  const sig = JSON.stringify(list.map((m) => ({ id: m.id, title: m.title, d: m.displayDate || m.shortDate })));
+  if (!force && sig === lastRecentSignature) return;
+  lastRecentSignature = sig;
+
   recentMeetingsList.innerHTML = '';
 
-  if (!Array.isArray(meetings) || meetings.length === 0) {
+  if (list.length === 0) {
     recentMeetingsList.textContent = 'No recent meetings';
     return;
   }
 
-  meetings.slice(0, 4).forEach((item) => {
+  list.forEach((item) => {
     const card = document.createElement('div');
     card.className = 'recent-item';
 
@@ -419,20 +747,6 @@ function renderRecentMeetings(meetings) {
     const actions = document.createElement('div');
     actions.className = 'recent-actions';
 
-    const progressWrap = document.createElement('div');
-    progressWrap.setAttribute('data-regen-wrap', String(item.id));
-    progressWrap.style.display = 'none';
-
-    const progressTrack = document.createElement('div');
-    progressTrack.className = 'progress-track';
-    progressTrack.style.marginTop = '3px';
-
-    const progressFill = document.createElement('div');
-    progressFill.className = 'progress-fill';
-    progressFill.setAttribute('data-regen-fill', String(item.id));
-    progressTrack.appendChild(progressFill);
-    progressWrap.appendChild(progressTrack);
-
     // Sparkle icon button: Generate AI Notes
     const genBtn = document.createElement('button');
     genBtn.className = 'mini-icon-btn';
@@ -444,18 +758,7 @@ function renderRecentMeetings(meetings) {
     genBtn.addEventListener('click', (e) => {
       e.preventDefault();
       if (genBtn.disabled) return;
-      genBtn.disabled = true;
-      progressWrap.style.display = 'block';
-      progressFill.style.width = '8%';
-      chrome.runtime.sendMessage({ action: 'regenerate_meeting_notes', meetingId: item.id }, (res) => {
-        genBtn.disabled = false;
-        progressWrap.style.display = 'none';
-        if (res && res.status === 'done') {
-          showTransientStatus('Notes downloaded');
-        } else if (res && res.error) {
-          showTransientStatus(res.error, true);
-        }
-      });
+      triggerRecentMeetingNotes(item.id, genBtn);
     });
 
     // Download icon button: Download Transcript
@@ -473,7 +776,9 @@ function renderRecentMeetings(meetings) {
       chrome.runtime.sendMessage({ action: 'download_history_transcript', meetingId: item.id }, (res) => {
         dlBtn.disabled = false;
         if (res && res.status === 'downloaded') {
-          showTransientStatus('Transcript saved');
+          setLocalBottomState({ mode: 'done', text: 'Transcript downloaded' }, 3500);
+        } else if (res && res.error) {
+          setLocalBottomState({ mode: 'error', text: res.error });
         }
       });
     });
@@ -489,7 +794,7 @@ function renderRecentMeetings(meetings) {
       e.preventDefault();
       chrome.runtime.sendMessage({ action: 'delete_recent_meeting', meetingId: item.id }, (res) => {
         if (res && Array.isArray(res.recentMeetings)) {
-          renderRecentMeetings(res.recentMeetings);
+          renderRecentMeetings(res.recentMeetings, true);
         }
       });
     });
@@ -502,7 +807,6 @@ function renderRecentMeetings(meetings) {
     row.appendChild(actions);
 
     card.appendChild(row);
-    card.appendChild(progressWrap);
     recentMeetingsList.appendChild(card);
   });
 }
@@ -580,12 +884,12 @@ let initializedModelsForKey = '';
 
 async function updateUI() {
   const tabPresence = await checkTeamsTabPresence();
-  if (tabPresence.tabId) {
-    lastDetectedTeamsTab = {
-      tabId: tabPresence.tabId,
-      meetingTitle: tabPresence.meetingTitle || 'Meeting'
-    };
-  }
+  lastDetectedTeamsTab = {
+    tabId: tabPresence.tabId || lastDetectedTeamsTab.tabId,
+    meetingTitle: tabPresence.meetingTitle || 'Meeting',
+    inActiveCall: !!tabPresence.inActiveCall,
+    pillDismissed: !!tabPresence.pillDismissed
+  };
 
   chrome.storage.local.get(
     [
@@ -604,14 +908,25 @@ async function updateUI() {
       'notesError',
       'notesProgress',
       'notesStage',
+      'historyRegenProgress',
       'completionUnseen',
       'recentMeetings'
     ],
     (result) => {
       if (chrome.runtime.lastError || !result) return;
+      latestStoredSnapshot = result;
 
       if (result.completionUnseen) {
         chrome.storage.local.set({ completionUnseen: false });
+      }
+
+      if (result.historyRegenProgress && result.historyRegenProgress.active) {
+        localBottomState = {
+          mode: 'generating',
+          meetingId: result.historyRegenProgress.meetingId,
+          text: result.historyRegenProgress.stage || 'Generating notes...',
+          progress: result.historyRegenProgress.progress || 6
+        };
       }
 
       syncToolbarAndHeaderDot(result, tabPresence.inActiveCall);
@@ -643,142 +958,44 @@ async function updateUI() {
       }
 
       renderRecentMeetings(Array.isArray(result.recentMeetings) ? result.recentMeetings : []);
-
-      const callActive = !!(tabPresence.inActiveCall || result.inActiveCall);
-      const pillWasDismissed = !!(tabPresence.pillDismissed || result.pillDismissedInCall);
-      if (dockedPillContainer) {
-        if (callActive && !result.isTranscribing && result.notesStatus !== 'generating' && pillWasDismissed) {
-          dockedPillContainer.style.display = 'flex';
-        } else {
-          dockedPillContainer.style.display = 'none';
-        }
-      }
+      renderBottomDockedPill(result);
 
       if (result.notesStatus === 'generating') {
-        if (viewResults) viewResults.style.display = 'block';
-        if (progressContainer) progressContainer.style.display = 'block';
-        if (resultsErrorBox) resultsErrorBox.style.display = 'none';
-        applyProgressUI(result.notesProgress, result.notesStage);
         chrome.runtime.sendMessage({ action: 'check_generation_status' }, () => {
           void chrome.runtime.lastError;
         });
-      } else if (result.notesStatus === 'error') {
-        if (viewResults) viewResults.style.display = 'block';
-        if (progressContainer) progressContainer.style.display = 'none';
-        if (resultsErrorBox) resultsErrorBox.style.display = 'block';
-        if (resultsStatus) {
-          resultsStatus.innerText = result.notesError
-            ? `Notes failed (${result.notesError})`
-            : 'Transcript saved, but AI notes failed.';
-        }
-      } else {
-        if (viewResults) viewResults.style.display = 'none';
-        if (progressContainer) progressContainer.style.display = 'none';
-        if (resultsErrorBox) resultsErrorBox.style.display = 'none';
       }
     }
   );
 }
 
-if (retryBtn) {
-  retryBtn.addEventListener('click', () => {
-    if (progressContainer) progressContainer.style.display = 'block';
-    if (resultsErrorBox) resultsErrorBox.style.display = 'none';
-    applyProgressUI(5, 'Connecting to Gemini...');
-    chrome.runtime.sendMessage({ action: 'generate_notes' }, () => {
-      void chrome.runtime.lastError;
-      updateUI();
-    });
-  });
-}
-
-if (dismissBtn) {
-  dismissBtn.addEventListener('click', () => {
-    chrome.storage.local.set(
-      {
-        notesStatus: 'idle',
-        notesError: '',
-        notesProgress: 0,
-        notesStage: '',
-        completionUnseen: false
-      },
-      () => {
-        updateUI();
-      }
-    );
-  });
-}
-
-if (dockedCaptureBtn) {
-  dockedCaptureBtn.addEventListener('click', () => {
-    chrome.storage.local.get(['apiKey'], (stored) => {
-      const hasKey = !!(stored && typeof stored.apiKey === 'string' && stored.apiKey.trim());
-      if (!hasKey) {
-        if (apiError) {
-          apiError.innerText = 'Save your API key above to start capturing.';
-          apiError.style.display = 'block';
-        }
-        if (apiKeyInput) apiKeyInput.focus();
-        return;
-      }
-
-      const startTime = Date.now();
-      const targetTabId = lastDetectedTeamsTab.tabId;
-      const initialTitle =
-        lastDetectedTeamsTab.meetingTitle && lastDetectedTeamsTab.meetingTitle !== 'Meeting'
-          ? lastDetectedTeamsTab.meetingTitle
-          : 'Meeting';
-
-      chrome.storage.local.set(
-        {
-          savedTranscript: [],
-          isTranscribing: true,
-          startTime: startTime,
-          issueDetected: false,
-          activeTabId: targetTabId,
-          pillDismissedInCall: false,
-          notesStatus: 'idle',
-          notesError: '',
-          notesProgress: 0,
-          notesStage: '',
-          completionUnseen: false,
-          transcriptDownloaded: false,
-          callEnded: false,
-          liveCaptionsOn: true,
-          meetingTitle: initialTitle
-        },
-        () => {
-          if (targetTabId) {
-            chrome.tabs.sendMessage(targetTabId, { action: 'start' }, () => {
-              void chrome.runtime.lastError;
-            });
-          }
-          updateUI();
-        }
-      );
-    });
-  });
-}
-
-if (dockedRestoreBtn) {
-  dockedRestoreBtn.addEventListener('click', () => {
-    const targetTabId = lastDetectedTeamsTab.tabId;
-    chrome.storage.local.set({ pillDismissedInCall: false }, () => {
-      if (targetTabId) {
-        chrome.tabs.sendMessage(targetTabId, { action: 'restore_pill' }, () => {
-          void chrome.runtime.lastError;
-        });
-      }
-      updateUI();
-    });
-  });
-}
-
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (changes.historyRegenProgress && changes.historyRegenProgress.newValue) {
-    updateHistoryRegenCardProgress(changes.historyRegenProgress.newValue);
+
+  if (changes.historyRegenProgress) {
+    const p = changes.historyRegenProgress.newValue;
+    if (p && p.active) {
+      localBottomState = {
+        mode: 'generating',
+        meetingId: p.meetingId,
+        text: p.stage || 'Generating notes...',
+        progress: typeof p.progress === 'number' ? p.progress : 6
+      };
+      renderBottomDockedPill(latestStoredSnapshot);
+      syncToolbarAndHeaderDot(latestStoredSnapshot, lastDetectedTeamsTab.inActiveCall);
+    }
+    if (Object.keys(changes).length === 1) {
+      return;
+    }
   }
+
+  if ((changes.notesProgress || changes.notesStage) && Object.keys(changes).every((k) => k === 'notesProgress' || k === 'notesStage')) {
+    if (changes.notesProgress) latestStoredSnapshot.notesProgress = changes.notesProgress.newValue;
+    if (changes.notesStage) latestStoredSnapshot.notesStage = changes.notesStage.newValue;
+    renderBottomDockedPill(latestStoredSnapshot);
+    return;
+  }
+
   updateUI();
 });
 

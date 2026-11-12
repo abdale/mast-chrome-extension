@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_SCRIPT_VERSION = '2.9-dev-9';
+  const CONTENT_SCRIPT_VERSION = '2.9-dev-10';
 
   function isExtensionContextValid() {
     try {
@@ -1330,7 +1330,7 @@
 
       const textEl = document.createElement('span');
       textEl.className = 'mast-pill-text';
-      textEl.textContent = 'Captions active \u2014 mast recording';
+      textEl.textContent = 'Captions active \u2014 mast is recording';
       toast.appendChild(textEl);
 
       captionsAlertTimer = setTimeout(() => {
